@@ -175,7 +175,7 @@ from typing import Callable, List, Optional, Tuple, Union
 python main.py
 ```
 
-预期：桌面右下角弹出灵犀的桌宠立绘 + 主聊天窗口（立绘需自行准备，见 `assets/desktop_pet/README.md`）。
+预期：桌面右下角弹出灵犀的桌宠立绘（仓库自带一套默认动画）+ 主聊天窗口。想换成自己的立绘见 `assets/desktop_pet/README.md`。
 
 ### 6.（可选）配置 MCP 工具扩展
 

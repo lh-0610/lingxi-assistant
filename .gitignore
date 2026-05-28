@@ -38,13 +38,18 @@ chat_memory/
 # 运行日志
 logs/
 
-# ─── 第三方版权资产（用户自行获取，不分发）───
-# 桌宠立绘 / GIF / sprite（如二次元角色立绘，版权归原作者）
+# ─── 桌宠立绘 / GIF / sprite ───
+# 默认忽略用户自行替换的素材；下面白名单例外的是仓库自带的默认桌宠
+# （作者用 AI 生成，随仓库分发）。换成你自己的同名文件即可覆盖显示。
 assets/desktop_pet/*.png
 assets/desktop_pet/*.gif
 assets/desktop_pet/*.jpg
 assets/desktop_pet/*.webp
 assets/desktop_pet/sprites/
+!assets/desktop_pet/idle_desktop_pet_final.gif
+!assets/desktop_pet/thinking_desktop_pet_final.gif
+!assets/desktop_pet/wave_desktop_pet_final.gif
+!assets/desktop_pet/lingxi_pet.png
 
 # 角色卡（特定 IP，自行加入；example.md 例外保留作模板）
 roles/*.md
