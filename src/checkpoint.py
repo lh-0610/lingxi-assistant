@@ -7,7 +7,8 @@
     - 不是 git 仓库 → 当前 fallback 是"不做 checkpoint"，并通过返回值告诉调用方
 - 每次成功 checkpoint 都把 stash ref 推进 `_checkpoint_stack`；
   `undo_last_checkpoint()` pop 栈顶，用 `git stash apply <ref> --force` 恢复
-- 栈 cap 在 50，更旧的自动丢弃
+- 栈 cap 在 50，更旧的自动丢弃；同时 `_prune_checkpoint_stashes` 会把对应的
+  旧 git stash 真正 `drop` 掉，防止 stash 无限堆积拖慢 git
 
 为什么 stash + 立即 pop？因为 stash 默认会清空工作目录。我们要"快照但不影响当前"，
 所以 stash 后立刻 pop 回来。stash 列表里仍保留那个 ref，apply 时就拿到了"动手前"的版本。
@@ -16,6 +17,7 @@
 git 会自然报错，前端展示给用户决定怎么办。
 """
 import os
+import re
 import subprocess
 import threading
 import time
@@ -103,7 +105,44 @@ def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[st
 
     ref = "stash@{0}"  # 刚 push 进去的就在 0
     _push_stack(project_root, ref, tool_name, path)
+    # 真正把超额的旧快照从 git 里删掉，否则 stash 会无限堆积
+    # （之前只 pop 内存里的栈、没 drop git stash，攒到几百张拖慢 git）
+    _prune_checkpoint_stashes(project_root)
     return ref
+
+
+def _prune_checkpoint_stashes(project_root: str, keep: int = _MAX_STACK):
+    """把超过 keep 上限的旧 lingxi-checkpoint stash 真正从 git 里 drop 掉。
+
+    - 只动我们自己打的（消息含 'lingxi-checkpoint'），用户手动的 stash 一律不碰
+    - stash@{0} 最新、index 越大越旧；保留最新 keep 个，更旧的删除
+    - 必须从高 index 往低 drop——drop 掉一个后，比它旧的 index 会整体前移
+    """
+    try:
+        r = subprocess.run(
+            ["git", "stash", "list"],
+            cwd=project_root, capture_output=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return
+        ours = []  # [(index, ref)]
+        for line in r.stdout.decode("utf-8", errors="replace").splitlines():
+            if "lingxi-checkpoint" not in line:
+                continue
+            m = re.match(r"(stash@\{(\d+)\})", line)
+            if m:
+                ours.append((int(m.group(2)), m.group(1)))
+        if len(ours) <= keep:
+            return
+        ours.sort()              # 按 index 升序：新 → 旧
+        stale = ours[keep:]      # 超出上限的最旧那批
+        for _, ref in sorted(stale, reverse=True):  # 高 index 先 drop
+            subprocess.run(
+                ["git", "stash", "drop", ref],
+                cwd=project_root, capture_output=True, timeout=5,
+            )
+    except Exception:
+        pass
 
 
 def _push_stack(project_root, ref, tool_name, path):
