@@ -1,0 +1,58 @@
+{
+  "ollama_base_url": "http://127.0.0.1:11434",
+  "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "qwen_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "anthropic_api_key": "sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "google_api_key": "AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "mimo_api_key": "tp-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "mimo_base_url": "https://token-plan-sgp.xiaomimimo.com/anthropic",
+  "deepseek_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "deepseek_base_url": "https://api.deepseek.com",
+  "comfy_base_url": "http://127.0.0.1:8188",
+  "comfy_workflow_path": "",
+  "comfy_checkpoint": "sd_xl_base_1.0.safetensors",
+  "comfy_vae": "",
+  "comfy_negative_prompt": "",
+  "comfy_loras": [
+    {
+      "name": "example_pony_lora.safetensors",
+      "strength_model": 0.7,
+      "strength_clip": 0.7
+    }
+  ],
+  "comfy_face_detailer": false,
+  "voice_stt_model": "small",
+  "voice_stt_language": "zh",
+  "voice_tts_voice": "zh-CN-XiaoxiaoNeural",
+  "voice_tts_rate": "+0%",
+  "voice_tts_volume": "+0%",
+  "voice_tts_default_enabled": false,
+  "gpt_sovits_url": "http://127.0.0.1:9880",
+  "gpt_sovits_ref_audio": "",
+  "gpt_sovits_prompt_text": "",
+  "gpt_sovits_prompt_lang": "zh",
+  "gpt_sovits_text_lang": "zh",
+  "gpt_sovits_media_type": "wav",
+  "gpt_sovits_text_split_method": "cut5",
+  "gpt_sovits_install_dir": "",
+  "gpt_sovits_gpt_model": "",
+  "gpt_sovits_sovits_model": "",
+  "pet_animation_speed": 0.5,
+
+  "mcp_enabled": true,
+  "mcp_servers": {},
+
+  "_mcp_servers_说明": "MCP 是可选的高级功能，默认关闭（mcp_servers 为空）。灵犀的内置工具已覆盖日常使用，不配 MCP 也完全可用。想用就把下面 _示例 里的条目挪进 mcp_servers 并改成真实参数。注意：stdio 类型（command/args）需要你的机器装了 Node.js（npx 拉起 server）；sse 类型（url）需要对应服务已在运行。",
+  "_mcp_servers_示例": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/换成你的真实目录"],
+      "env": {}
+    },
+    "context7": {
+      "transport": "sse",
+      "url": "http://localhost:8010/sse"
+    }
+  }
+}

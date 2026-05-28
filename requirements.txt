@@ -1,0 +1,47 @@
+# ═══════════════════════════════════════════════════════
+# 核心依赖（必装）
+# ═══════════════════════════════════════════════════════
+
+# AI / LangChain 生态
+langchain>=0.3
+langchain-core>=0.3
+langchain-ollama>=0.2
+langchain-openai>=0.2
+langchain-anthropic>=0.3
+langchain-google-genai>=2.0
+
+# GUI
+PySide6>=6.7
+
+# Markdown 渲染 + HTTP + 图片处理
+markdown>=3.5
+requests>=2.31
+pillow>=10.0
+numpy>=1.24
+
+# ═══════════════════════════════════════════════════════
+# 可选：语音模块（不装也能跑，🎤/🔊 按钮会自动隐藏）
+# ═══════════════════════════════════════════════════════
+
+# 本地 STT：faster-whisper（首次使用自动下载 Whisper 模型）
+faster-whisper>=1.0
+ctranslate2>=4.0
+huggingface-hub>=0.20
+av>=11
+
+# 录音 + WAV 解码 + 流式 TTS 播放
+sounddevice>=0.4
+soundfile>=0.12
+
+# 注：TTS 通过 HTTP 调用本地 GPT-SoVITS 服务（https://github.com/RVC-Boss/GPT-SoVITS），
+# 用户自行部署整合包，不通过 pip 安装。
+
+# ═══════════════════════════════════════════════════════
+# 可选：打包
+# ═══════════════════════════════════════════════════════
+pyinstaller>=6.0
+
+# ═══════════════════════════════════════════════════════
+# 可选：MCP（Model Context Protocol）远程工具
+# ═══════════════════════════════════════════════════════
+mcp>=1.9

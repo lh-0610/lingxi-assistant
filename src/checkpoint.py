@@ -1,0 +1,203 @@
+"""AI 改文件前自动 checkpoint（git stash），改坏了能一键撤销。
+
+设计：
+- 每次 `edit_file` / `write_file` / `append_file` 之前调 `make_checkpoint(project_root)`：
+    - 如果项目是 git 仓库 → `git stash push -u -m "lingxi-checkpoint <ts>"` 把当前修改打包，
+      但**立刻 pop 回来**（这样工作目录不变，只是 stash 列表里多了一份"动手前快照"）
+    - 不是 git 仓库 → 当前 fallback 是"不做 checkpoint"，并通过返回值告诉调用方
+- 每次成功 checkpoint 都把 stash ref 推进 `_checkpoint_stack`；
+  `undo_last_checkpoint()` pop 栈顶，用 `git stash apply <ref> --force` 恢复
+- 栈 cap 在 50，更旧的自动丢弃
+
+为什么 stash + 立即 pop？因为 stash 默认会清空工作目录。我们要"快照但不影响当前"，
+所以 stash 后立刻 pop 回来。stash 列表里仍保留那个 ref，apply 时就拿到了"动手前"的版本。
+
+注：这套是 best-effort。AI 改文件 ↔ 用户改文件交错时，撤销可能会有冲突。冲突时
+git 会自然报错，前端展示给用户决定怎么办。
+"""
+import os
+import subprocess
+import threading
+import time
+from datetime import datetime
+from typing import Optional
+
+
+# 已创建的 checkpoint 栈：[(project_root, stash_ref, timestamp, tool_name, path)]
+_checkpoint_stack: list = []
+_lock = threading.Lock()
+_MAX_STACK = 50
+
+# 不同 project root 的 git 仓库检测缓存，避免每次 edit 都 fork git
+_is_git_cache: dict = {}
+
+
+def _is_git_repo(project_root: str) -> bool:
+    """是否 git 仓库（缓存版）。"""
+    if not project_root or not os.path.isdir(project_root):
+        return False
+    cached = _is_git_cache.get(project_root)
+    if cached is not None:
+        return cached
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=project_root, capture_output=True, timeout=3,
+        )
+        ok = r.returncode == 0 and b"true" in r.stdout
+    except Exception:
+        ok = False
+    _is_git_cache[project_root] = ok
+    return ok
+
+
+def _has_changes(project_root: str) -> bool:
+    """工作目录有未提交改动？（含 untracked）"""
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_root, capture_output=True, timeout=3,
+        )
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[str]:
+    """打一个快照。返回 stash ref（成功）或 None（跳过 / 失败）。
+
+    思路：`git stash push -u -m "..."` 把当前工作区+暂存区+未追踪文件全打包；
+    立刻 `git stash apply` 把内容恢复回工作区，让用户感知不到变化。
+    stash 列表里仍然挂着那个 ref，undo 时拿来 apply。
+    """
+    if not _is_git_repo(project_root):
+        return None  # 非 git 项目，无 checkpoint 能力
+    if not _has_changes(project_root):
+        # 工作区干净 → 不需要 stash（HEAD 就是回退点）
+        # 我们记一个特殊标记，让 undo 时知道走 `git checkout -- <path>` 路线
+        ts = datetime.now().strftime("%H:%M:%S")
+        ref = f"__HEAD__:{ts}"
+        _push_stack(project_root, ref, tool_name, path)
+        return ref
+
+    msg = f"lingxi-checkpoint {datetime.now().strftime('%Y%m%d-%H%M%S')} {tool_name} {path}"
+    try:
+        r = subprocess.run(
+            ["git", "stash", "push", "-u", "-m", msg],
+            cwd=project_root, capture_output=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        # 立刻 pop 回工作区——保留 stash ref 同时不影响当前内容
+        # 注意：git stash apply 而不是 pop，apply 会保留 stash 列表里的引用
+        r2 = subprocess.run(
+            ["git", "stash", "apply"],
+            cwd=project_root, capture_output=True, timeout=10,
+        )
+        if r2.returncode != 0:
+            # 极端情况 apply 失败，回退一下不留半成品
+            subprocess.run(["git", "stash", "drop"], cwd=project_root, timeout=5)
+            return None
+    except Exception:
+        return None
+
+    ref = "stash@{0}"  # 刚 push 进去的就在 0
+    _push_stack(project_root, ref, tool_name, path)
+    return ref
+
+
+def _push_stack(project_root, ref, tool_name, path):
+    with _lock:
+        _checkpoint_stack.append({
+            "project_root": project_root,
+            "ref": ref,
+            "ts": time.time(),
+            "tool": tool_name,
+            "path": path,
+        })
+        while len(_checkpoint_stack) > _MAX_STACK:
+            _checkpoint_stack.pop(0)
+
+
+def has_undoable_checkpoint() -> bool:
+    """是否有可撤销的 checkpoint。"""
+    with _lock:
+        return bool(_checkpoint_stack)
+
+
+def latest_checkpoint_info() -> Optional[dict]:
+    """返回栈顶 checkpoint 的元信息（给 UI 显示 "上次 AI 改了 X" 用）。"""
+    with _lock:
+        return dict(_checkpoint_stack[-1]) if _checkpoint_stack else None
+
+
+def undo_last_checkpoint() -> tuple[bool, str]:
+    """撤销最近一次 checkpoint。
+
+    返回 (success, message)。
+    - 工作区干净时的 checkpoint（__HEAD__ 标记）：用 `git checkout HEAD -- <path>` 复原
+    - 其它情况：`git stash apply <ref>` 把当时的快照覆盖回工作区
+    """
+    with _lock:
+        if not _checkpoint_stack:
+            return False, "没有可撤销的 checkpoint"
+        cp = _checkpoint_stack.pop()
+
+    project_root = cp["project_root"]
+    ref = cp["ref"]
+    path = cp["path"]
+
+    if not _is_git_repo(project_root):
+        return False, "项目不再是 git 仓库，无法撤销"
+
+    if ref.startswith("__HEAD__"):
+        # 工作区当时干净，只要 checkout HEAD -- <path> 就回到改前
+        # 但如果是绝对路径，要转为相对项目根
+        try:
+            rel = os.path.relpath(path, project_root) if os.path.isabs(path) else path
+            r = subprocess.run(
+                ["git", "checkout", "HEAD", "--", rel],
+                cwd=project_root, capture_output=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return True, f"已撤销对 {rel} 的改动（恢复到 HEAD）"
+            return False, f"git checkout 失败：{r.stderr.decode('utf-8', errors='replace')[:200]}"
+        except Exception as e:
+            return False, f"撤销失败：{e}"
+
+    # 普通 stash apply。用"按路径精确恢复"语义：
+    # `git checkout <stash_ref> -- <path>` 把 stash 里那个文件覆盖到工作区，
+    # 比 `git stash apply` 更稳——后者在工作区脏（AI 已改了其它东西）时会
+    # 报 "would be overwritten" 然后失败。
+    try:
+        list_r = subprocess.run(
+            ["git", "stash", "list"], cwd=project_root, capture_output=True, timeout=5,
+        )
+        target = None
+        if list_r.returncode == 0:
+            ts_str = datetime.fromtimestamp(cp["ts"]).strftime("%Y%m%d-%H%M%S")
+            for line in list_r.stdout.decode("utf-8", errors="replace").splitlines():
+                if ts_str in line:
+                    target = line.split(":", 1)[0]
+                    break
+        target = target or ref
+
+        rel = os.path.relpath(path, project_root) if os.path.isabs(path) else path
+        r = subprocess.run(
+            ["git", "checkout", target, "--", rel],
+            cwd=project_root, capture_output=True, timeout=10,
+        )
+        if r.returncode == 0:
+            return True, f"已撤销 {cp['tool']} 对 {os.path.basename(path)} 的改动"
+        return False, (
+            f"git checkout 失败："
+            + r.stderr.decode("utf-8", errors="replace")[:200]
+        )
+    except Exception as e:
+        return False, f"撤销失败：{e}"
+
+
+def clear_all_checkpoints():
+    """清空栈（不删 stash 列表，只是 UI 上"不再追踪"）。"""
+    with _lock:
+        _checkpoint_stack.clear()
