@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import difflib
 import subprocess
 import urllib.parse
 import urllib.request
@@ -550,6 +551,226 @@ def append_file(path: str, content: str) -> str:
         return f"追加失败: {e}"
 
 
+def _get_indent(line):
+    return line[:len(line) - len(line.lstrip())]
+
+
+def _detect_indent_unit(lines):
+    """从一组行里推断"一级缩进"。
+
+    取最短的非空前导空白当一级单元。整段顶格则返回 ""（无依据）。
+    例:
+      ['class Foo:', '    def bar():', '        return 1']  → '    '
+      ['class Foo:', '\tdef bar():',   '\t\treturn 1']      → '\t'
+      ['x = 1', 'y = 2']                                     → ''  （整段顶格）
+    """
+    units = []
+    for ln in lines:
+        if not ln.strip():
+            continue  # 跳过空行
+        leading = ln[:len(ln) - len(ln.lstrip())]
+        if leading:
+            units.append(leading)
+    if not units:
+        return ""
+    return min(units, key=len)
+
+
+def _realign_indent(new_string, file_indent_unit, model_indent_unit):
+    """按缩进单元换算：模型 N 级 model_unit → file 的 N 级 file_unit。
+
+    比"首行 prefix 替换"更鲁棒:
+    - 文件 / 模型首行顶格时仍能从子行推断 unit
+    - tab ↔ 空格混用时按层级正确换算
+    """
+    if not model_indent_unit or not file_indent_unit:
+        return new_string  # 任一侧整段顶格，无依据重算
+
+    mu_len = len(model_indent_unit)
+    result = []
+    for line in new_string.splitlines(keepends=True):
+        if not line.strip():
+            result.append(line)  # 空行原样
+            continue
+        leading = line[:len(line) - len(line.lstrip())]
+        level = len(leading) // mu_len
+        result.append(file_indent_unit * level + line.lstrip())
+    return "".join(result)
+
+
+def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
+    """分层匹配级联：L1 精确 → L2 去行尾空白 → L3 去全部首尾空白+缩进重对齐 → L4 模糊。
+
+    返回 (status, spans, new_texts, info)：
+      status: "exact" | "normalized" | "fuzzy" | "multi" | "none"
+      spans: [(start_char, end_char)] 要替换的【文件真实】字符区间
+      new_texts: 与 spans 对应的替换文本（L3/L4 已做缩进重对齐；L1/L2 直接用 new_string）
+      info: 成功时为 (match_level_desc, line_numbers)；失败时为 (closest_snippet_desc, None)
+    """
+    old_lines = old.splitlines(keepends=True)
+    file_lines = content.splitlines(keepends=True)
+    old_line_count = len(old_lines)
+    file_line_count = len(file_lines)
+
+    if old_line_count == 0:
+        return "none", [], [], ("old_string 为空行", None)
+
+    # ── L1 精确匹配 ──
+    count = content.count(old)
+    if count > 0:
+        if count > 1 and not replace_all:
+            # 多处命中，收集行号
+            line_nos = []
+            idx = 0
+            while True:
+                idx = content.find(old, idx)
+                if idx == -1:
+                    break
+                line_nos.append(content[:idx].count("\n") + 1)
+                idx += 1
+            return "multi", [], [], (f"L1 精确匹配到 {count} 处", line_nos)
+        # replace_all 或唯一命中
+        spans = []
+        idx = 0
+        while True:
+            idx = content.find(old, idx)
+            if idx == -1:
+                break
+            spans.append((idx, idx + len(old)))
+            idx += len(old)
+        line_no = content[:spans[0][0]].count("\n") + 1
+        return "exact", spans, [new_string] * len(spans), ("L1 精确匹配", [line_no])
+
+    # ── L2 逐行 rstrip 比对（按行滑窗）──
+    def _rstrip_lines(lines):
+        return [l.rstrip() for l in lines]
+
+    old_rstripped = _rstrip_lines(old_lines)
+    file_rstripped = _rstrip_lines(file_lines)
+    l2_hits = []
+    for i in range(file_line_count - old_line_count + 1):
+        if file_rstripped[i:i + old_line_count] == old_rstripped:
+            l2_hits.append(i)
+    if l2_hits:
+        if len(l2_hits) > 1 and not replace_all:
+            line_nos = [i + 1 for i in l2_hits]
+            return "multi", [], [], (f"L2 去行尾空白匹配到 {len(l2_hits)} 处", line_nos)
+        # 唯一或 replace_all
+        spans = []
+        for start_line in l2_hits:
+            char_start = sum(len(file_lines[j]) for j in range(start_line))
+            char_end = sum(len(file_lines[j]) for j in range(start_line + old_line_count))
+            spans.append((char_start, char_end))
+        line_no = l2_hits[0] + 1
+        return "normalized", spans, [new_string] * len(spans), ("L2 去行尾空白匹配", [line_no])
+
+    # ── L3 逐行 strip 比对 + 缩进重对齐 ──
+    old_stripped = [l.strip() for l in old_lines]
+    file_stripped = [l.strip() for l in file_lines]
+    l3_hits = []
+    for i in range(file_line_count - old_line_count + 1):
+        if file_stripped[i:i + old_line_count] == old_stripped:
+            l3_hits.append(i)
+    if l3_hits:
+        if len(l3_hits) > 1 and not replace_all:
+            line_nos = [i + 1 for i in l3_hits]
+            return "multi", [], [], (f"L3 strip 匹配到 {len(l3_hits)} 处", line_nos)
+        # 唯一或 replace_all → 做缩进重对齐
+        spans = []
+        new_texts = []
+        for start_line in l3_hits:
+            file_indent_unit = _detect_indent_unit(file_lines[start_line:start_line + old_line_count])
+            model_indent_unit = _detect_indent_unit(old_lines)
+            realigned = _realign_indent(new_string, file_indent_unit, model_indent_unit)
+            char_start = sum(len(file_lines[j]) for j in range(start_line))
+            char_end = sum(len(file_lines[j]) for j in range(start_line + old_line_count))
+            spans.append((char_start, char_end))
+            new_texts.append(realigned)
+        line_no = l3_hits[0] + 1
+        return "normalized", spans, new_texts, ("L3 strip+缩进重对齐匹配", [line_no])
+
+    # ── L4 difflib 模糊滑窗（多档容差）──
+    # 尝试 [len-2, len], [len-1, len+1], [len, len+2] 窗口大小
+    best_hits = []  # (start_line, ratio, window_size)
+    for delta in range(-2, 3):
+        ws = old_line_count + delta
+        if ws < 1 or ws > file_line_count:
+            continue
+        sm = difflib.SequenceMatcher()
+        sm.set_seq2(old_stripped)
+        for i in range(file_line_count - ws + 1):
+            sm.set_seq1(file_stripped[i:i + ws])
+            ratio = sm.ratio()
+            if ratio >= 0.85:
+                best_hits.append((i, ratio, ws))
+
+    if best_hits:
+        # 找最优
+        max_ratio = max(r for _, r, _ in best_hits)
+        # 次优低于最优 0.1 以上才算唯一
+        sorted_ratios = sorted(set(r for _, r, _ in best_hits), reverse=True)
+        second_best = sorted_ratios[1] if len(sorted_ratios) > 1 else 0
+        unique = (max_ratio - second_best) >= 0.1
+
+        if not unique and not replace_all:
+            # 多个等价候选
+            candidates = [(s, r, w) for s, r, w in best_hits if r >= max_ratio - 0.05]
+            line_nos = [s + 1 for s, _, _ in candidates]
+            return "multi", [], [], (f"L4 模糊匹配到 {len(candidates)} 个相似位置", line_nos)
+
+        # 取最优的那些（ratio 最高的）
+        top_hits = [(s, r, w) for s, r, w in best_hits if abs(r - max_ratio) < 0.001]
+        if not replace_all and len(top_hits) > 1:
+            line_nos = [s + 1 for s, _, _ in top_hits]
+            return "multi", [], [], (f"L4 模糊匹配到 {len(top_hits)} 个相似位置", line_nos)
+
+        # 缩进重对齐（使用模块级 _realign_indent）
+        spans = []
+        new_texts = []
+        for start_line, ratio, window_size in top_hits:
+            file_indent_unit = _detect_indent_unit(file_lines[start_line:start_line + window_size])
+            model_indent_unit = _detect_indent_unit(old_lines)
+            realigned = _realign_indent(new_string, file_indent_unit, model_indent_unit)
+            char_start = sum(len(file_lines[j]) for j in range(start_line))
+            char_end = sum(len(file_lines[j]) for j in range(start_line + window_size))
+            spans.append((char_start, char_end))
+            new_texts.append(realigned)
+        line_no = top_hits[0][0] + 1
+        return "fuzzy", spans, new_texts, (f"L4 模糊匹配 (ratio={max_ratio:.2f})", [line_no])
+
+    # ── 全部失败 → 自纠反馈 ──
+    # 用 difflib 找文件里与 old 最相似的片段
+    best_i = 0
+    best_ratio = 0.0
+    if file_line_count >= old_line_count:
+        sm = difflib.SequenceMatcher()
+        sm.set_seq2(old_stripped)
+        for i in range(file_line_count - old_line_count + 1):
+            sm.set_seq1(file_stripped[i:i + old_line_count])
+            r = sm.ratio()
+            if r > best_ratio:
+                best_ratio = r
+                best_i = i
+    else:
+        # 文件比 old 还短，整体比较
+        sm = difflib.SequenceMatcher(None, old_stripped, file_stripped)
+        best_ratio = sm.ratio()
+
+    # 取最接近片段上下文 ±2 行
+    snippet_start = max(0, best_i - 2)
+    snippet_end = min(file_line_count, best_i + old_line_count + 2)
+    snippet_lines = []
+    for idx in range(snippet_start, snippet_end):
+        snippet_lines.append(f"  第 {idx + 1} 行: {file_lines[idx].rstrip()}")
+    snippet_text = "\n".join(snippet_lines)
+    desc = (
+        f"失败：没找到匹配的 old_string。文件里最接近的是第 {best_i + 1}–{best_i + old_line_count} 行"
+        f"（相似度 {best_ratio:.0%}）：\n{snippet_text}\n"
+        "请直接复制上面的真实内容作为 old_string 重试（注意缩进与空行）。"
+    )
+    return "none", [], [], (desc, None)
+
+
 @tool
 def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
     """在文件中精确替换字符串（适合改大文件的局部，比 write_file 全量重写更安全更省 token）。
@@ -580,25 +801,32 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
     except Exception as e:
         return f"读取失败: {e}"
 
-    count = content.count(old_string)
-    if count == 0:
-        # 给点诊断：是不是缩进 / 换行风格差异？
-        stripped = old_string.strip()
-        if stripped and content.count(stripped) > 0:
-            return (
-                "失败：没找到完全匹配的 old_string（含前后空白/换行的版本）。"
-                f"但去掉首尾空白后能找到 {content.count(stripped)} 处——请检查 old_string 的"
-                "缩进和首尾换行是否跟文件里的一致。"
-            )
-        return f"失败：在 {full} 中没找到 old_string"
+    # ── 分层匹配级联 ──
+    status, spans, new_texts, info = _locate_edit(content, old_string, new_string, replace_all)
+    match_desc, line_nos = info
 
-    if count > 1 and not replace_all:
+    # multi：多处候选，返回行号提示
+    if status == "multi":
+        lines_str = ", ".join(str(n) for n in line_nos)
         return (
-            f"失败：old_string 在 {full} 中出现了 {count} 次。"
+            f"失败：{match_desc}（行 {lines_str}）。"
             "请提供更多上下文让它唯一，或显式传 replace_all=True 替换全部。"
         )
 
-    new_content = content.replace(old_string, new_string)
+    # none：全部失败，返回自纠反馈
+    if status == "none":
+        return match_desc  # 已包含完整自纠文案
+
+    # ── 成功命中：构建新内容 ──
+    # spans 按位置排序（从后往前替换避免偏移）
+    if spans:
+        sorted_pairs = sorted(zip(spans, new_texts), key=lambda x: x[0][0], reverse=True)
+        new_content = content
+        for (start, end), replacement in sorted_pairs:
+            new_content = new_content[:start] + replacement + new_content[end:]
+    else:
+        # fallback（不应发生）
+        new_content = content.replace(old_string, new_string)
 
     # ── Diff 预览 + 用户确认（写盘前的最后一道关）──
     allowed, reject = _confirm_file_write(full, content, new_content)
@@ -617,12 +845,14 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
     except Exception as e:
         return f"写入失败: {e}"
 
-    # 算下改动行号（找第一次匹配位置的行号，方便 AI 定位）
-    line_no = content[:content.find(old_string)].count("\n") + 1
+    # 成功信息
+    count = len(spans)
+    primary_line = line_nos[0] if line_nos else "?"
+    level_hint = f"（{match_desc}）" if "L1" not in match_desc else ""
     if count == 1:
-        return f"成功编辑 {full}（第 {line_no} 行附近替换 1 处）"
+        return f"成功编辑 {full}（第 {primary_line} 行附近替换 1 处）{level_hint}"
     else:
-        return f"成功编辑 {full}（替换全部 {count} 处出现，第一处在第 {line_no} 行）"
+        return f"成功编辑 {full}（替换全部 {count} 处出现，第一处在第 {primary_line} 行）{level_hint}"
 
 
 @tool

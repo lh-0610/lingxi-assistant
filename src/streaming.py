@@ -680,7 +680,7 @@ def _execute_tool(tc, ui):
 
     display_name = TOOL_DISPLAY_NAMES.get(name, f"🔧 {name}")
 
-    if name in ("read_file", "write_file", "append_file"):
+    if name in ("read_file", "write_file", "append_file", "edit_file"):
         detail = args.get("path", "")
     elif name == "list_directory":
         detail = args.get("path", ".")
@@ -691,7 +691,11 @@ def _execute_tool(tc, ui):
     elif name == "generate_image":
         detail = args.get("prompt", "")[:80]
     else:
-        detail = str(args)
+        import json as _json_detail
+        try:
+            detail = _json_detail.dumps(args, indent=2, ensure_ascii=False)
+        except (TypeError, ValueError):
+            detail = str(args)  # args 不可序列化时退回原行为
 
     ui.show_message(f"\n{display_name}", "tool_tag")
     ui.show_message(f"  {detail}\n", "tool_detail")
@@ -703,7 +707,10 @@ def _execute_tool(tc, ui):
         if _ui is not None:
             import json as _json
             _display = TOOL_DISPLAY_NAMES.get(name, name)
-            _msg = f"将调用 MCP 工具 {_display}，参数: {_json.dumps(args, ensure_ascii=False)}"
+            _msg = (
+                f"将调用 MCP 工具 {_display}，参数:\n"
+                + _json.dumps(args, indent=2, ensure_ascii=False)
+            )
             if not _ui.confirm_command(_msg):
                 logger.info(f"用户拒绝执行 MCP 工具: {name}")
                 state.chat_history.append(ToolMessage(

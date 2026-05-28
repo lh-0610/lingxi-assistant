@@ -18,6 +18,7 @@
 """
 import threading
 
+from .. import state as _state
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -65,10 +66,16 @@ class ConfirmBarsMixin:
         title_row.addWidget(self._cmd_confirm_title, 1)
         top_v.addLayout(title_row)
 
-        self.command_confirm_text = QLabel("")
+        self.command_confirm_text = QTextBrowser()
         self.command_confirm_text.setObjectName("commandConfirmText")
-        self.command_confirm_text.setWordWrap(True)
-        self.command_confirm_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.command_confirm_text.setMinimumHeight(120)
+        self.command_confirm_text.setMaximumHeight(280)
+        self.command_confirm_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.command_confirm_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.command_confirm_text.setOpenExternalLinks(False)
+        cmd_font = QFont("Consolas")
+        cmd_font.setPixelSize(12)
+        self.command_confirm_text.setFont(cmd_font)
         top_v.addWidget(self.command_confirm_text)
 
         v.addWidget(top)
@@ -140,6 +147,7 @@ class ConfirmBarsMixin:
         if not hasattr(self, "command_confirm_bar"):
             return
         accent = self._t("ai_label")  # 跟 AI 名牌一致的强调色
+        self._cmd_accent = accent  # 存起来给 HTML 格式化用
         divider = self._t("input_border")
         text = self._t("text")
         text_dim = self._t("text_dim")
@@ -159,13 +167,14 @@ class ConfirmBarsMixin:
             f"  letter-spacing: 0.3px; background: transparent;"
             f"}}"
             # 命令预览（等宽 + 内嵌灰底盒子）
-            f"QLabel#commandConfirmText {{"
+            f"QTextBrowser#commandConfirmText {{"
             f"  background: {self._t('md_pre_bg')};"
             f"  color: {self._t('md_pre_text')};"
             f"  border: 1px solid {divider};"
             f"  border-radius: 8px; padding: 10px 14px;"
             f"  font-family: Consolas, 'Cascadia Code', 'Microsoft YaHei UI';"
             f"  font-size: 13px;"
+            f"  white-space: pre-wrap;"
             f"}}"
             # 选项行：QPushButton 做全宽行，无 border、靠 hover bg 区分
             # 上方用 top border 当分隔线，营造"一体卡片"感
@@ -206,12 +215,154 @@ class ConfirmBarsMixin:
         if not icon.isNull():
             self._cmd_confirm_icon.setPixmap(icon.pixmap(QSize(16, 16)))
 
+    # ── command text HTML 格式化 ─────────────────────────────────────
+    # 关键词高亮列表
+    _CMD_KEYWORDS = (
+        # 包管理
+        "pip", "install", "uninstall", "upgrade", "npm", "yarn", "pnpm", "bun",
+        "apt", "apt-get", "brew", "choco", "scoop", "winget", "pacman", "yum", "dnf",
+        # Python / 运行时
+        "python", "python3", "py", "uv", "poetry", "conda", "mamba", "pipenv",
+        "pytest", "unittest", "mypy", "ruff", "black", "isort", "flake8", "pylint",
+        # Node / JS
+        "node", "npx", "ts-node", "tsx", "deno", "bun",
+        # 版本控制
+        "git", "svn", "hg",
+        # 构建 / 部署
+        "make", "cmake", "cargo", "go", "dotnet", "mvn", "gradle", "sbt",
+        "docker", "docker-compose", "podman", "kubectl", "helm",
+        # 系统关键
+        "sudo", "su", "chmod", "chown", "mount", "umount", "systemctl", "service",
+        "shutdown", "reboot", "kill", "killall", "pkill",
+        # Shell
+        "bash", "sh", "zsh", "fish", "powershell", "pwsh", "cmd",
+        # 常见子命令
+        "add", "remove", "run", "build", "test", "start", "stop", "restart",
+        "push", "pull", "clone", "checkout", "merge", "rebase", "reset", "clean",
+        "init", "create", "new", "generate",
+    )
+    # 需要高亮为"危险"的标志词
+    _CMD_DANGER_WORDS = (
+        "rm -rf", "rm -fr", "rmdir", "DROP", "DELETE", "FORMAT",
+        "mkfs", "fdisk", "dd if=", ":(){", "shutdown", "reboot",
+        "sudo rm", "sudo chmod 777", "--force", "-f",
+    )
+
+    def _format_command_html(self, command: str) -> str:
+        """将命令字符串转换为带语法高亮的 HTML（用于 QTextBrowser）。"""
+        import html as _html
+        import shlex
+        import re
+
+        is_dark = getattr(self, "theme", "light") == "dark"
+        if is_dark:
+            accent        = "#7c5cbf"   # 命令名（首 token）
+            kw_color      = "#c084fc"   # 关键字（命令名/工具名）
+            danger_color  = "#f87171"   # 危险词（rm、format、dd 等）
+            flag_color    = "#60a5fa"   # flag (-xxx)
+            sep_color     = "#94a3b8"   # 分隔符 (|, &&, ;, > 等)
+            path_color    = "#34d399"   # 路径 / URL
+            str_color     = "#fbbf24"   # 引号字符串
+            default_color = "#e2e8f0"   # 其它默认
+        else:
+            accent        = "#7c3aed"
+            kw_color      = "#7e22ce"
+            danger_color  = "#dc2626"
+            flag_color    = "#1d4ed8"
+            sep_color     = "#475569"
+            path_color    = "#15803d"
+            str_color     = "#b45309"
+            default_color = "#1f2937"
+
+        text = command.strip()
+
+        # 检测是否为危险命令（整条命令级别）
+        text_lower = text.lower()
+        is_dangerous = any(dw.lower() in text_lower for dw in ConfirmBarsMixin._CMD_DANGER_WORDS)
+
+        keywords_lower = {kw.lower() for kw in ConfirmBarsMixin._CMD_KEYWORDS}
+
+        def _highlight_line(line: str) -> str:
+            """对单行命令进行语法高亮。"""
+            try:
+                tokens = shlex.split(line)
+            except ValueError:
+                tokens = line.split()
+
+            highlighted_parts: list[str] = []
+
+            for i, tok in enumerate(tokens):
+                tok_escaped = _html.escape(tok)
+                tok_lower = tok.lower()
+
+                line_break_after = False
+
+                # ① 危险关键词（如 rm, -rf 等）
+                if any(dw.lower() in tok_lower for dw in ("rm", "rmdir", "mkfs", "dd", "DROP", "DELETE", "FORMAT")):
+                    color = danger_color
+                    weight = "bold"
+                # ② 管道 / 重定向 / 链接符
+                elif tok in ("|", "&&", "||", ";", ">>", ">"):
+                    color = sep_color
+                    weight = "normal"
+                    # 链接符后强制换行（重定向 >>/> 通常短，不换）
+                    if tok in ("&&", "||", "|", ";"):
+                        line_break_after = True
+                # ③ flags（-xxx）
+                elif tok.startswith("-"):
+                    color = flag_color
+                    weight = "normal"
+                # ④ 关键词（命令名 + 工具名）
+                elif tok_lower in keywords_lower or (i == 0 and tok_lower not in keywords_lower):
+                    # 第一个 token 总是命令名
+                    if i == 0:
+                        color = accent
+                        weight = "bold"
+                    else:
+                        color = kw_color
+                        weight = "600"
+                # ⑤ 路径 / URL（含 / 或 . 或 ~）
+                elif ("/" in tok or tok.startswith("~") or
+                      re.search(r'\.\w{1,5}$', tok) or "://" in tok):
+                    color = path_color
+                    weight = "normal"
+                # ⑥ 引号字符串
+                elif (tok.startswith('"') and tok.endswith('"')) or \
+                     (tok.startswith("'") and tok.endswith("'")):
+                    color = str_color
+                    weight = "normal"
+                else:
+                    color = default_color
+                    weight = "normal"
+
+                highlighted_parts.append(
+                    f'<span style="color:{color};font-weight:{weight}">{tok_escaped}</span>'
+                )
+                if line_break_after:
+                    highlighted_parts.append("<br>")
+
+            return " ".join(highlighted_parts)
+
+        # 逐行处理，保留换行符（用 <br> 拼接，确保 QTextBrowser 正确渲染）
+        lines = text.split("\n")
+        highlighted_lines = [_highlight_line(line) for line in lines]
+        result = "<br>".join(highlighted_lines)
+
+        # 危险命令在开头加醒目警告
+        if is_dangerous:
+            result = (
+                f'<span style="color:{danger_color};font-weight:bold">⚠ </span>'
+                + result
+            )
+
+        return result
+
     def _on_confirm_request(self, command, result_holder, done_event):
         """UI 主线程槽：把命令灌进确认卡片 + 显示。点击时再唤醒 worker。
 
         - 危险命令（rm -rf / format / sudo 等）会隐藏"允许并记住"行，避免被
           AI 永久授权后造成数据损失
-        - 同一时刻只允许有一个待处理请求（防御：旧请求未解时新请求直接拒绝）
+        - 旧请求未解时新请求会"取代"旧请求：deny 解阻塞旧 worker，再显示新卡
         - 卡片显示后强制 raise + activateWindow，避免被桌宠遮
         """
         if not hasattr(self, "command_confirm_bar"):
@@ -219,9 +370,15 @@ class ConfirmBarsMixin:
             done_event.set()
             return
         if self._command_confirm_done_event is not None:
-            result_holder["allow"] = False
-            done_event.set()
-            return
+            # 旧请求被新的取代：先 deny 解阻塞旧 worker，再走新流程显示新卡
+            try:
+                if self._command_confirm_result_holder is not None:
+                    self._command_confirm_result_holder["allow"] = False
+                self._command_confirm_done_event.set()
+            except Exception:
+                pass
+            self._command_confirm_result_holder = None
+            self._command_confirm_done_event = None
 
         self.show()
         self.raise_()
@@ -231,7 +388,23 @@ class ConfirmBarsMixin:
         self._command_confirm_done_event = done_event
         self._command_confirm_destructive = self._is_destructive_command(command)
 
-        self.command_confirm_text.setText(command)
+        # 检测是不是 MCP / JSON dump 类的消息，用 <pre> 纯文本渲染，不走 shell 高亮
+        if command.startswith("将调用 MCP") or command.startswith("将调用 mcp_"):
+            import html as _html
+            body_html = (
+                '<pre style="font-family: Consolas, monospace; '
+                'white-space: pre-wrap; word-wrap: break-word; '
+                'margin: 0; font-size: 12px; line-height: 1.45;">'
+                + _html.escape(command)
+                + '</pre>'
+            )
+        else:
+            body_html = (
+                '<div style="white-space:pre-wrap;word-wrap:break-word;">'
+                + self._format_command_html(command)
+                + '</div>'
+            )
+        self.command_confirm_text.setHtml(body_html)
         # 危险命令：标题加警告 + 隐藏"信任所有同类命令"行
         if self._command_confirm_destructive:
             self._cmd_confirm_title.setText("⚠ 危险命令 · 是否允许？")
@@ -262,8 +435,12 @@ class ConfirmBarsMixin:
         if self._command_confirm_done_event is None:
             return  # 已被处理过 / 状态被清
 
+        if not allow:
+            # 用户明确拒绝 = 不要再纠缠这件事，直接停掉本次生成
+            _state.stop_flag = True
+
         if allow and remember and not self._command_confirm_destructive:
-            base = self._extract_base_command(self.command_confirm_text.text())
+            base = self._extract_base_command(self.command_confirm_text.toPlainText())
             if base:
                 self._session_command_prefix_allowlist.add(base)
                 logger_log = getattr(self, "_logger", None)  # 不强依赖；只是 best-effort
@@ -278,11 +455,11 @@ class ConfirmBarsMixin:
         self._command_confirm_result_holder = None
         self._command_confirm_done_event = None
         self.command_confirm_bar.setVisible(False)
-        self.command_confirm_text.setText("")
+        self.command_confirm_text.clear()
         self._command_confirm_destructive = False
 
     def _release_pending_confirm(self):
-        """关窗 / 退出时唤醒任何挂在 confirm_command 上的 worker，避免卡到 5 分钟超时。
+        """关窗 / 退出时唤醒任何挂在 confirm_command 上的 worker，避免无限挂起。
         当作"用户拒绝"处理，agent 收到 False 后会优雅结束这一轮工具调用。
         """
         if self._command_confirm_done_event is None:
@@ -483,10 +660,15 @@ class ConfirmBarsMixin:
             done_event.set()
             return
         if self._edit_confirm_done_event is not None:
-            # 防御：旧请求未解，直接拒绝新的
-            result_holder["allow"] = False
-            done_event.set()
-            return
+            # 旧请求被新的取代：先 deny 解阻塞旧 worker，再走新流程显示新卡
+            try:
+                if self._edit_confirm_result_holder is not None:
+                    self._edit_confirm_result_holder["allow"] = False
+                self._edit_confirm_done_event.set()
+            except Exception:
+                pass
+            self._edit_confirm_result_holder = None
+            self._edit_confirm_done_event = None
 
         self.show()
         self.raise_()
@@ -506,6 +688,9 @@ class ConfirmBarsMixin:
         """按钮点击：写结果 / 加路径白名单 / 隐藏卡片 / 唤醒 worker。"""
         if self._edit_confirm_done_event is None:
             return
+        if not allow:
+            # 用户明确拒绝 = 不要再纠缠这件事，直接停掉本次生成
+            _state.stop_flag = True
         if allow and remember:
             p = self._edit_confirm_path
             if p:
@@ -520,7 +705,7 @@ class ConfirmBarsMixin:
         self.edit_confirm_path.setText("")
 
     def _release_pending_edit(self):
-        """关窗 / 退出时唤醒挂着的 edit confirm 请求，避免 worker 卡到超时。"""
+        """关窗 / 退出时唤醒挂着的 edit confirm 请求，避免 worker 无限挂起。"""
         if self._edit_confirm_done_event is None:
             return
         try:
@@ -538,7 +723,7 @@ class ConfirmBarsMixin:
     # worker 线程同步等待入口
     # ══════════════════════════════════════
 
-    def confirm_command(self, command: str, timeout: float = 300.0) -> bool:
+    def confirm_command(self, command: str) -> bool:
         """从 worker 线程同步等待用户在主线程的内联确认条上选择。
 
         放行优先级：
@@ -546,7 +731,8 @@ class ConfirmBarsMixin:
           2. base 命令在前缀白名单 → 直接放行（"信任所有 git 类"那种）
           3. 精确字符串命中旧版白名单 → 放行（向后兼容）
           4. 其它 → 弹卡片让用户选
-        超时（默认 5 分钟）默认视为拒绝，避免悬挂。
+
+        done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
         # 危险命令必须每次确认，永不被白名单绕过
         if not self._is_destructive_command(command):
@@ -558,23 +744,23 @@ class ConfirmBarsMixin:
         result = {}
         done = threading.Event()
         self.bridge.confirm_request.emit(command, result, done)
-        if not done.wait(timeout=timeout):
-            return False
+        done.wait()
         return bool(result.get("allow", False))
 
-    def confirm_edit(self, path: str, diff_text: str, timeout: float = 300.0) -> bool:
+    def confirm_edit(self, path: str, diff_text: str) -> bool:
         """从 worker 线程同步等待用户审批 edit_file 的 diff 预览。
 
         本次会话用户主动选过"信任所有对此文件的修改"的话直接放行。
         否则弹 diff 预览卡（参考命令确认卡的非模态机制）。
+
+        done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
         if path and path in self._session_edit_path_allowlist:
             return True
         result = {}
         done = threading.Event()
         self.bridge.edit_confirm_request.emit(path or "", diff_text or "", result, done)
-        if not done.wait(timeout=timeout):
-            return False
+        done.wait()
         return bool(result.get("allow", False))
 
     # ══════════════════════════════════════

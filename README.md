@@ -28,14 +28,14 @@
 ### 对话核心
 - 🤖 **多模型切换**：MiMo / Qwen / Claude / DeepSeek / 本地 Ollama / 本地 Claude Code CLI，**还可在设置里自填任意 OpenAI / Anthropic 兼容的自定义模型**
 - 🖼️ **多模态**：支持图片输入（自动切到视觉模型 / 多模态模型）
-- 🔧 **工具调用**：文件读写、命令执行、图片生成等。**run_command 执行前在输入框上方弹内联确认卡**（含命令预览 + 1/2/3 数字快捷键 + Esc 取消），危险命令（`rm -rf` / `format` / `sudo` / `drop table` 等）不给"记住"选项
+- 🔧 **工具调用**：文件读写、命令执行、图片生成等。**run_command 执行前在输入框上方弹内联确认卡**（含命令预览 + 1/2/3 数字快捷键 + Esc 取消），危险命令（`rm -rf` / `format` / `sudo` / `drop table` 等）不给"记住"选项。**确认卡无超时**（睡一觉回来还在等你），**点拒绝自动停止 AI 后续重试**
 - 💬 **会话历史**：自动保存、侧边栏切换、智能生成标题
 - 🧠 **思考过程显示**：折叠/展开模型的 reasoning 内容
 - 📊 **Token 用量统计**：实时显示每轮和会话累计用量
 - ⚡ **prompt caching + system prompt 拆分**：画图详细规范按需注入，Anthropic/MiMo 走 `cache_control` 省 token
 
 ### 编码能力（对标 Cline）
-- 🪄 **`edit_file` 精确替换**：改大文件局部，比全量覆盖安全省 token；**写盘前弹蓝色 diff 预览卡**让你审改动
+- 🪄 **`edit_file` 智能容错替换**：改大文件局部，比全量覆盖安全省 token；**写盘前弹蓝色 diff 预览卡**让你审改动。**分层匹配 L1-L4**(精确 → 行尾空白 → 缩进重对齐 → difflib 模糊),模型缩进风格不一致、tab/空格混用都能自动修正;实在匹配不上时**返回最接近片段+行号让模型自纠重试**——弱模型也能稳定改文件
 - 🌐 **`search_files` 跨文件正则搜索**（ripgrep 风格，忽略噪声目录）+ `read_file` 行号分页
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
 - ↶ **Checkpoint / 撤销**：edit/write/append 写盘前自动 git stash 快照，顶栏一键撤销 AI 上一轮改动（路径级恢复）
@@ -406,7 +406,7 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 | `read_file` | 读取文件内容（offset/limit 行号分页） |
 | `write_file` | 创建/覆盖文件（**写盘前弹 diff 确认卡**） |
 | `append_file` | 追加内容到文件末尾（**弹 diff 确认卡**） |
-| `edit_file` | 精确字符串替换（**弹 diff 预览卡** + 路径白名单，比 write_file 安全） |
+| `edit_file` | **智能容错替换**：分层匹配 L1-L4(精确→行尾空白→缩进重对齐→模糊)，配 47 项回归测试；失败返回最接近片段让模型自纠（**弹 diff 预览卡** + 路径白名单，比 write_file 安全） |
 | `list_directory` | 列出目录内容 |
 | `run_command` | 执行系统命令（30 秒超时，**执行前弹确认卡**，流式输出） |
 | `search_in_file` | 单文件关键词搜索（offset/limit 分页） |
