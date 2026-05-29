@@ -221,7 +221,9 @@ class SidebarMixin:
             btn.setProperty("class", "historyItemActive" if is_current else "historyItem")
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(title)
-            btn.setStyleSheet(btn.styleSheet() + "text-align: left; padding-right: 0;")
+            # 注意：不要在这里 setStyleSheet。给 btn 设自己的 stylesheet 会切断
+            # app 级 QToolTip 规则继承，tooltip 会变成系统默认黑底。
+            # text-align / padding 已经写在 theme.py 的 historyItem 类选择器里。
             btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             btn.setMinimumWidth(0)
             btn.clicked.connect(lambda checked=False, s=sid: self._load_session(s))

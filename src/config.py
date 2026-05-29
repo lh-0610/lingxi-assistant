@@ -42,6 +42,18 @@ MIMO_BASE_URL = _config.get("mimo_base_url", "https://token-plan-sgp.xiaomimimo.
 DEEPSEEK_API_KEY = _config.get("deepseek_api_key", "")
 DEEPSEEK_BASE_URL = _config.get("deepseek_base_url", "https://api.deepseek.com")
 
+# 各 provider 的可选 model_id 列表（用户在设置里编辑，重启后生效）
+MIMO_MODELS       = _config.get("mimo_models", ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni"])
+QWEN_CLOUD_MODELS = _config.get("qwen_cloud_models", ["qwen3.5-plus", "qwen-max", "qwen-plus", "qwen-turbo"])
+OLLAMA_MODELS     = _config.get("ollama_models", ["qwen3.5:latest"])
+ANTHROPIC_MODELS  = _config.get("anthropic_models", ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"])
+GEMINI_MODELS     = _config.get("gemini_models", [])
+DEEPSEEK_MODELS   = _config.get("deepseek_models", ["deepseek-v4-flash", "deepseek-v4-pro"])
+CLAUDE_CODE_MODEL = _config.get("claude_code_model", "")
+VISION_MODEL_ID   = _config.get("vision_model_id", "")
+# 启动默认选中的模型（按 model_id 匹配；找不到退回列表第一个）
+DEFAULT_MODEL_ID  = _config.get("default_model_id", "mimo-v2.5-pro")
+
 
 # 自定义模型列表。用户在设置里加自己的 OpenAI/Anthropic 兼容模型。
 # 每项格式：{

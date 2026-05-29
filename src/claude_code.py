@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from . import state
 from .paths import logger
+from .config import CLAUDE_CODE_MODEL
 from .memory import save_session, maybe_generate_session_title
 from .roles import get_system_prompt, get_current_role_name, get_role_card_content
 
@@ -79,6 +80,8 @@ def claude_code_loop(ui):
             "--output-format", "stream-json",
             "--verbose",
         ]
+        if CLAUDE_CODE_MODEL:
+            cmd += ["--model", CLAUDE_CODE_MODEL]
         # 角色卡作为系统提示词
         system_prompt = get_system_prompt()
         if get_role_card_content():

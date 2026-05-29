@@ -30,6 +30,30 @@ from .images import (
 )
 
 
+def _pretty_args(args) -> str:
+    """把工具参数 dict 美化成多行 JSON（给 UI 展示用，非合法 JSON）。
+
+    json.dumps(indent=2) 只让 JSON 结构换行，但字符串值里的【真换行符】会被
+    转义成字面 "\\n" 压成一行（如 sequentialthinking 的 thought 长文本）。展示
+    时把这些换行还原成真换行，更好读。
+
+    坑：不能无脑 replace("\\n")——Windows 路径 `C:\\name`（dumps 后是 `C:\\\\name`）
+    里的反斜杠会被误伤。先用占位符保护字面双反斜杠，再还原换行/制表，最后把
+    双反斜杠还原成单个（展示一个反斜杠即可）。
+    """
+    import json as _json
+    try:
+        text = _json.dumps(args, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(args)
+    return (
+        text.replace("\\\\", "\x00")   # 保护字面反斜杠
+            .replace("\\n", "\n")      # 字符串值内换行 → 真换行
+            .replace("\\t", "\t")      # 制表
+            .replace("\x00", "\\")     # 还原：字面反斜杠展示成单个
+    )
+
+
 # 这些工具在执行过程中会自己把进度/输出 push 到 UI（边跑边显示），
 # `_execute_tool` 完成后不再二次 display 工具结果，避免重复
 STREAMING_TOOLS = {"run_command"}
@@ -249,7 +273,8 @@ class _StreamState:
     """
     __slots__ = ("raw_text", "in_think", "think_started", "think_mode",
                  "think_done", "first_token", "gathered",
-                 "tool_call_start", "tool_call_last")
+                 "tool_call_start", "tool_call_last",
+                 "tool_hb_stop", "tool_hb_thread")
 
     def __init__(self):
         self.raw_text = ""
@@ -262,6 +287,8 @@ class _StreamState:
         # 工具调用参数流式生成期的指示器状态（None = 没在生成工具调用）
         self.tool_call_start = None   # 开始生成工具调用的时间戳
         self.tool_call_last = 0.0     # 上次刷新指示器的时间戳（节流用）
+        self.tool_hb_stop = None      # 工具调用心跳线程的停止事件
+        self.tool_hb_thread = None    # 工具调用心跳线程
 
 
 def _prepare_stream_history(ui):
@@ -370,27 +397,45 @@ def _current_tool_name(gathered) -> str:
     return "工具"
 
 
-def _refresh_tool_call_indicator(st, ui, heartbeat_stop):
-    """工具调用参数流式生成期的实时指示器（节流到每秒一次）。
+def _start_tool_call_heartbeat(st, ui):
+    """工具调用参数生成期的独立心跳：主动每秒刷新计时，不依赖 chunk 到达。
 
-    首次：停掉等待/思考心跳、清掉残留指示器、挂一条 "🔧 正在生成工具调用 X... (0s)"。
-    之后：每秒原地刷新计时。收尾在 _stream_with_tools 末尾统一 remove。
+    之前计时靠"每个纯 tool_call chunk 到达时刷新"被动驱动；MiMo 一次性吐完
+    arguments 后没有后续 chunk，计时就卡在 0s。改成独立 daemon 线程主动 tick。
     """
-    now = time.time()
-    if st.tool_call_start is None:
-        st.tool_call_start = now
-        st.tool_call_last = now
-        st.first_token = False
-        heartbeat_stop.set()            # 接管指示器，停掉等待/思考心跳
-        ui.remove_thinking_indicator()  # 清掉残留的"等待响应/思考中"指示器
-        name = _current_tool_name(st.gathered)
-        ui.show_message(f"🔧 正在生成工具调用 {name}... (0s)\n", "thinking_indicator")
+    if getattr(st, "tool_hb_thread", None) is not None:
         return
-    if now - st.tool_call_last >= 1.0:
-        st.tool_call_last = now
-        elapsed = int(now - st.tool_call_start)
-        name = _current_tool_name(st.gathered)
-        ui.update_thinking_indicator(f"🔧 正在生成工具调用 {name}... ({elapsed}s)\n")
+    st.tool_hb_stop = _threading.Event()
+
+    def _run():
+        # wait(1) 超时返回 False（继续刷新），被 set 时返回 True（退出）
+        while not st.tool_hb_stop.wait(1):
+            try:
+                nm = _current_tool_name(st.gathered)
+                el = int(time.time() - st.tool_call_start)
+                ui.update_thinking_indicator(f"🔧 正在生成工具调用 {nm}... ({el}s)\n")
+            except Exception:
+                break
+
+    st.tool_hb_thread = _threading.Thread(target=_run, daemon=True)
+    st.tool_hb_thread.start()
+
+
+def _refresh_tool_call_indicator(st, ui, heartbeat_stop):
+    """进入工具调用参数生成期：停主心跳、清残留、显示指示器、起独立心跳主动计时。
+
+    只在首次进入时做这些；后续 chunk 进来啥也不用做（独立心跳线程负责刷新计时）。
+    收尾在 _stream_with_tools 末尾统一 remove 指示器 + 停心跳。
+    """
+    if st.tool_call_start is not None:
+        return  # 已在生成期，心跳线程主动刷新中
+    st.tool_call_start = time.time()
+    st.first_token = False
+    heartbeat_stop.set()            # 停掉等待/思考主心跳，避免两个心跳打架
+    ui.remove_thinking_indicator()  # 清掉残留的"等待响应/思考中"指示器
+    name = _current_tool_name(st.gathered)
+    ui.show_message(f"🔧 正在生成工具调用 {name}... (0s)\n", "thinking_indicator")
+    _start_tool_call_heartbeat(st, ui)  # 主动每秒刷新，不靠 chunk 驱动
 
 
 def _handle_stream_chunk(st, chunk, ui, heartbeat_stop, heartbeat_phase):
@@ -612,6 +657,9 @@ def _stream_with_tools(ui):
             _handle_stream_chunk(st, chunk, ui, heartbeat_stop, heartbeat_phase)
     except Exception as _err:
         heartbeat_stop.set()
+        _ths = getattr(st, "tool_hb_stop", None)
+        if _ths is not None:
+            _ths.set()  # 停工具调用心跳
         # 记录失败：把异常信息也写进 record 再 raise，让 Inspector 能看到错误
         try:
             import traceback as _tb
@@ -624,6 +672,9 @@ def _stream_with_tools(ui):
         raise
 
     heartbeat_stop.set()
+    _ths = getattr(st, "tool_hb_stop", None)
+    if _ths is not None:
+        _ths.set()  # 停工具调用心跳
 
     if st.first_token:
         ui.remove_thinking_indicator()
@@ -678,6 +729,23 @@ def _execute_tool(tc, ui):
         logger.info(f"Plan 模式拒绝调用 {name}")
         return
 
+    # 空参数保护：模型流式生成 tool_call 时 arguments 没传全 / JSON 解析失败
+    # （常见于 new_string 很长、或服务端流式不稳），会 fallback 成 {}。直接 invoke
+    # 只会撞一坨 pydantic 校验错、对模型没指引。这里给清晰中文让它重新完整调用。
+    # list_directory 有默认 path 可空；MCP 工具的空参数由远程 server 自己校验，都放行。
+    _NO_ARG_OK = {"list_directory"}
+    if not args and name not in _NO_ARG_OK and not name.startswith("mcp_"):
+        ui.show_message(f"\n⚠️ {name} 的参数为空（生成中断），已请模型重试\n", "tool_result")
+        state.chat_history.append(ToolMessage(
+            content=(
+                f"工具 `{name}` 的调用参数为空——可能是流式生成中断或参数过长没传完整。"
+                "请重新调用该工具，一次性完整给出所有必填参数。"
+            ),
+            tool_call_id=call_id,
+        ))
+        logger.warning(f"工具 {name} 参数为空，跳过执行并请模型重试")
+        return
+
     display_name = TOOL_DISPLAY_NAMES.get(name, f"🔧 {name}")
 
     if name in ("read_file", "write_file", "append_file", "edit_file"):
@@ -691,11 +759,7 @@ def _execute_tool(tc, ui):
     elif name == "generate_image":
         detail = args.get("prompt", "")[:80]
     else:
-        import json as _json_detail
-        try:
-            detail = _json_detail.dumps(args, indent=2, ensure_ascii=False)
-        except (TypeError, ValueError):
-            detail = str(args)  # args 不可序列化时退回原行为
+        detail = _pretty_args(args)
 
     ui.show_message(f"\n{display_name}", "tool_tag")
     ui.show_message(f"  {detail}\n", "tool_detail")
@@ -705,11 +769,10 @@ def _execute_tool(tc, ui):
     if name.startswith("mcp_"):
         _ui = getattr(state, "ui_ref", None)
         if _ui is not None:
-            import json as _json
             _display = TOOL_DISPLAY_NAMES.get(name, name)
             _msg = (
                 f"将调用 MCP 工具 {_display}，参数:\n"
-                + _json.dumps(args, indent=2, ensure_ascii=False)
+                + _pretty_args(args)
             )
             if not _ui.confirm_command(_msg):
                 logger.info(f"用户拒绝执行 MCP 工具: {name}")

@@ -174,13 +174,50 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         dlg.exec()
 
     def _apply_tooltip_style(self):
-        """把 QToolTip 样式设到 QApplication 级别——tooltip 是独立顶层弹窗，
-        不继承主窗口的 setStyleSheet，必须 app 级才能跟主题一致。"""
-        from PySide6.QtWidgets import QApplication
+        """把 QToolTip 颜色强行刷成跟主题一致。
+
+        QToolTip 是顶层弹窗，**不继承主窗口 setStyleSheet**。在 Windows 上 Qt 还会
+        在多种情况下绕过 app.setStyleSheet 的 QToolTip 规则，用系统默认（黑底白字）。
+
+        所以这里**三管齐下**全设上：
+          1. app.setStyleSheet(QToolTip QSS) —— 标准路径
+          2. app.setPalette(ToolTipBase/Text) —— Qt 优先级最高的色板系统
+          3. QToolTip.setPalette(同) —— 类级 palette 兜底
+        三条都设上，无论 Qt 走哪条路解析颜色，结果都跟我们主题一致。
+        """
+        from PySide6.QtWidgets import QApplication, QToolTip
+        from PySide6.QtGui import QColor, QPalette
+        from PySide6.QtCore import QTimer
         from .theme import build_tooltip_qss
+
         app = QApplication.instance()
-        if app is not None:
+        if app is None:
+            return
+
+        bg = QColor(self._t("tooltip_bg"))
+        fg = QColor(self._t("tooltip_text"))
+
+        def _apply():
+            # 1. QSS
             app.setStyleSheet(build_tooltip_qss(self.theme))
+            # 2. App palette（覆盖整个 app 的 ToolTipBase/Text 角色色板）
+            app_palette = app.palette()
+            app_palette.setColor(QPalette.ToolTipBase, bg)
+            app_palette.setColor(QPalette.ToolTipText, fg)
+            app_palette.setColor(QPalette.Inactive, QPalette.ToolTipBase, bg)
+            app_palette.setColor(QPalette.Inactive, QPalette.ToolTipText, fg)
+            app.setPalette(app_palette)
+            # 3. QToolTip 类级 palette
+            tooltip_palette = QToolTip.palette()
+            tooltip_palette.setColor(QPalette.ToolTipBase, bg)
+            tooltip_palette.setColor(QPalette.ToolTipText, fg)
+            tooltip_palette.setColor(QPalette.Inactive, QPalette.ToolTipBase, bg)
+            tooltip_palette.setColor(QPalette.Inactive, QPalette.ToolTipText, fg)
+            QToolTip.setPalette(tooltip_palette)
+
+        _apply()
+        # 再延迟一次：有些场景 Qt 在 init 过程中会重置 palette，延一个 tick 再覆盖
+        QTimer.singleShot(0, _apply)
 
     def _apply_theme(self):
         """重新生成全局 QSS，并刷新所有用 setStyleSheet 直接设置的 chrome。"""
@@ -1355,9 +1392,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         original_model_name = agent.MODEL_LIST[agent.current_model_index][0]
         vision_model_name = ""
         if use_vision_bridge:
-            vision_idx = agent.find_vision_model_index()
+            vision_idx = agent.get_vision_model_index()
             if vision_idx < 0:
-                self._append_html("\n⚠️ 当前模型不支持图片，且没有找到可用的视觉模型\n", "tool_result")
+                self._append_html(
+                    "\n⚠️ 当前模型不支持图片。请先在「设置 → 图片识别模型」里选一个能看图的模型。\n",
+                    "tool_result",
+                )
                 return
             vision_model_name = agent.MODEL_LIST[vision_idx][0]
 

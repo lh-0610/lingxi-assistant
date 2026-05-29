@@ -16,12 +16,11 @@ from . import state  # 公开给 ui.py 直接用：ui 里所有"写入"改成 sr
 from .paths import logger
 from .models import (
     MODEL_LIST,
-    VISION_MODEL_IDS,
     check_ollama,
     _create_llm,
     get_model_config_issues,
     current_model_supports_vision,
-    find_vision_model_index,
+    get_vision_model_index,
     describe_images_with_vision,
 )
 from .roles import (
@@ -96,7 +95,20 @@ def set_reasoning(enabled):
 # 启动初始化
 # ══════════════════════════════════════
 
-# 1. 默认 LLM
+# 1. 默认模型 + LLM
+#    启动默认模型由 config 的 default_model_id 决定（默认 mimo-v2.5-pro）。
+#    按 model_id 匹配而非写死 index——BUILTIN 顺序随 config 变，写死 index 不稳。
+#    找不到该 model_id（如用户删了它）时退回列表第一个。
+def _resolve_default_model_index():
+    from .config import DEFAULT_MODEL_ID
+    if DEFAULT_MODEL_ID:
+        for i, (_, _, mid, _) in enumerate(MODEL_LIST):
+            if mid == DEFAULT_MODEL_ID:
+                return i
+    return 0
+
+
+state.current_model_index = _resolve_default_model_index()
 _activate_llm()
 
 # 1.5 MCP 守护线程（后台启动，不影响 UI 等待）

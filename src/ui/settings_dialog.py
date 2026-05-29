@@ -18,6 +18,76 @@ from ._base import BASE_DIR, CONFIG_PATH
 from ..paths import APP_DIR as _APP_DIR
 
 
+class _NoScrollComboBox(QComboBox):
+    """禁止鼠标滚轮改变选择：忽略 wheel 事件并交给父级（让设置页继续滚动），
+    避免滚动页面时经过下拉框误改选中项。必须类级重写 wheelEvent——PySide6 的
+    C++ 虚函数调不到实例属性覆盖。"""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class _ResizableTextEdit(QTextEdit):
+    """右下角可垂直拖拽改高度，类似 HTML <textarea>。
+
+    鼠标移到右下角 → 光标变上下箭头；按住上下拖 → 改高度（不小于 min_height）。
+    坐标用 viewport 尺寸判断（QAbstractScrollArea 的鼠标事件坐标相对 viewport）。
+    """
+    _GRIP = 16  # 右下角可拖拽区域边长（px）
+
+    def __init__(self, min_height=70, parent=None):
+        super().__init__(parent)
+        self._min_h = min_height
+        self.setFixedHeight(min_height)
+        self._resizing = False
+        self._start_y = 0
+        self._start_h = 0
+
+    def _in_grip(self, pos):
+        vp = self.viewport()
+        return (pos.x() >= vp.width() - self._GRIP
+                and pos.y() >= vp.height() - self._GRIP)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._in_grip(event.position().toPoint()):
+            self._resizing = True
+            self._start_y = event.globalPosition().toPoint().y()
+            self._start_h = self.height()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            dy = event.globalPosition().toPoint().y() - self._start_y
+            self.setFixedHeight(max(self._min_h, self._start_h + dy))
+            event.accept()
+            return
+        # 不拖拽时：在 grip 区显示"上下拉伸"光标，其余区域正常文本光标
+        cursor = Qt.SizeVerCursor if self._in_grip(event.position().toPoint()) else Qt.IBeamCursor
+        self.viewport().setCursor(cursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._resizing:
+            self._resizing = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # 右下角画三条斜纹，提示可拖拽（像 HTML textarea 的手柄）
+        from PySide6.QtGui import QColor, QPen
+        vp = self.viewport()
+        p = QPainter(vp)
+        p.setPen(QPen(QColor(140, 140, 140, 150), 1))
+        w, h = vp.width(), vp.height()
+        for off in (4, 8, 12):
+            p.drawLine(w - off, h - 3, w - 3, h - off)
+        p.end()
+
+
 class SettingsDialog(QDialog):
     """直接在 UI 里编辑 config.json。保存后写回文件，提示重启生效。
 
@@ -74,11 +144,13 @@ class SettingsDialog(QDialog):
                 ("qwen_api_key",  "API Key",  "sk-...",                                                True),
                 ("qwen_base_url", "Base URL", "https://dashscope.aliyuncs.com/compatible-mode/v1",     False),
             ],
+            models_key="qwen_cloud_models",
         )
         self._add_provider_card(
             form_layout, "Anthropic Claude",
             [("anthropic_api_key", "API Key", "sk-ant-...", True)],
             hint="API 官方端点，无需 Base URL",
+            models_key="anthropic_models",
         )
         self._add_provider_card(
             form_layout, "MiMo（Anthropic 兼容）",
@@ -86,6 +158,7 @@ class SettingsDialog(QDialog):
                 ("mimo_api_key",  "API Key",  "tp-...",                                                True),
                 ("mimo_base_url", "Base URL", "https://token-plan-sgp.xiaomimimo.com/anthropic",       False),
             ],
+            models_key="mimo_models",
         )
         self._add_provider_card(
             form_layout, "DeepSeek",
@@ -93,16 +166,30 @@ class SettingsDialog(QDialog):
                 ("deepseek_api_key",  "API Key",  "sk-...",                       True),
                 ("deepseek_base_url", "Base URL", "https://api.deepseek.com",     False),
             ],
+            models_key="deepseek_models",
         )
         self._add_provider_card(
             form_layout, "Google Gemini",
             [("google_api_key", "API Key", "AIza...", True)],
+            models_key="gemini_models",
+            models_hint="默认为空，有需要请自行填入 model ID（如 gemini-2.0-flash）",
         )
         self._add_provider_card(
             form_layout, "Ollama 本地",
             [("ollama_base_url", "Base URL", "http://127.0.0.1:11434", False)],
             hint="本机部署，无需 API Key",
+            models_key="ollama_models",
         )
+
+        # ── Claude Code 底层模型 ──
+        self._add_section(form_layout, "Claude Code")
+        self._add_text(form_layout, "claude_code_model",
+                       "底层模型（可选，留空 = CLI 默认）",
+                       "例如：claude-sonnet-4-20250514")
+
+        # ── 图片识别模型 ──
+        self._add_section(form_layout, "图片识别模型")
+        self._add_vision_model_picker(form_layout)
 
         # ── 自定义模型 ──
         self._add_custom_models_section(form_layout)
@@ -116,6 +203,7 @@ class SettingsDialog(QDialog):
             "• 关掉这个开关 = 完全不连 MCP，灵犀内置工具照常用\n"
             "• server 列表在 config.json 的 mcp_servers 里编辑（暂不支持 UI 增删）\n"
             "  —— config.json 在哪？点本弹窗左下角「config」按钮直达目录\n"
+            "• 支持 4 种传输方式：stdio（本地进程）/ sse / streamable_http / auto（自动检测）\n"
             "• stdio 类型的 server 需要你的机器装了 Node.js\n"
             "• 改动需重启应用才生效"
         )
@@ -232,11 +320,13 @@ class SettingsDialog(QDialog):
         lbl.setObjectName("settingsSection")
         layout.addWidget(lbl)
 
-    def _add_provider_card(self, layout, provider_name, fields, hint=None):
+    def _add_provider_card(self, layout, provider_name, fields, hint=None, models_key=None, models_hint=None):
         """加一个 provider 配置卡片（带边框 + 标题 + 多个字段）。
 
         fields: [(config_key, label_text, placeholder, is_password), ...]
         hint: 可选的灰色辅助说明（如"无需 Base URL"）
+        models_key: 可选的 model 列表 config key（如 "mimo_models"），会加一个 textarea
+        models_hint: textarea 下方的灰色提示文字
         """
         card = QFrame()
         card.setObjectName("providerCard")
@@ -256,6 +346,17 @@ class SettingsDialog(QDialog):
         # 字段
         for key, label_text, placeholder, password in fields:
             self._add_text(v, key, label_text, placeholder, password=password)
+
+        # model 列表（可选）
+        if models_key:
+            self._add_textarea(v, models_key, "可用模型 ID（每行一个）",
+                               "例如：mimo-v2.5-pro\nmimo-v2.5",
+                               min_height=56)
+            if models_hint:
+                mh = QLabel(models_hint)
+                mh.setObjectName("providerCardHint")
+                mh.setWordWrap(True)
+                v.addWidget(mh)
 
         layout.addWidget(card)
 
@@ -502,7 +603,17 @@ class SettingsDialog(QDialog):
         layout.addWidget(wrapper)
         self.fields[key] = edit
 
-    def _add_textarea(self, layout, key, label_text, placeholder=""):
+    # model 列表字段 → config.py 中对应的常量名（用于回填默认值）
+    _LIST_DEFAULTS = {
+        "mimo_models":       "MIMO_MODELS",
+        "qwen_cloud_models": "QWEN_CLOUD_MODELS",
+        "ollama_models":     "OLLAMA_MODELS",
+        "anthropic_models":  "ANTHROPIC_MODELS",
+        "gemini_models":     "GEMINI_MODELS",
+        "deepseek_models":   "DEEPSEEK_MODELS",
+    }
+
+    def _add_textarea(self, layout, key, label_text, placeholder="", min_height=70):
         wrapper = QWidget()
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(0, 0, 0, 0)
@@ -512,15 +623,71 @@ class SettingsDialog(QDialog):
         lbl.setObjectName("settingsLabel")
         wl.addWidget(lbl)
 
-        edit = QTextEdit()
-        edit.setPlainText(str(self.config.get(key, "")))
+        edit = _ResizableTextEdit(min_height=min_height)
+        # 如果 config 里存的是 list，转成每行一个的文本
+        raw = self.config.get(key, None)
+        if raw is None and key in self._LIST_DEFAULTS:
+            # key 不在 config.json 里，从 config.py 拿默认值
+            from .. import config as _cfg
+            raw = getattr(_cfg, self._LIST_DEFAULTS[key], [])
+        if raw is None:
+            raw = ""
+        if isinstance(raw, list):
+            edit.setPlainText("\n".join(str(x) for x in raw))
+        else:
+            edit.setPlainText(str(raw))
         edit.setPlaceholderText(placeholder)
         edit.setObjectName("settingsInput")
-        edit.setFixedHeight(70)
+        # 初始高度 + 可拖拽下限都在 _ResizableTextEdit 内部用 min_height 处理了
         wl.addWidget(edit)
 
         layout.addWidget(wrapper)
         self.fields[key] = edit  # 注意：QTextEdit，保存时要用 toPlainText()
+
+    def _add_vision_model_picker(self, layout):
+        """图片识别模型下拉：发图时若当前对话模型不是它，会先用它把图转成文字。
+
+        选项 = 当前 MODEL_LIST 所有条目（显示名 → model_id）+ "（不启用图片识别）"。
+        写回 config.json 的 vision_model_id（空字符串 = 不启用）。
+        """
+        from ..models import MODEL_LIST
+
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(5)
+
+        lbl = QLabel("选一个能看图的模型（如 MiMo Omni / Claude / Gemini）")
+        lbl.setObjectName("settingsLabel")
+        wl.addWidget(lbl)
+
+        combo = _NoScrollComboBox()
+        combo.setObjectName("settingsInput")
+        combo.setMinimumHeight(32)
+        combo.addItem("（不启用图片识别）", "")
+        for name, mtype, model_id, _ in MODEL_LIST:
+            # 跳过 Claude Code：CLI 模式，model_id 是占位符 "claude"，
+            # 不能当图片识别模型（选了发图会崩）
+            if not model_id or mtype == "claude-code":
+                continue
+            combo.addItem(name, model_id)
+        # 设当前值
+        current = str(self.config.get("vision_model_id", "") or "")
+        idx = combo.findData(current)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        wl.addWidget(combo)
+
+        hint = QLabel(
+            "发图片时，若当前对话模型 ≠ 此模型，会先用它把图识别成文字再交给当前模型。"
+            "选「不启用」= 非视觉模型不能直接收图。"
+        )
+        hint.setObjectName("providerCardHint")
+        hint.setWordWrap(True)
+        wl.addWidget(hint)
+
+        layout.addWidget(wrapper)
+        self.fields["vision_model_id"] = combo
 
     def _add_gpt_sovits_section(self, layout):
         """语音模块设置 + 启动 / 停止按钮 + 状态指示。"""
@@ -622,12 +789,25 @@ class SettingsDialog(QDialog):
 
     # ── 操作 ──
 
+    # 这些 key 在 QTextEdit 里是"每行一个"的数组，保存时要 split 成 list
+    _LIST_KEYS = frozenset({
+        "mimo_models", "qwen_cloud_models", "ollama_models",
+        "anthropic_models", "gemini_models", "deepseek_models",
+    })
+
     def _save(self):
         for key, widget in self.fields.items():
             if isinstance(widget, QCheckBox):
                 self.config[key] = widget.isChecked()
+            elif isinstance(widget, QComboBox):
+                # currentData() 返回我们用 addItem(..., data) 存的 model_id；"" = 不启用
+                self.config[key] = widget.currentData() or ""
             elif isinstance(widget, QTextEdit):
-                self.config[key] = widget.toPlainText().strip()
+                text = widget.toPlainText().strip()
+                if key in self._LIST_KEYS:
+                    self.config[key] = [line.strip() for line in text.splitlines() if line.strip()]
+                else:
+                    self.config[key] = text
             else:
                 self.config[key] = widget.text().strip()
 
@@ -698,6 +878,7 @@ class SettingsDialog(QDialog):
         input_focus_bg = "#1a1f27" if is_dark else "#ffffff"
         bottom_bg = "#0c1015" if is_dark else "#f9fafb"
         check_icon = os.path.join(BASE_DIR, "icons", "check_white.svg").replace("\\", "/")
+        arrow_icon = os.path.join(BASE_DIR, "icons", "chevron_down.svg").replace("\\", "/")
 
         self.setStyleSheet(
             f"QDialog {{ background: {bg}; color: {fg}; }}\n"
@@ -710,6 +891,15 @@ class SettingsDialog(QDialog):
             f" border-radius: 6px; padding: 6px 10px; color: {fg}; font-size: 13px;"
             f" font-family: \"Consolas\", \"Microsoft YaHei UI\", monospace; }}\n"
             f"#settingsInput:focus {{ border-color: {accent}; background: {input_focus_bg}; }}\n"
+            # QComboBox（如图片识别模型下拉）的箭头：去掉 Win11 系统默认那个突兀的，
+            # 换成跟顶栏模型下拉一致的 chevron_down.svg
+            f"QComboBox::drop-down {{ border: none; width: 28px;"
+            f" subcontrol-origin: padding; subcontrol-position: top right; }}\n"
+            f"QComboBox::down-arrow {{ image: url({arrow_icon});"
+            f" width: 14px; height: 14px; margin-right: 8px; }}\n"
+            f"QComboBox QAbstractItemView {{ background: {input_focus_bg}; color: {fg};"
+            f" border: 1px solid {border}; selection-background-color: {accent};"
+            f" selection-color: #ffffff; outline: none; }}\n"
             f"#settingsEye {{ background: {input_bg}; border: 1px solid {border};"
             f" border-radius: 6px; color: {muted}; font-size: 11px; }}\n"
             f"#settingsEye:checked {{ color: {accent}; }}\n"
@@ -783,7 +973,7 @@ class _CustomModelEditor(QDialog):
         pwl.setContentsMargins(0, 0, 0, 0)
         pwl.setSpacing(5)
         pwl.addWidget(self._mk_label("API 协议"))
-        self.f_protocol = QComboBox()
+        self.f_protocol = _NoScrollComboBox()
         self.f_protocol.addItem("OpenAI 兼容（默认 — 适配大多数第三方 API）", "openai")
         self.f_protocol.addItem("Anthropic 兼容（Claude 系 / MiMo 风）", "anthropic")
         # 设当前值

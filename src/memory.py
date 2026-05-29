@@ -215,8 +215,14 @@ def maybe_generate_session_title():
     if not first_text:
         return
 
+    # 当前模型是 Claude Code（CLI 模式，model_id "claude" 不是真 API 模型，
+    # 用它调 _create_llm 会打到 Anthropic API 报 404）→ 不值得为标题起 CLI 子进程，
+    # 跟"太短问候"一样直接用首句截断。
+    from .models import MODEL_LIST
+    is_cli_model = MODEL_LIST[state.current_model_index][1] == "claude-code"
+
     # 太短的问候直接作为标题，不额外花一次模型调用。
-    if len(first_text) <= 8:
+    if len(first_text) <= 8 or is_cli_model:
         title = _sanitize_title(first_text)
     else:
         try:

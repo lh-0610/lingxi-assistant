@@ -91,20 +91,58 @@ def _load_mcp_config() -> dict:
 
 
 # ═══════════════════════════════════════════════════════
+# HTTP 传输连接（SSE / Streamable HTTP / Auto）
+# ═══════════════════════════════════════════════════════
+
+async def _connect_http(stack, url, transport):
+    """建立 HTTP 传输连接，返回 (read_stream, write_stream, actual_transport)。
+
+    当 transport="auto" 时，先尝试 Streamable HTTP，失败则回退 SSE。
+    """
+    if transport in ("streamable_http", "auto"):
+        try:
+            from mcp.client.streamable_http import streamablehttp_client
+            result = await stack.enter_async_context(streamablehttp_client(url))
+            # streamablehttp_client 可能返回 2 或 3 个值
+            if len(result) == 3:
+                read_stream, write_stream, _ = result
+            else:
+                read_stream, write_stream = result
+            actual = "streamable_http"
+            if transport == "auto":
+                logger.info(f"[MCP] Auto 检测: {url} → Streamable HTTP")
+            return read_stream, write_stream, actual
+        except Exception as e:
+            if transport != "auto":
+                raise
+            # auto 模式下 streamable HTTP 失败，回退 SSE
+            logger.info(f"[MCP] Streamable HTTP 失败（{e}），回退 SSE ...")
+
+    # SSE（显式指定 或 auto 回退）
+    from mcp.client.sse import sse_client
+    read_stream, write_stream = await stack.enter_async_context(sse_client(url))
+    if transport == "auto":
+        logger.info(f"[MCP] Auto 检测: {url} → SSE")
+    return read_stream, write_stream, "sse"
+
+
+# ═══════════════════════════════════════════════════════
 # 单个 Server 生命周期（在守护线程 asyncio loop 内运行）
 # ═══════════════════════════════════════════════════════
 
 async def _server_loop(name: str, cfg: dict):
     """启动并维持一个 MCP Server 连接，直到 _shutdown_event 被 set。
 
-    支持两种传输方式：
+    支持三种传输方式：
     - stdio（默认）：需要 ``command`` 和 ``args``
-    - sse：需要 ``url``（也可通过 ``transport: "sse"`` 显式指定）
+    - sse：需要 ``url``（显式指定 SSE 协议）
+    - streamable_http：需要 ``url``（显式指定 Streamable HTTP 协议）
+    - auto：需要 ``url``（自动尝试 streamable HTTP → 回退 SSE）
     """
     transport = cfg.get("transport", "stdio")
 
-    # ── SSE / Streamable HTTP ────────────────────────────
-    if transport in ("sse", "streamable_http"):
+    # ── SSE / Streamable HTTP / Auto ─────────────────────
+    if transport in ("sse", "streamable_http", "auto"):
         url = cfg.get("url")
         if not url:
             logger.warning(f"[MCP] {name}: transport={transport} 但缺少 url，跳过")
@@ -118,17 +156,9 @@ async def _server_loop(name: str, cfg: dict):
             await stack.__aenter__()
             _exit_stacks[name] = stack
 
-            # mcp >= 1.0 同时支持 sse_client 和 streamablehttp_client
-            if transport == "sse":
-                from mcp.client.sse import sse_client
-                read_stream, write_stream = await stack.enter_async_context(
-                    sse_client(url)
-                )
-            else:
-                from mcp.client.streamable_http import streamablehttp_client
-                read_stream, write_stream = await stack.enter_async_context(
-                    streamablehttp_client(url)
-                )
+            read_stream, write_stream, actual_transport = await _connect_http(
+                stack, url, transport
+            )
 
             from mcp import ClientSession
             session = await stack.enter_async_context(
@@ -141,7 +171,7 @@ async def _server_loop(name: str, cfg: dict):
             tools_resp = await session.list_tools()
             _server_tools[name] = tools_resp.tools
             tool_names = [t.name for t in tools_resp.tools]
-            logger.info(f"[MCP] ✅ {name}: 已连接（{transport}），{len(tool_names)} 个工具: {tool_names}")
+            logger.info(f"[MCP] ✅ {name}: 已连接（{actual_transport}），{len(tool_names)} 个工具: {tool_names}")
 
             # 通知就绪
             if name in _server_ready_events:

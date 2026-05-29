@@ -61,7 +61,9 @@ class HeaderMixin:
         self.model_combo.setCursor(Qt.PointingHandCursor)
         for name, _, _, _ in agent.MODEL_LIST:
             self.model_combo.addItem(name)
-        self.model_combo.setCurrentIndex(0)
+        # 跟启动时解析的默认模型（agent 里按 default_model_id 设的 current_model_index）
+        # 同步，而不是写死 0（0 是 Claude Code）。在 connect 之前设，不触发回调。
+        self.model_combo.setCurrentIndex(agent.current_model_index)
         self._style_model_combo()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)

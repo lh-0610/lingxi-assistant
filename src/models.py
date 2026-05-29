@@ -1,7 +1,7 @@
 """模型注册表 + LLM 工厂 + 视觉能力判断。
 
 - MODEL_LIST：可选模型清单（显示名 / 类型 / 模型ID / 是否支持思考）
-- VISION_MODEL_IDS：支持图片输入的模型 ID 集合
+- get_vision_model_index()：返回"用户在设置里选的图片识别模型"的 index（没选返回 -1）
 - _create_llm()：按 model_index 创建对应 LangChain ChatXxx 实例
 - describe_images_with_vision()：用视觉模型把图片转文本，给非视觉模型使用
 - check_ollama()：检测 Ollama 本机服务是否在线
@@ -27,30 +27,42 @@ from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     CUSTOM_MODELS,
+    MIMO_MODELS,
+    QWEN_CLOUD_MODELS,
+    OLLAMA_MODELS,
+    ANTHROPIC_MODELS,
+    GEMINI_MODELS,
+    DEEPSEEK_MODELS,
 )
 
 
 # 可选模型列表: (显示名, 类型, 模型ID, 支持思考)
 # 用户自定义模型（来自 config.json: custom_models）会在加载时追加进来，类型 = "custom"
-BUILTIN_MODEL_LIST = [
-    ("MiMo V2.5 Pro",          "mimo",        "mimo-v2.5-pro",               False),
-    ("MiMo V2.5",              "mimo",        "mimo-v2.5",                   False),
-    ("MiMo V2 Pro",            "mimo",        "mimo-v2-pro",                 False),
-    ("MiMo V2 Omni (多模态)",  "mimo",        "mimo-v2-omni",                False),
-    ("Claude Code",            "claude-code", "claude",               False),
-    ("Qwen3.5 本地",           "ollama",      "qwen3.5:latest",       True),
-    ("Qwen3.5-Plus 云端",      "cloud",       "qwen3.5-plus",         False),
-    ("Qwen-Max 云端",          "cloud",       "qwen-max",             False),
-    ("Qwen-Plus 云端",         "cloud",       "qwen-plus",            False),
-    ("Qwen-Turbo 云端",        "cloud",       "qwen-turbo",           False),
-    ("Claude Sonnet 4 API",    "anthropic",   "claude-sonnet-4-20250514",    False),
-    ("Claude Haiku 3.5 API",   "anthropic",   "claude-3-5-haiku-20241022",   False),
-    # DeepSeek V4：思考模式开启时 langchain 不会把 reasoning_content 回传给 API，
-    # 多轮工具调用会触发 "reasoning_content must be passed back" 400 错误。
-    # 暂时关闭思考模式（模型本身依然在内部推理，只是不暴露 think 块）。
-    ("DeepSeek V4 Flash",      "deepseek",    "deepseek-v4-flash",           False),
-    ("DeepSeek V4 Pro",        "deepseek",    "deepseek-v4-pro",             False),
-]
+# 显示名直接用 model_id 本身（Claude Code 例外，固定 "Claude Code"）
+
+
+def _build_builtin_model_list():
+    """从 config 的各 provider model 数组生成 (显示名, type, model_id, supports_thinking)。
+    显示名直接用 model_id 本身（Claude Code 例外）。"""
+    out = []
+    # Claude Code（CLI 模式）——固定一条，底层模型走 claude_code_model（空=CLI 默认）
+    out.append(("Claude Code", "claude-code", "claude", False))
+    for mid in MIMO_MODELS:
+        out.append((mid, "mimo", mid, False))
+    for mid in OLLAMA_MODELS:
+        out.append((mid, "ollama", mid, True))   # 本地模型默认允许 thinking
+    for mid in QWEN_CLOUD_MODELS:
+        out.append((mid, "cloud", mid, False))
+    for mid in ANTHROPIC_MODELS:
+        out.append((mid, "anthropic", mid, False))
+    for mid in GEMINI_MODELS:
+        out.append((mid, "gemini", mid, False))
+    for mid in DEEPSEEK_MODELS:
+        out.append((mid, "deepseek", mid, False))
+    return out
+
+
+BUILTIN_MODEL_LIST = _build_builtin_model_list()
 
 
 def _build_model_list():
@@ -126,36 +138,36 @@ def get_model_config_issues(model_index=None):
     return issues
 
 
-# 支持图片输入的模型 ID 集合（用于 UI 在用户发图片时自动切换）
-_BUILTIN_VISION_IDS = {
-    "mimo-v2-omni",
-    "claude-sonnet-4-20250514",
-    "claude-3-5-haiku-20241022",
-    "qwen-vl-plus",
-    "qwen-vl-max",
-}
-# 自定义模型用户标记了 supports_vision=True 时也归到这个集合
-VISION_MODEL_IDS = _BUILTIN_VISION_IDS | {
-    cm.get("model_id", "")
-    for cm in (CUSTOM_MODELS or [])
-    if cm.get("supports_vision")
-}
-
-
 _LLM_CACHE = {}
 
 
-def current_model_supports_vision():
-    """当前选中的模型是否支持图片"""
-    return MODEL_LIST[state.current_model_index][2] in VISION_MODEL_IDS
+def get_vision_model_index():
+    """返回图片识别模型的 index。
 
-
-def find_vision_model_index():
-    """返回首个支持图片的模型 index，找不到返回 -1"""
-    for i, (_, _, model_id, _) in enumerate(MODEL_LIST):
-        if model_id in VISION_MODEL_IDS:
+    语义：图片识别模型 = 用户在设置里通过 vision_model_id 显式选定的那一个。
+    找不到对应 model_id（用户没选 / config 里的 id 已删）时返回 -1，
+    UI 据此提示用户去设置里挑一个。
+    """
+    from .config import VISION_MODEL_ID
+    if not VISION_MODEL_ID:
+        return -1
+    for i, (_, mtype, model_id, _) in enumerate(MODEL_LIST):
+        # claude-code 是 CLI 模式，不能当图片识别模型——即便用户手填了也忽略
+        if model_id == VISION_MODEL_ID and mtype != "claude-code":
             return i
     return -1
+
+
+def current_model_supports_vision():
+    """当前选中的模型是否就是用户选定的图片识别模型。
+
+    是 → 可以直接发图，不走 OCR 桥接；否 → 调 describe_images_with_vision 先识别。
+    没配 vision_model_id → 返回 False（让 UI 提示用户去设置里选）。
+    """
+    from .config import VISION_MODEL_ID
+    if not VISION_MODEL_ID:
+        return False
+    return MODEL_LIST[state.current_model_index][2] == VISION_MODEL_ID
 
 
 def check_ollama():
@@ -308,9 +320,9 @@ def describe_images_with_vision(user_text, images):
     images: [(path, base64), ...]
     返回: (vision_model_name, description)
     """
-    vision_idx = find_vision_model_index()
+    vision_idx = get_vision_model_index()
     if vision_idx < 0:
-        raise RuntimeError("没有可用的视觉模型")
+        raise RuntimeError("没有可用的视觉模型（请在设置里选一个图片识别模型）")
 
     vision_name = MODEL_LIST[vision_idx][0]
     vision_llm = _create_llm(model_index=vision_idx, reasoning=False)

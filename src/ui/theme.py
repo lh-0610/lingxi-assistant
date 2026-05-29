@@ -554,13 +554,17 @@ QMainWindow, QDialog {{
 }}
 
 /* 历史项 */
+/* padding-right=0 让右侧的删除按钮(×)能贴近文字、不被 padding 推开。
+ * 之前在 sidebar.py 里用 btn.setStyleSheet 注入这一句，会让 btn 自带 stylesheet
+ * 从而切断 app 级 QToolTip 规则继承——tooltip 颜色异常。移到这里走类选择器就没这个坑。
+ */
 QPushButton[class="historyItem"] {{
     background: transparent;
     border: none;
     color: {p['history_item']};
     font-size: 13px;
     text-align: left;
-    padding: 9px 12px;
+    padding: 9px 0 9px 12px;
     border-radius: 8px;
 }}
 QPushButton[class="historyItem"]:hover {{
@@ -575,7 +579,7 @@ QPushButton[class="historyItemActive"] {{
     font-size: 13px;
     font-weight: 600;
     text-align: left;
-    padding: 9px 12px 9px {p['history_active_pad_left']};
+    padding: 9px 0 9px {p['history_active_pad_left']};
     border-radius: 8px;
 }}
 
