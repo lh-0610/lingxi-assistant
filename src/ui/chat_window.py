@@ -28,8 +28,8 @@ from .. import state
 from ._base import BASE_DIR, CONFIG_PATH
 from .theme import THEMES, build_stylesheet, load_saved_theme, save_theme_choice
 from .widgets import (
-    CloseConfirmDialog, DragDropTextBrowser, DragDropTextEdit, HistoryRow,
-    SignalBridge,
+    CloseConfirmDialog, DragDropTextBrowser, DragDropTextEdit, FileCompleter,
+    HistoryRow, SignalBridge,
 )
 from .helpers import (
     _build_image_content_block, _make_button_icon, _make_upload_icon,
@@ -264,6 +264,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._style_command_confirm_bar()
         if hasattr(self, "edit_confirm_bar"):
             self._style_edit_confirm_bar()
+        if hasattr(self, "_file_completer"):
+            self._apply_completer_theme()
         # 已存在的搜索浮层销毁，下次再显示用新主题重建
         if getattr(self, "_search_widget", None) is not None:
             try:
@@ -785,6 +787,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self.mic_btn.installEventFilter(self)
             self.tts_btn.installEventFilter(self)
 
+        # @文件名补全器
+        self._file_completer = FileCompleter(self)
+        self._file_completer.item_selected.connect(self._on_file_completer_selected)
+        self._file_completer_files = None  # 缓存的文件列表
+        self._file_completer_cache_key = None  # 缓存对应的项目路径
+
         # 发送按钮
         self.send_btn = QPushButton()
         self.send_btn.setIcon(self._icon_arrow)
@@ -954,6 +962,22 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             if hasattr(self, 'tts_btn'):
                 self.tts_btn.move(68, y)
         if obj == self.entry and event.type() == event.Type.KeyPress:
+            # @文件补全浮窗激活时，拦截导航/确认/取消键，不触发发送或换行
+            if (hasattr(self, '_file_completer')
+                    and self._file_completer.isVisible()):
+                key = event.key()
+                if key == Qt.Key_Up:
+                    self._file_completer.navigate_up()
+                    return True
+                if key == Qt.Key_Down:
+                    self._file_completer.navigate_down()
+                    return True
+                if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
+                    self._file_completer.confirm_selection()
+                    return True
+                if key == Qt.Key_Escape:
+                    self._file_completer.hide()
+                    return True
             if event.key() == Qt.Key_Return and not event.modifiers() & Qt.ShiftModifier:
                 if self._has_input or self._pending_images:
                     self._send_message()
@@ -1000,6 +1024,162 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # 自动调整高度（不低于 80）
         doc_height = self.entry.document().size().height() + 16
         self.entry.setMinimumHeight(int(min(max(doc_height, 80), 150)))
+
+        # @文件补全触发
+        self._check_at_mention()
+
+    # ── @文件名补全 ──
+
+    def _check_at_mention(self):
+        """检测输入框光标前是否有 @文件名 上下文，有则弹出补全浮窗。"""
+        if not hasattr(self, '_file_completer'):
+            return
+        mention = self._get_active_mention()
+        if mention is not None:
+            _pos, partial = mention
+            files = self._get_project_files()
+            self._file_completer.set_files(files)
+            self._file_completer.filter_and_show(partial)
+            self._position_completer()
+        else:
+            self._file_completer.hide()
+
+    def _get_active_mention(self):
+        """检测光标前是否有未完成的 @文件名 提及。
+
+        规则：@ 前是行首/空白/非字母数字（排除 email 和装饰器），
+        @ 后到光标间是路径字符（不含空白和 @），且后面要么是光标末尾，
+        要么是非路径字符（已完成的 @path 后面跟空格则不算）。
+
+        返回 (at_pos, partial_path) 或 None。
+        """
+        cursor = self.entry.textCursor()
+        pos = cursor.position()
+        if pos == 0:
+            return None
+        text_before = self.entry.toPlainText()[:pos]
+        # 从光标往前找最近的 @
+        idx = text_before.rfind('@')
+        if idx < 0:
+            return None
+        # @ 前必须是行首 / 空白 / 非字母数字（排除 user@domain 和 @decorator）
+        if idx > 0 and text_before[idx - 1].isalnum():
+            return None
+        partial = text_before[idx + 1:]
+        # @ 后不能包含空白或 @
+        if ' ' in partial or '\t' in partial or '\n' in partial or '@' in partial:
+            return None
+        return (idx, partial)
+
+    def _get_project_files(self):
+        """获取当前项目根下的文件列表（跳过噪声目录），带缓存。"""
+        import time
+        project_root = getattr(state, 'current_project', None) or os.getcwd()
+        now = time.time()
+        # 缓存 60 秒
+        if (self._file_completer_cache_key == project_root
+                and self._file_completer_files is not None
+                and now - getattr(self, '_file_completer_cache_ts', 0) < 60):
+            return self._file_completer_files
+
+        ignore = {
+            ".git", ".hg", ".svn", "node_modules", "bower_components",
+            "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            ".venv", "venv", "env", ".env",
+            "build", "dist", "target", "out",
+            ".next", ".nuxt", ".idea", ".vscode",
+        }
+        files = []
+        max_files = 500
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            dirnames[:] = [d for d in dirnames if d not in ignore]
+            for fn in filenames:
+                rel = os.path.relpath(os.path.join(dirpath, fn), project_root)
+                files.append(rel.replace("\\", "/"))
+                if len(files) >= max_files:
+                    break
+            if len(files) >= max_files:
+                break
+        files.sort(key=str.lower)
+        self._file_completer_files = files
+        self._file_completer_cache_key = project_root
+        self._file_completer_cache_ts = now
+        return files
+
+    def _position_completer(self):
+        """把补全浮窗定位到输入框光标正下方。"""
+        rect = self.entry.cursorRect()
+        global_pos = self.entry.viewport().mapToGlobal(rect.bottomLeft())
+        # 转成补全器父控件（self 即 ChatUI）的坐标
+        local_pos = self.mapFromGlobal(global_pos)
+        self._file_completer.move(local_pos.x() + 2, local_pos.y() + 2)
+        self._file_completer.setFixedWidth(max(360, self.entry.width() // 2))
+
+    def _apply_completer_theme(self):
+        """按当前主题给文件补全器涂色。"""
+        t = self.theme
+        if t == "dark":
+            self._file_completer.setStyleSheet(
+                "FileCompleter { background: #1e1e2e; border: 1px solid #45475a; border-radius: 12px; padding: 4px; }")
+            self._file_completer.list_widget.setStyleSheet(
+                "QListWidget { background: transparent; border: none; outline: none; }"
+                "QListWidget::item { padding: 8px 12px; border-radius: 6px; color: #cdd6f4; }"
+                "QListWidget::item:hover, QListWidget::item[hovered=\"true\"] { background: #313244; }")
+        else:
+            self._file_completer.setStyleSheet(
+                "FileCompleter { background: #ffffff; border: 1px solid #ddd; border-radius: 12px; padding: 4px; }")
+            self._file_completer.list_widget.setStyleSheet(
+                "QListWidget { background: transparent; border: none; outline: none; }"
+                "QListWidget::item { padding: 8px 12px; border-radius: 6px; color: #333; }"
+                "QListWidget::item:hover, QListWidget::item[hovered=\"true\"] { background: #e6f0ff; }")
+
+    def _on_file_completer_selected(self, relative_path: str):
+        """补全浮窗选中文件 → 替换输入框中的 @partial 为 @相对路径。"""
+        mention = self._get_active_mention()
+        if mention is None:
+            return
+        at_pos, _partial = mention
+        cursor = self.entry.textCursor()
+        # 选中从 @ 位置到当前光标之间的文本
+        cursor.setPosition(at_pos)
+        cursor.setPosition(self.entry.textCursor().position(), QTextCursor.KeepAnchor)
+        # 替换为 "@相对路径 "
+        self.entry.blockSignals(True)
+        cursor.insertText(f"@{relative_path} ")
+        self.entry.blockSignals(False)
+        self.entry.setFocus()
+
+    def _expand_file_mentions(self, text: str) -> str:
+        """扫描文本中的 @相对路径，读取文件内容拼到文本末尾。"""
+        import re as _re
+        project_root = getattr(state, 'current_project', None) or os.getcwd()
+        pattern = _re.compile(r'(?<!\S)@([^\s@]+)')
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return text
+
+        MAX_LINES = 500
+        parts = [text, ""]  # 原文 + 空行
+        for m in matches:
+            rel_path = m.group(1)
+            abs_path = os.path.join(project_root, rel_path)
+            if not os.path.isfile(abs_path):
+                continue
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            truncated = False
+            if len(lines) > MAX_LINES:
+                lines = lines[:MAX_LINES]
+                truncated = True
+            content = "".join(lines)
+            if truncated:
+                content += f"\n... [已截断，共超过 {MAX_LINES} 行]"
+            parts.append(f"[引用文件 {rel_path}]:")
+            parts.append(f"```\n{content}\n```")
+        return "\n".join(parts)
 
     def _force_stop_generation(self):
         """强制停止当前生成，立即更新 UI 状态。
@@ -1423,6 +1603,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """核心发送逻辑，GUI 和远程共用。"""
         images = images or []
         self._clear_empty_state()
+
+        # @文件引用展开：把 @相对路径 替换为完整文件内容
+        text = self._expand_file_mentions(text)
 
         # 带图片但当前模型不支持视觉时，不再把整轮任务切给弱视觉模型。
         # 改为先用视觉模型做识别/OCR，再把识别结果作为文本交回当前强模型。
