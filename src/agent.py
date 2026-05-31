@@ -258,16 +258,11 @@ def agent_loop(ui):
         except Exception as save_err:
             logger.error(f"保存会话失败: {save_err}", exc_info=True)
 
-        # Telegram 通知：任务完成
+        # Telegram 通知：任务完成——不分端都把【完整】回复发回手机（长则分段不截断）。
+        # 走 notify_long（尊重 NOTIFY 开关 / 分级 / 节流，用户可在设置里关 done 通知）。
         try:
-            if getattr(state, "remote_session", False):
-                # 远程遥控发起：把【完整】回复发回手机（长则分段，不截断）
-                from .telegram_push import push_long
-                push_long("done", "灵犀回复", clean_text or "(无文本回复)")
-            else:
-                # 非远程（你在 PC 前）：发 200 字摘要作完成提醒
-                from .notify import notify as _notify
-                _notify("done", "任务完成", clean_text[:200] if clean_text else "(无文本回复)", "agent_done")
+            from .notify import notify_long as _notify_long
+            _notify_long("done", "灵犀回复", clean_text or "(无文本回复)", "agent_done")
         except Exception:
             pass
 

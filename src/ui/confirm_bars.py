@@ -508,13 +508,8 @@ class ConfirmBarsMixin:
         self.command_confirm_bar.setVisible(True)
         # 清空反馈输入框
         self.command_confirm_feedback.clear()
-        # Telegram 通知：等待用户确认
-        try:
-            from ..notify import notify as _notify
-            _short_cmd = command[:120].replace("\n", " ")
-            _notify("action_needed", "等待确认", _short_cmd, "confirm_command")
-        except Exception:
-            pass
+        # 注：手机确认推送由 confirm_command 的 push_confirm 接管（完整命令 + inline 按钮），
+        # 不再额外发截断的"等待确认"文本通知（之前 command[:120] 会切断，且与按钮卡冗余）
         # 把焦点交给 bar 本身，1/2/3/Esc 由 eventFilter 接管
         self.command_confirm_bar.setFocus()
 
@@ -801,12 +796,8 @@ class ConfirmBarsMixin:
         self.edit_confirm_bar.setFocus()
         # 清空反馈输入框
         self.edit_confirm_feedback.clear()
-        # Telegram 通知：等待文件编辑确认
-        try:
-            from ..notify import notify as _notify
-            _notify("action_needed", "等待编辑确认", path, "confirm_edit")
-        except Exception:
-            pass
+        # 注：手机确认推送由 confirm_edit 的 push_confirm 接管（文件 + diff + inline 按钮），
+        # 不再额外发"等待编辑确认"文本通知（与按钮卡冗余）
 
     def _resolve_edit_confirm(self, allow: bool, remember: bool = False):
         """按钮点击：写结果 / 加路径白名单 / 隐藏卡片 / 唤醒 worker。"""

@@ -62,6 +62,28 @@ def notify(level: str, title: str, message: str, event_type: str) -> bool:
     return telegram_push.push(level, title, message)
 
 
+def notify_long(level: str, title: str, message: str, event_type: str) -> bool:
+    """同 notify 的开关 / 分级 / 节流判断，但用 push_long 发【完整】内容（长则分段不截断）。
+
+    用于"任务完成"这类需要把完整回复发回手机的通知——不分电脑/手机发起都完整推。
+    """
+    now = time.time()
+    if not NOTIFY_ENABLED:
+        return False
+    if level not in NOTIFY_LEVELS:
+        return False
+    last = _last_sent.get(event_type, 0)
+    if now - last < NOTIFY_THROTTLE_SECONDS:
+        logger.debug(f"通知被节流: {event_type}（{NOTIFY_THROTTLE_SECONDS}s 内不重复）")
+        return False
+    _last_sent[event_type] = now
+    _history.append({
+        "time": now, "level": level, "title": title,
+        "message": message, "event_type": event_type,
+    })
+    return telegram_push.push_long(level, title, message)
+
+
 def get_history() -> list[dict]:
     """返回最近的通知历史（副本）。"""
     return list(_history)
