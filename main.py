@@ -57,8 +57,14 @@ if __name__ == "__main__":
     from src.telegram_poll import start as _tg_poll_start, shutdown as _tg_poll_shutdown
     _tg_poll_start()
 
-    # 退出前清理 GPT-SoVITS 子进程，避免端口残留
+    # 退出前清理 GPT-SoVITS 子进程和后台命令，避免端口残留
     def _cleanup_on_exit():
+        # 停止所有后台命令（dev server / watch 等）
+        try:
+            from src.tools import stop_all_background
+            stop_all_background()
+        except Exception:
+            pass
         launcher = getattr(window, "_gpt_sovits_launcher", None)
         if launcher is not None:
             try:

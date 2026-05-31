@@ -3,9 +3,11 @@ import json
 import time
 import difflib
 import subprocess
+import threading
 import urllib.parse
 import urllib.request
 import urllib.error
+from collections import deque
 from langchain_core.tools import tool
 
 from . import state
@@ -933,14 +935,32 @@ def _decode_chunk(b: bytes) -> str:
     return b.decode("utf-8", errors="replace")
 
 
+# ══════════════════════════════════════
+# 后台进程注册表
+# ══════════════════════════════════════
+# bg_id → {proc, command, output: deque(maxlen=2000), start_ts}
+_bg_procs: dict[str, dict] = {}
+_bg_lock = threading.Lock()
+_bg_counter = [0]
+
+
+def _new_bg_id() -> str:
+    with _bg_lock:
+        _bg_counter[0] += 1
+        return f"bg{_bg_counter[0]}"
+
+
 @tool
-def run_command(command: str, timeout: int | None = None) -> str:
+def run_command(command: str, timeout: int | None = None, background: bool = False) -> str:
     """执行系统命令并**流式**返回输出（边跑边显示，不必等命令结束）。
 
     命令耗时 > 几秒时（pytest / npm test / build / 长 curl 等），UI 上能实时
     看到 stdout/stderr 进度；AI 拿到的工具结果仍是完整输出（超过 5000 字会截断）。
     默认 5 分钟超时；传 timeout 参数（秒）可覆盖（如跑大测试套件传 600）。
     随时可点停止按钮中断；执行前会弹用户确认卡片；危险命令需用户允许。
+
+    background=True 时命令在后台运行（适用于 dev server / watch / 长服务），
+    立即返回 bg_id；用 read_background_output 看输出，stop_background_command 停止。
     """
     import threading as _thr_local
 
@@ -981,6 +1001,49 @@ def run_command(command: str, timeout: int | None = None) -> str:
         )
     except Exception as e:
         return f"启动失败: {e}"
+
+    # ── 后台模式：起 reader 线程写 deque，立即返回 ──
+    if background:
+        bg_id = _new_bg_id()
+        out_deque: deque[str] = deque(maxlen=2000)
+        start_ts = time.time()
+
+        def _bg_reader():
+            """后台 reader：把输出 append 进 deque，不刷 UI。"""
+            try:
+                buf = b""
+                while True:
+                    raw = proc.stdout.read(4096)
+                    if not raw:
+                        if buf:
+                            text = _decode_chunk(buf)
+                            with _bg_lock:
+                                out_deque.append(text)
+                        break
+                    buf += raw
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        text = _decode_chunk(line + b"\n")
+                        with _bg_lock:
+                            out_deque.append(text)
+            except Exception:
+                pass  # 进程被杀时 stdout 关闭会抛异常，忽略
+
+        with _bg_lock:
+            _bg_procs[bg_id] = {
+                "proc": proc,
+                "command": command,
+                "output": out_deque,
+                "start_ts": start_ts,
+            }
+        bg_thread = threading.Thread(target=_bg_reader, daemon=True)
+        bg_thread.start()
+        logger.info(f"后台命令已启动 [{bg_id}]: {command}")
+        return (
+            f"已后台启动 [{bg_id}]: {command}\n"
+            f"用 read_background_output('{bg_id}') 看输出，"
+            f"stop_background_command('{bg_id}') 停止。"
+        )
 
     output_chunks: list[str] = []
     chunks_lock = _thr_local.Lock()
@@ -1336,6 +1399,82 @@ def notify_user(title: str, message: str, level: str = "info") -> str:
     return "通知未发送（Telegram 未配置或被节流）"
 
 
+# ══════════════════════════════════════
+# 后台命令管理工具
+# ══════════════════════════════════════
+
+
+@tool
+def read_background_output(bg_id: str, tail: int = 50) -> str:
+    """读后台命令的累积输出（最后 tail 行）。tail<=0 看全部缓冲。"""
+    with _bg_lock:
+        info = _bg_procs.get(bg_id)
+    if info is None:
+        return f"未找到后台命令 '{bg_id}'。可用 list_background_commands() 查看所有。"
+
+    proc = info["proc"]
+    with _bg_lock:
+        lines = list(info["output"])
+    total = len(lines)  # 锁内快照长度；下面不再锁外迭代 deque（reader 并发 append 会 RuntimeError）
+
+    status = "运行中" if proc.poll() is None else f"已退出(码 {proc.returncode})"
+    elapsed = int(time.time() - info["start_ts"])
+
+    if tail > 0 and total > tail:
+        lines = lines[-tail:]
+        truncated_hint = f"\n... (仅显示最后 {tail} 行，共缓冲 {total} 段)"
+    else:
+        truncated_hint = ""
+
+    return (
+        f"[{bg_id}] {status} | {elapsed}s | {info['command']}\n"
+        + "".join(lines) + truncated_hint
+    )
+
+
+@tool
+def list_background_commands() -> str:
+    """列出所有后台命令：bg_id / 命令 / 运行中或已退出 / 启动多久。"""
+    with _bg_lock:
+        if not _bg_procs:
+            return "没有后台命令在运行。"
+        rows = []
+        for bg_id, info in _bg_procs.items():
+            proc = info["proc"]
+            status = "运行中" if proc.poll() is None else f"已退出(码 {proc.returncode})"
+            elapsed = int(time.time() - info["start_ts"])
+            rows.append(f"  [{bg_id}] {status} | {elapsed}s | {info['command']}")
+    return "后台命令列表:\n" + "\n".join(rows)
+
+
+@tool
+def stop_background_command(bg_id: str) -> str:
+    """停止一个后台命令（taskkill 杀进程树），并从注册表移除。"""
+    with _bg_lock:
+        info = _bg_procs.pop(bg_id, None)
+    if info is None:
+        return f"未找到后台命令 '{bg_id}'。"
+
+    proc = info["proc"]
+    _kill_proc_tree(proc)
+    elapsed = int(time.time() - info["start_ts"])
+    logger.info(f"已停止后台命令 [{bg_id}]: {info['command']}（运行 {elapsed}s）")
+    return f"已停止 [{bg_id}]: {info['command']}（运行 {elapsed}s）"
+
+
+def stop_all_background():
+    """停止所有后台命令（应用退出时调用）。"""
+    with _bg_lock:
+        procs = list(_bg_procs.items())
+        _bg_procs.clear()
+    for bg_id, info in procs:
+        try:
+            _kill_proc_tree(info["proc"])
+            logger.info(f"退出清理：停止 [{bg_id}] {info['command']}")
+        except Exception:
+            pass
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -1344,6 +1483,7 @@ ALL_TOOLS = [
     generate_image,
     remember, forget,
     notify_user,
+    read_background_output, list_background_commands, stop_background_command,
 ]
 
 
@@ -1387,6 +1527,9 @@ TOOL_DISPLAY_NAMES = {
     "generate_image": "🎨 生成图片",
     "remember": "🧠 记住事实",
     "forget": "🗑️ 遗忘记忆",
+    "read_background_output": "📋 读取后台输出",
+    "list_background_commands": "📋 列出后台命令",
+    "stop_background_command": "⏹ 停止后台命令",
 }
 
 
