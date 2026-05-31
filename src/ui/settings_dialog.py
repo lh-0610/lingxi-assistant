@@ -11,7 +11,8 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from ._base import BASE_DIR, CONFIG_PATH
@@ -126,20 +127,14 @@ class SettingsDialog(QDialog):
         banner.setWordWrap(True)
         root.addWidget(banner)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        tabs = QTabWidget()
 
-        form = QWidget()
-        form_layout = QVBoxLayout(form)
-        form_layout.setContentsMargins(28, 20, 28, 20)
-        form_layout.setSpacing(18)
+        # ── 🤖 模型 tab ──
+        m_scroll, m = self._make_tab()
 
-        # ── 大模型配置：按 provider 分卡片 ──
-        self._add_section(form_layout, "大模型配置")
-
+        self._add_section(m, "大模型配置")
         self._add_provider_card(
-            form_layout, "通义千问 (Qwen)",
+            m, "通义千问 (Qwen)",
             [
                 ("qwen_api_key",  "API Key",  "sk-...",                                                True),
                 ("qwen_base_url", "Base URL", "https://dashscope.aliyuncs.com/compatible-mode/v1",     False),
@@ -147,13 +142,13 @@ class SettingsDialog(QDialog):
             models_key="qwen_cloud_models",
         )
         self._add_provider_card(
-            form_layout, "Anthropic Claude",
+            m, "Anthropic Claude",
             [("anthropic_api_key", "API Key", "sk-ant-...", True)],
             hint="API 官方端点，无需 Base URL",
             models_key="anthropic_models",
         )
         self._add_provider_card(
-            form_layout, "MiMo（Anthropic 兼容）",
+            m, "MiMo（Anthropic 兼容）",
             [
                 ("mimo_api_key",  "API Key",  "tp-...",                                                True),
                 ("mimo_base_url", "Base URL", "https://token-plan-sgp.xiaomimimo.com/anthropic",       False),
@@ -161,7 +156,7 @@ class SettingsDialog(QDialog):
             models_key="mimo_models",
         )
         self._add_provider_card(
-            form_layout, "DeepSeek",
+            m, "DeepSeek",
             [
                 ("deepseek_api_key",  "API Key",  "sk-...",                       True),
                 ("deepseek_base_url", "Base URL", "https://api.deepseek.com",     False),
@@ -169,34 +164,70 @@ class SettingsDialog(QDialog):
             models_key="deepseek_models",
         )
         self._add_provider_card(
-            form_layout, "Google Gemini",
+            m, "Google Gemini",
             [("google_api_key", "API Key", "AIza...", True)],
             models_key="gemini_models",
             models_hint="默认为空，有需要请自行填入 model ID（如 gemini-2.0-flash）",
         )
         self._add_provider_card(
-            form_layout, "Ollama 本地",
+            m, "Ollama 本地",
             [("ollama_base_url", "Base URL", "http://127.0.0.1:11434", False)],
             hint="本机部署，无需 API Key",
             models_key="ollama_models",
         )
 
-        # ── Claude Code 底层模型 ──
-        self._add_section(form_layout, "Claude Code")
-        self._add_text(form_layout, "claude_code_model",
+        self._add_section(m, "Claude Code")
+        self._add_text(m, "claude_code_model",
                        "底层模型（可选，留空 = CLI 默认）",
                        "例如：claude-sonnet-4-20250514")
 
-        # ── 图片识别模型 ──
-        self._add_section(form_layout, "图片识别模型")
-        self._add_vision_model_picker(form_layout)
+        self._add_section(m, "默认模型")
+        self._add_text(m, "default_model_id", "启动默认模型 ID", "mimo-v2.5-pro")
 
-        # ── 自定义模型 ──
-        self._add_custom_models_section(form_layout)
+        self._add_section(m, "图片识别模型")
+        self._add_vision_model_picker(m)
 
-        # ── MCP（高级可选）──
-        self._add_section(form_layout, "MCP（高级 · 可选）")
-        self._add_bool(form_layout, "mcp_enabled",
+        self._add_custom_models_section(m)
+
+        m.addStretch()
+        tabs.addTab(m_scroll, "🤖 模型")
+
+        # ── 🎨 绘图 tab ──
+        d_scroll, d = self._make_tab()
+
+        self._add_section(d, "ComfyUI 出图")
+        self._add_text(d, "comfy_base_url", "ComfyUI Base URL", "http://127.0.0.1:8188")
+        self._add_text(d, "comfy_checkpoint", "默认 Checkpoint",
+                       "例如：autismmixSDXL_autismmixPony.safetensors")
+        self._add_text(d, "comfy_workflow_path",
+                       "自定义工作流 JSON（API 格式，可选）", "留空 = 用内置模板")
+        self._add_bool(d, "comfy_face_detailer",
+                       "启用 FaceDetailer 修脸（需在 ComfyUI 装 Impact Pack）")
+
+        d.addStretch()
+        tabs.addTab(d_scroll, "🎨 绘图")
+
+        # ── 🔊 语音 tab ──
+        v_scroll, v = self._make_tab()
+
+        self._add_gpt_sovits_section(v)
+
+        v.addStretch()
+        tabs.addTab(v_scroll, "🔊 语音")
+
+        # ── 📱 远程 tab ──
+        r_scroll, r = self._make_tab()
+
+        self._add_remote_section(r)
+
+        r.addStretch()
+        tabs.addTab(r_scroll, "📱 远程")
+
+        # ── ⚙ 高级 tab ──
+        a_scroll, a = self._make_tab()
+
+        self._add_section(a, "MCP（高级 · 可选）")
+        self._add_bool(a, "mcp_enabled",
                        "启用 MCP（连接外部工具服务器）", default=True)
         mcp_hint = QLabel(
             "连外部 MCP server（filesystem / fetch / github 等），把它们的工具给 AI 用。\n"
@@ -209,22 +240,12 @@ class SettingsDialog(QDialog):
         )
         mcp_hint.setObjectName("providerCardHint")
         mcp_hint.setWordWrap(True)
-        form_layout.addWidget(mcp_hint)
+        a.addWidget(mcp_hint)
 
-        self._add_section(form_layout, "ComfyUI 出图")
-        self._add_text(form_layout, "comfy_base_url", "ComfyUI Base URL", "http://127.0.0.1:8188")
-        self._add_text(form_layout, "comfy_checkpoint", "默认 Checkpoint",
-                       "例如：autismmixSDXL_autismmixPony.safetensors")
-        self._add_text(form_layout, "comfy_workflow_path",
-                       "自定义工作流 JSON（API 格式，可选）", "留空 = 用内置模板")
-        self._add_bool(form_layout, "comfy_face_detailer",
-                       "启用 FaceDetailer 修脸（需在 ComfyUI 装 Impact Pack）")
+        a.addStretch()
+        tabs.addTab(a_scroll, "⚙ 高级")
 
-        self._add_gpt_sovits_section(form_layout)
-
-        form_layout.addStretch()
-        scroll.setWidget(form)
-        root.addWidget(scroll, 1)
+        root.addWidget(tabs, 1)
 
         # 底部按钮区
         bottom = QWidget()
@@ -314,6 +335,35 @@ class SettingsDialog(QDialog):
         icon.addPixmap(_render(normal), QIcon.Normal)
         icon.addPixmap(_render(active), QIcon.Active)
         return icon
+
+    def _make_tab(self):
+        """建一个可滚动的 tab 页，返回 (外层 scroll widget, 内容 layout)。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 20, 28, 20)
+        layout.setSpacing(18)
+        scroll.setWidget(page)
+        return scroll, layout
+
+    def _get_nested(self, dotted_key, default=""):
+        """从 self.config 读嵌套值，如 'notify.enabled' → config['notify']['enabled']。"""
+        cur = self.config
+        for part in dotted_key.split("."):
+            if not isinstance(cur, dict):
+                return default
+            cur = cur.get(part, {})
+        return cur if cur != {} else default
+
+    def _set_nested(self, dotted_key, value):
+        """往 self.config 写嵌套值，自动创建中间层 dict。"""
+        parts = dotted_key.split(".")
+        cur = self.config
+        for p in parts[:-1]:
+            cur = cur.setdefault(p, {})
+        cur[parts[-1]] = value
 
     def _add_section(self, layout, title):
         lbl = QLabel(title)
@@ -515,7 +565,10 @@ class SettingsDialog(QDialog):
         wl.addWidget(lbl)
 
         edit = QLineEdit()
-        edit.setText(str(self.config.get(key, "")))
+        if "." in key:
+            edit.setText(str(self._get_nested(key, "")))
+        else:
+            edit.setText(str(self.config.get(key, "")))
         edit.setPlaceholderText(placeholder)
         edit.setObjectName("settingsInput")
         edit.setMinimumHeight(32)
@@ -553,7 +606,10 @@ class SettingsDialog(QDialog):
     def _add_bool(self, layout, key, label_text, default=False):
         cb = QCheckBox(label_text)
         cb.setObjectName("settingsCheck")
-        cb.setChecked(bool(self.config.get(key, default)))
+        if "." in key:
+            cb.setChecked(bool(self._get_nested(key, default)))
+        else:
+            cb.setChecked(bool(self.config.get(key, default)))
         cb.setCursor(Qt.PointingHandCursor)
         layout.addWidget(cb)
         self.fields[key] = cb
@@ -625,7 +681,10 @@ class SettingsDialog(QDialog):
 
         edit = _ResizableTextEdit(min_height=min_height)
         # 如果 config 里存的是 list，转成每行一个的文本
-        raw = self.config.get(key, None)
+        if "." in key:
+            raw = self._get_nested(key, None)
+        else:
+            raw = self.config.get(key, None)
         if raw is None and key in self._LIST_DEFAULTS:
             # key 不在 config.json 里，从 config.py 拿默认值
             from .. import config as _cfg
@@ -787,29 +846,80 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_gpt_sovits_status_label"):
             self._gpt_sovits_status_label.setText(text_map.get(state, state))
 
+    def _add_combo(self, layout, key, label_text, options):
+        """通用下拉框：options = [(显示文字, 值), ...]。嵌套 key 自动走 _get_nested。"""
+        wrap = QWidget()
+        wl = QVBoxLayout(wrap)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(5)
+
+        lbl = QLabel(label_text)
+        lbl.setObjectName("settingsLabel")
+        wl.addWidget(lbl)
+
+        combo = _NoScrollComboBox()
+        combo.setObjectName("settingsInput")
+        combo.setMinimumHeight(32)
+        for text, val in options:
+            combo.addItem(text, val)
+        cur = self._get_nested(key, options[0][1]) if "." in key else self.config.get(key, options[0][1])
+        idx = combo.findData(cur)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        wl.addWidget(combo)
+
+        layout.addWidget(wrap)
+        self.fields[key] = combo  # _save 里 QComboBox 取 currentData()
+
+    def _add_remote_section(self, layout):
+        """远程 tab：Telegram 通知（PC→手机）+ 遥控（手机→PC）。"""
+        self._add_section(layout, "Telegram 通知（PC→手机）")
+        self._add_bool(layout, "notify.enabled", "启用通知")
+        self._add_text(layout, "notify.telegram_bot_token", "Bot Token",
+                       "@BotFather 拿", password=True)
+        self._add_text(layout, "notify.telegram_chat_id", "Chat ID",
+                       "getUpdates 里的 chat.id")
+
+        self._add_section(layout, "Telegram 遥控（手机→PC）")
+        self._add_bool(layout, "remote_control.enabled", "启用遥控")
+        self._add_combo(layout, "remote_control.mode", "安全模式", [
+            ("纯对话（最安全，禁所有工具）", "chat_only"),
+            ("只读代码（敏感文件黑名单）", "safe_readonly"),
+            ("不设防（全开，自负）", "unrestricted"),
+        ])
+        self._add_textarea(layout, "remote_control.readonly_blocklist",
+                           "额外敏感文件黑名单（每行一个）")
+
     # ── 操作 ──
 
     # 这些 key 在 QTextEdit 里是"每行一个"的数组，保存时要 split 成 list
     _LIST_KEYS = frozenset({
         "mimo_models", "qwen_cloud_models", "ollama_models",
         "anthropic_models", "gemini_models", "deepseek_models",
+        "remote_control.readonly_blocklist",
     })
 
     def _save(self):
         for key, widget in self.fields.items():
             if isinstance(widget, QCheckBox):
-                self.config[key] = widget.isChecked()
+                val = widget.isChecked()
             elif isinstance(widget, QComboBox):
-                # currentData() 返回我们用 addItem(..., data) 存的 model_id；"" = 不启用
-                self.config[key] = widget.currentData() or ""
+                # currentData() 返回我们用 addItem(..., data) 存的值
+                val = widget.currentData() or ""
             elif isinstance(widget, QTextEdit):
                 text = widget.toPlainText().strip()
                 if key in self._LIST_KEYS:
-                    self.config[key] = [line.strip() for line in text.splitlines() if line.strip()]
+                    val = [line.strip() for line in text.splitlines() if line.strip()]
                 else:
-                    self.config[key] = text
+                    val = text
             else:
-                self.config[key] = widget.text().strip()
+                val = widget.text().strip()
+
+            # 嵌套 key（含 '.'）走 _set_nested，否则走平铺赋值
+            if "." in key:
+                self._set_nested(key, val)
+            else:
+                self.config[key] = val
 
         # 自定义模型列表整体写回（_open_custom_model_editor 已经把字段都填好了）
         if hasattr(self, "_custom_models"):
@@ -938,6 +1048,13 @@ class SettingsDialog(QDialog):
             f"QScrollBar::handle:vertical {{ background: {border};"
             f" border-radius: 4px; min-height: 32px; }}\n"
             f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}\n"
+            # ── QTabWidget 样式 ──
+            f"QTabWidget::pane {{ border: 1px solid {border}; border-radius: 6px; top: -1px; }}\n"
+            f"QTabBar::tab {{ background: {input_bg}; color: {muted}; padding: 7px 16px;"
+            f" border: 1px solid {border}; border-bottom: none;"
+            f" border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px; }}\n"
+            f"QTabBar::tab:selected {{ background: {bg}; color: {accent}; font-weight: 600; }}\n"
+            f"QTabBar::tab:hover {{ color: {fg}; }}\n"
         )
 
 

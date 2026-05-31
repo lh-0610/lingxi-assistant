@@ -307,6 +307,9 @@ class SidebarMixin:
                     state.chat_history[0] = SystemMessage(content=get_system_prompt())
             self._reset_render_state()
             self._redraw_chat()
+            # 打开历史会话后滚到底，看最新一轮对话（_redraw_chat 本身不滚，因为它
+            # 也被切主题调用，那时不该跳到底）
+            self._scroll_to_bottom()
             self._refresh_session_list()
             # 工作目录可能已跟着会话切走，刷新底部项目指示条（之前漏了这步，
             # 导致点 A 项目的会话、底部还显示上一个项目的路径）

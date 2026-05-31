@@ -1448,6 +1448,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._insert_images_in_chat(images)
         if text:
             self._append_html(text + "\n\n", "user_msg")
+        # 发消息后强制滚到底：看到自己刚发的 + 贴底后 AI 回复会自动跟随
+        self._scroll_to_bottom()
 
         if use_vision_bridge:
             state.stop_flag = False
