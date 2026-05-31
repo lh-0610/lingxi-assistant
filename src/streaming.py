@@ -849,10 +849,14 @@ def _execute_tool(tc, ui):
                 f"将调用 MCP 工具 {_display}，参数:\n"
                 + _pretty_args(args)
             )
-            if not _ui.confirm_command(_msg):
+            allowed, user_feedback = _ui.confirm_command(_msg)
+            if not allowed:
+                _reject_msg = "已拒绝：用户不允许执行此 MCP 工具。"
+                if user_feedback:
+                    _reject_msg += f"\n用户补充说明：{user_feedback}"
                 logger.info(f"用户拒绝执行 MCP 工具: {name}")
                 state.chat_history.append(ToolMessage(
-                    content="已拒绝：用户不允许执行此 MCP 工具。",
+                    content=_reject_msg,
                     tool_call_id=call_id,
                 ))
                 return

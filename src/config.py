@@ -112,8 +112,9 @@ if _mode not in ("chat_only", "safe_readonly", "unrestricted"):
 REMOTE_MODE: str = _mode
 # safe_readonly 模式下，用户在内置黑名单之外【追加】的敏感文件名/后缀
 REMOTE_BLOCKLIST: list = _remote_cfg.get("readonly_blocklist", []) or []
-# 遥控时是否把操作确认（run_command / edit_file / MCP）推到手机 Telegram inline 按钮
-# mode=unrestricted + telegram_confirm=true = 远程全控但每步手机审批（推荐组合）
+# 是否把需确认的操作（run_command / edit_file / MCP）推到手机 Telegram inline 按钮。
+# 注意：不分电脑/手机发起，只要开启就都推——人在电脑前走开时也能掏手机批。
+# 配了 telegram_bot_token/chat_id 才实际生效（push_confirm 内部会校验，没配则静默跳过）。
 REMOTE_TELEGRAM_CONFIRM: bool = _remote_cfg.get("telegram_confirm", True)
 
 # MCP Servers 配置（字典，key=server 名，value=启动参数）

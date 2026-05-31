@@ -26,7 +26,7 @@ from ..config import REMOTE_TELEGRAM_CONFIRM
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 
@@ -142,6 +142,17 @@ class ConfirmBarsMixin:
         top_v.addWidget(self.command_confirm_text)
 
         v.addWidget(top)
+
+        # ── 反馈输入框（拒绝时说明原因，AI 据此调整） ──
+        self.command_confirm_feedback = QLineEdit()
+        self.command_confirm_feedback.setObjectName("commandConfirmFeedback")
+        self.command_confirm_feedback.setPlaceholderText(
+            "可选：说明该怎么改，AI 会据此调整；留空 = 直接拒绝")
+        self.command_confirm_feedback.setMinimumHeight(30)
+        # 在反馈框里按 Enter = 直接拒绝并把反馈带给 AI
+        self.command_confirm_feedback.returnPressed.connect(
+            lambda: self._resolve_command_confirm(False))
+        v.addWidget(self.command_confirm_feedback)
 
         # ── 选项行：每行一个全宽按钮 ──
         def _make_option_row(num: str, label: str, object_name: str, on_click):
@@ -272,6 +283,15 @@ class ConfirmBarsMixin:
             f"  border-top: 1px solid {divider};"
             f"  padding-top: 8px;"
             f"}}"
+            # 反馈输入框：跟命令预览框同底色，聚焦时强调色描边
+            f"QLineEdit#commandConfirmFeedback {{"
+            f"  background: {self._t('md_pre_bg')};"
+            f"  border: 1px solid {divider};"
+            f"  border-radius: 6px; padding: 6px 9px;"
+            f"  color: {text}; font-size: 12px;"
+            f"  font-family: Consolas, 'Microsoft YaHei UI';"
+            f"}}"
+            f"QLineEdit#commandConfirmFeedback:focus {{ border-color: {accent}; }}"
         )
         # 终端图标
         icon = self._svg_icon("code_lucide.svg", accent)
@@ -486,6 +506,8 @@ class ConfirmBarsMixin:
             self._cmd_confirm_hint.setText("1 / 2 / 3 选择 · Esc 取消")
 
         self.command_confirm_bar.setVisible(True)
+        # 清空反馈输入框
+        self.command_confirm_feedback.clear()
         # Telegram 通知：等待用户确认
         try:
             from ..notify import notify as _notify
@@ -505,9 +527,12 @@ class ConfirmBarsMixin:
         if self._command_confirm_done_event is None:
             return  # 已被处理过 / 状态被清
 
+        feedback = self.command_confirm_feedback.text().strip()
+
         if not allow:
-            # 用户明确拒绝 = 不要再纠缠这件事，直接停掉本次生成
-            _state.stop_flag = True
+            # 只有纯拒绝（无反馈）才停掉本轮；有反馈则让 AI 据此调整
+            if not feedback:
+                _state.stop_flag = True
 
         if allow and remember and not self._command_confirm_destructive:
             base = self._extract_base_command(self.command_confirm_text.toPlainText())
@@ -521,6 +546,7 @@ class ConfirmBarsMixin:
                         pass
 
         self._command_confirm_result_holder["allow"] = allow
+        self._command_confirm_result_holder["feedback"] = feedback
         self._command_confirm_done_event.set()
         self._command_confirm_result_holder = None
         self._command_confirm_done_event = None
@@ -603,6 +629,17 @@ class ConfirmBarsMixin:
         top_v.addWidget(self.edit_confirm_diff)
 
         v.addWidget(top)
+
+        # ── 反馈输入框（拒绝时说明原因，AI 据此调整） ──
+        self.edit_confirm_feedback = QLineEdit()
+        self.edit_confirm_feedback.setObjectName("editConfirmFeedback")
+        self.edit_confirm_feedback.setPlaceholderText(
+            "可选：说明该怎么改，AI 会据此调整；留空 = 直接拒绝")
+        self.edit_confirm_feedback.setMinimumHeight(30)
+        # 在反馈框里按 Enter = 直接拒绝并把反馈带给 AI
+        self.edit_confirm_feedback.returnPressed.connect(
+            lambda: self._resolve_edit_confirm(False))
+        v.addWidget(self.edit_confirm_feedback)
 
         # 选项行：复用命令卡的"全宽行"工厂
         def _row(num, label, obj_name, on_click):
@@ -716,6 +753,15 @@ class ConfirmBarsMixin:
             f"  border-top: 1px solid {divider};"
             f"  padding-top: 8px;"
             f"}}"
+            # 反馈输入框：跟 diff 预览框同底色，聚焦时强调色描边
+            f"QLineEdit#editConfirmFeedback {{"
+            f"  background: {self._t('md_pre_bg')};"
+            f"  border: 1px solid {divider};"
+            f"  border-radius: 6px; padding: 6px 9px;"
+            f"  color: {text}; font-size: 12px;"
+            f"  font-family: Consolas, 'Microsoft YaHei UI';"
+            f"}}"
+            f"QLineEdit#editConfirmFeedback:focus {{ border-color: {accent}; }}"
         )
         icon = self._svg_icon("edit_lucide.svg", accent)
         if icon.isNull():
@@ -753,6 +799,8 @@ class ConfirmBarsMixin:
         self.edit_confirm_diff.setHtml(self._format_diff_html(diff_text))
         self.edit_confirm_bar.setVisible(True)
         self.edit_confirm_bar.setFocus()
+        # 清空反馈输入框
+        self.edit_confirm_feedback.clear()
         # Telegram 通知：等待文件编辑确认
         try:
             from ..notify import notify as _notify
@@ -764,14 +812,17 @@ class ConfirmBarsMixin:
         """按钮点击：写结果 / 加路径白名单 / 隐藏卡片 / 唤醒 worker。"""
         if self._edit_confirm_done_event is None:
             return
+        feedback = self.edit_confirm_feedback.text().strip()
         if not allow:
-            # 用户明确拒绝 = 不要再纠缠这件事，直接停掉本次生成
-            _state.stop_flag = True
+            # 只有纯拒绝（无反馈）才停掉本轮；有反馈则让 AI 据此调整
+            if not feedback:
+                _state.stop_flag = True
         if allow and remember:
             p = self._edit_confirm_path
             if p:
                 self._session_edit_path_allowlist.add(p)
         self._edit_confirm_result_holder["allow"] = allow
+        self._edit_confirm_result_holder["feedback"] = feedback
         self._edit_confirm_done_event.set()
         self._edit_confirm_result_holder = None
         self._edit_confirm_done_event = None
@@ -821,7 +872,7 @@ class ConfirmBarsMixin:
     # worker 线程同步等待入口
     # ══════════════════════════════════════
 
-    def confirm_command(self, command: str) -> bool:
+    def confirm_command(self, command: str) -> tuple[bool, str]:
         """从 worker 线程同步等待用户在主线程的内联确认条上选择。
 
         放行优先级：
@@ -835,15 +886,18 @@ class ConfirmBarsMixin:
         先点先到。
 
         done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
+
+        返回 (allowed, feedback)：allowed 为是否允许；feedback 是用户附带的
+        文字反馈（允许时也可附反馈；拒绝时反馈用于告知 AI 如何调整）。
         """
         # 危险命令必须每次确认，永不被白名单绕过
         is_destructive = self._is_destructive_command(command)
         if not is_destructive:
             base = self._extract_base_command(command)
             if base and base in self._session_command_prefix_allowlist:
-                return True
+                return True, ""
             if self._normalize_command(command) in self._session_command_allowlist:
-                return True
+                return True, ""
 
         result = {}
         done = threading.Event()
@@ -851,7 +905,7 @@ class ConfirmBarsMixin:
         # --- 手机 Telegram 遥控确认（与 PC 卡片竞争，先点先到） ---
         remote_cid = None
         remote_msg_id = None
-        if _state.remote_session and REMOTE_TELEGRAM_CONFIRM:
+        if REMOTE_TELEGRAM_CONFIRM:
             remote_cid = _new_confirm_id()
             with _pending_lock:
                 _pending_remote_confirms[remote_cid] = {
@@ -888,9 +942,9 @@ class ConfirmBarsMixin:
                 label = "✅ 已允许" if result.get("allow") else "❌ 已拒绝"
                 telegram_push.edit_message_text(remote_msg_id, f"{label}（PC 端操作）")
 
-        return bool(result.get("allow", False))
+        return bool(result.get("allow", False)), result.get("feedback", "")
 
-    def confirm_edit(self, path: str, diff_text: str) -> bool:
+    def confirm_edit(self, path: str, diff_text: str) -> tuple[bool, str]:
         """从 worker 线程同步等待用户审批 edit_file 的 diff 预览。
 
         本次会话用户主动选过"信任所有对此文件的修改"的话直接放行。
@@ -901,7 +955,7 @@ class ConfirmBarsMixin:
         done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
         if path and path in self._session_edit_path_allowlist:
-            return True
+            return True, ""
 
         result = {}
         done = threading.Event()
@@ -909,7 +963,7 @@ class ConfirmBarsMixin:
         # --- 手机 Telegram 遥控确认 ---
         remote_cid = None
         remote_msg_id = None
-        if _state.remote_session and REMOTE_TELEGRAM_CONFIRM:
+        if REMOTE_TELEGRAM_CONFIRM:
             remote_cid = _new_confirm_id()
             with _pending_lock:
                 _pending_remote_confirms[remote_cid] = {
@@ -946,7 +1000,7 @@ class ConfirmBarsMixin:
                 label = "✅ 已允许" if result.get("allow") else "❌ 已拒绝"
                 telegram_push.edit_message_text(remote_msg_id, f"{label}（PC 端操作）")
 
-        return bool(result.get("allow", False))
+        return bool(result.get("allow", False)), result.get("feedback", "")
 
     # ══════════════════════════════════════
     # 静态辅助

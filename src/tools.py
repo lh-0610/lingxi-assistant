@@ -482,13 +482,16 @@ def _confirm_file_write(full: str, old_content: str, new_content: str):
     if not diff_text:
         diff_text = f"--- a/{base}\n+++ b/{base}\n(无 diff，可能是看不见的空白差异)\n"
     try:
-        allowed = ui.confirm_edit(full, diff_text)
+        allowed, user_feedback = ui.confirm_edit(full, diff_text)
     except Exception as e:
         logger.warning(f"文件写入确认对话框异常，默认拒绝: {e}")
         return False, f"用户确认对话框出错，已拒绝写入: {e}"
     if not allowed:
+        _msg = "已拒绝：用户不允许此次写入。"
+        if user_feedback:
+            _msg += f"\n用户补充说明：{user_feedback}"
         logger.info(f"用户拒绝写入 {full}")
-        return False, "已拒绝：用户不允许此次写入。"
+        return False, _msg
     return True, None
 
 
@@ -954,13 +957,16 @@ def run_command(command: str, timeout: int | None = None) -> str:
     ui = getattr(state, "ui_ref", None)
     if ui is not None:
         try:
-            allowed = ui.confirm_command(command)
+            allowed, user_feedback = ui.confirm_command(command)
         except Exception as e:
             logger.warning(f"确认对话框异常，默认拒绝执行: {e}")
             return f"用户确认对话框出错，已拒绝执行: {e}"
         if not allowed:
+            _msg = "已拒绝：用户不允许执行此命令。"
+            if user_feedback:
+                _msg += f"\n用户补充说明：{user_feedback}"
             logger.info(f"用户拒绝执行命令: {command}")
-            return "已拒绝：用户不允许执行此命令。"
+            return _msg
 
     run_cwd = _project_cwd()
 
