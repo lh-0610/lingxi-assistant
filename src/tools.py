@@ -931,14 +931,17 @@ def _decode_chunk(b: bytes) -> str:
 
 
 @tool
-def run_command(command: str) -> str:
+def run_command(command: str, timeout: int | None = None) -> str:
     """执行系统命令并**流式**返回输出（边跑边显示，不必等命令结束）。
 
     命令耗时 > 几秒时（pytest / npm test / build / 长 curl 等），UI 上能实时
     看到 stdout/stderr 进度；AI 拿到的工具结果仍是完整输出（超过 5000 字会截断）。
-    超过 30 秒强杀；执行前会弹用户确认卡片；危险命令需用户允许。
+    默认 5 分钟超时；传 timeout 参数（秒）可覆盖（如跑大测试套件传 600）。
+    随时可点停止按钮中断；执行前会弹用户确认卡片；危险命令需用户允许。
     """
     import threading as _thr_local
+
+    effective_timeout = timeout if timeout is not None else RUN_COMMAND_TIMEOUT_S
 
     cmd_lower = command.lower().strip()
     for blocked in BLOCKED_COMMANDS:
@@ -1020,7 +1023,7 @@ def run_command(command: str) -> str:
         if proc.poll() is not None:
             break
         elapsed = time.time() - start
-        if elapsed > RUN_COMMAND_TIMEOUT_S:
+        if elapsed > effective_timeout:
             timed_out = True
             _kill_proc_tree(proc)
             break
@@ -1040,10 +1043,10 @@ def run_command(command: str) -> str:
     if timed_out:
         if ui is not None:
             try:
-                ui.show_message(f"\n⏱️ 超时强杀（{RUN_COMMAND_TIMEOUT_S}s）\n", "tool_result")
+                ui.show_message(f"\n⏱️ 超时强杀（{effective_timeout}s）\n", "tool_result")
             except Exception:
                 pass
-        return f"命令执行超时（{RUN_COMMAND_TIMEOUT_S} 秒），已强杀进程"
+        return f"命令执行超时（{effective_timeout} 秒），已强杀进程"
     if interrupted:
         if ui is not None:
             try:
@@ -1313,6 +1316,20 @@ def forget(query: str) -> str:
     return "删除失败，请稍后重试"
 
 
+@tool
+def notify_user(title: str, message: str, level: str = "info") -> str:
+    """主动向用户手机推送 Telegram 通知。
+
+    用于 AI 判断需要提醒用户的场景（如长时间任务的关键节点、需要用户注意的事项）。
+    level: info / done / action_needed / error（默认 info）
+    """
+    from .notify import notify
+    ok = notify(level, title, message, f"ai_notify_{level}")
+    if ok:
+        return f"已推送 Telegram 通知: {title}"
+    return "通知未发送（Telegram 未配置或被节流）"
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -1320,6 +1337,7 @@ ALL_TOOLS = [
     search_in_file, search_files,
     generate_image,
     remember, forget,
+    notify_user,
 ]
 
 

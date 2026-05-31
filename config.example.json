@@ -49,6 +49,20 @@
   "vision_model_id":   "",
   "default_model_id":  "mimo-v2.5-pro",
 
+  "notify": {
+    "enabled": false,
+    "levels": ["error", "action_needed", "done"],
+    "throttle_seconds": 10,
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
+  },
+  "remote_control": {
+    "enabled": false,
+    "mode": "chat_only",
+    "readonly_blocklist": []
+  },
+  "_remote_control_说明": "手机 Telegram 遥控 PC 灵犀。enabled=开关。mode 三档安全分级：chat_only（默认，禁所有工具纯对话，最安全）/ safe_readonly（可读代码，但 config/密钥/记忆等敏感文件黑名单拦截，写工具命令仍禁）/ unrestricted（不设防全开，仅在完全信任时用）。readonly_blocklist：safe_readonly 下在内置黑名单外再追加的敏感文件名/后缀。",
+
   "mcp_enabled": true,
   "mcp_servers": {},
 

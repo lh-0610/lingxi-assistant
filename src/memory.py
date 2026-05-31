@@ -112,7 +112,8 @@ def save_session():
         return
 
     if not state.current_session_id:
-        state.current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 加微秒(%f)避免同一秒内连续新建会话时 id 碰撞、后建的覆盖先建的丢数据
+        state.current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     title = state.current_session_title or "新对话"
     for msg in state.chat_history:

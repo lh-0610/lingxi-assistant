@@ -53,6 +53,10 @@ if __name__ == "__main__":
     pet.show()
     tray = create_tray(app, pet, window, icon_path=icon_path if os.path.exists(icon_path) else None)
 
+    # 启动 Telegram 遥控轮询（config 启用 + bot token 齐备时自动生效）
+    from src.telegram_poll import start as _tg_poll_start, shutdown as _tg_poll_shutdown
+    _tg_poll_start()
+
     # 退出前清理 GPT-SoVITS 子进程，避免端口残留
     def _cleanup_on_exit():
         launcher = getattr(window, "_gpt_sovits_launcher", None)
@@ -65,6 +69,11 @@ if __name__ == "__main__":
         try:
             from src.mcp_client import shutdown as _mcp_shutdown
             _mcp_shutdown()
+        except Exception:
+            pass
+        # 停止 Telegram 遥控轮询
+        try:
+            _tg_poll_shutdown()
         except Exception:
             pass
     app.aboutToQuit.connect(_cleanup_on_exit)

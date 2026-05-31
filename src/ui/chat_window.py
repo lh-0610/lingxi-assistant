@@ -97,6 +97,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.bridge.sessions_refresh.connect(self._refresh_session_list)
         self.bridge.confirm_request.connect(self._on_confirm_request)
         self.bridge.edit_confirm_request.connect(self._on_edit_confirm_request)
+        self.bridge.remote_submit.connect(self._on_remote_submit)
 
         # 让 tools.py 在 worker 线程里能找到主窗口（弹确认框用）
         state.ui_ref = self
@@ -999,14 +1000,29 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         doc_height = self.entry.document().size().height() + 16
         self.entry.setMinimumHeight(int(min(max(doc_height, 80), 150)))
 
+    def _force_stop_generation(self):
+        """强制停止当前生成，立即更新 UI 状态。
+
+        与 _on_send_click 中的 stop 不同：这里会同步把 is_generating 置 False
+        并立即刷新按钮/输入框，这样调用方（切会话 / 新对话等）可以继续往下执行，
+        而不用等 worker 线程退出。
+        """
+        if not self.is_generating:
+            return
+        state.stop_flag = True
+        self._release_pending_confirm()
+        self._release_pending_edit()
+        # 立即标记生成结束——_on_finished 再被触发时会跳过重复处理
+        self.is_generating = False
+        self._ai_reply_start = None
+        # 对齐 _on_finished 的按钮恢复（输入框有内容则 enabled）。
+        # 注意：灵犀原写的 self.input_box 不存在（真名是 input_container），且那套
+        # setProperty/unpolish 多余——_update_btn_state 已经够恢复按钮态。
+        self._update_btn_state("enabled" if self._has_input else "disabled")
+
     def _on_send_click(self):
         if self.is_generating:
-            state.stop_flag = True
-            # 如果当前有 edit_file / run_command 确认条挂着，worker 正阻塞在 done.wait()，
-            # 不会主动检查 stop_flag。这里按"用户拒绝"唤醒它，让 agent 循环能看到 stop_flag
-            # 后干净退出，避免暂停按钮"看起来不好使"。
-            self._release_pending_confirm()
-            self._release_pending_edit()
+            self._force_stop_generation()
         elif self._has_input or self._pending_images:
             self._send_message()
 
@@ -1379,11 +1395,32 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     # ── 发送消息 ──
 
+    def submit_from_remote(self, text: str):
+        """遥控消息注入入口（可从任意线程调用，通过 Signal 跨线程）。"""
+        self.bridge.remote_submit.emit(text)
+
+    def _on_remote_submit(self, text: str):
+        """远程消息注入槽（主线程）。"""
+        if not text or self.is_generating:
+            return
+        state.remote_session = True
+        self._do_send(text)
+
     def _send_message(self):
         text = self.entry.toPlainText().strip()
         images = self._pending_images[:]
         if (not text and not images) or self.is_generating:
             return
+        # GUI 专属清理
+        self.entry.clear()
+        self._pending_images.clear()
+        self._refresh_image_preview()
+        self._has_input = False
+        self._do_send(text, images)
+
+    def _do_send(self, text: str, images=None):
+        """核心发送逻辑，GUI 和远程共用。"""
+        images = images or []
         self._clear_empty_state()
 
         # 带图片但当前模型不支持视觉时，不再把整轮任务切给弱视觉模型。
@@ -1401,10 +1438,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 return
             vision_model_name = agent.MODEL_LIST[vision_idx][0]
 
-        self.entry.clear()
-        self._pending_images.clear()
-        self._refresh_image_preview()
-        self._has_input = False
         self.is_generating = True
         self._update_btn_state("stop")
 
@@ -1483,6 +1516,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self.bridge.finished.emit()
 
     def _on_finished(self):
+        # 如果已经被 _force_stop_generation 提前处理过，跳过重复刷新
+        if not self.is_generating and not state.stop_flag:
+            return
         self.is_generating = False
         self._ai_reply_start = None
         self._update_btn_state("enabled" if self._has_input else "disabled")
@@ -1490,6 +1526,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # AI 这一轮可能新建了 checkpoint，刷新撤销按钮状态
         if hasattr(self, "undo_btn"):
             self._style_undo_btn()
+        state.remote_session = False
 
     def _scroll_guard(self):
         """智能滚动：返回一个回调函数，调用时仅当之前用户在底部才滚到新底部。
@@ -1499,11 +1536,16 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             scroll()
         """
         sb = self.chat_area.verticalScrollBar()
-        was_at_bottom = sb.value() >= sb.maximum() - 30  # 30px 容差
+        was_at_bottom = sb.value() >= sb.maximum() - 30  # 插入前是否贴底
+        prev = sb.value()
         def _after():
+            # 贴底 → 跟到新底部；不贴底 → 恢复到插入前位置。
+            # 后者用来【主动抵消】QTextBrowser 在末尾 insertText 时自动把视口拉到
+            # 底的默认行为——那才是"滚上去看历史却被流式追加拽回底部"的真因。
             if was_at_bottom:
                 sb.setValue(sb.maximum())
-            # 滚动后重新置顶浮动按钮
+            else:
+                sb.setValue(prev)
             if hasattr(self, 'scroll_bottom_btn'):
                 self.scroll_bottom_btn.raise_()
         return _after

@@ -63,7 +63,31 @@ STREAMING_TOOLS = {"run_command"}
 PLAN_MODE_READONLY_TOOLS = {
     "read_file", "list_directory", "search_in_file", "search_files",
     "remember", "forget",  # 记笔记不该被 Plan 拦
+    "notify_user",  # 通知用户不该被 Plan 拦
 }
+
+
+# 遥控 safe_readonly 模式的敏感文件黑名单（内置默认，用户可在 config 追加）。
+# 命中则远程禁止读取，防 config 密钥 / 长期记忆 / 角色配置等隐私外流到 Telegram。
+_DEFAULT_REMOTE_BLOCK = {
+    "config.json", "config.example.json",
+    ".env", ".env.local",
+    "long_term_memory.json", "role_config.json",
+    "ui_prefs.json", "theme_config.json",
+}
+_DEFAULT_REMOTE_BLOCK_SUFFIX = (".key", ".pem", ".pfx", ".keystore")
+
+
+def _hits_remote_blocklist(path: str) -> bool:
+    """路径 basename 是否命中遥控敏感黑名单（内置 + config 追加）。大小写不敏感。"""
+    if not path:
+        return False
+    from .config import REMOTE_BLOCKLIST
+    base = os.path.basename(str(path)).lower()
+    names = _DEFAULT_REMOTE_BLOCK | {n.lower() for n in (REMOTE_BLOCKLIST or [])}
+    if base in names:
+        return True
+    return any(base.endswith(s) for s in _DEFAULT_REMOTE_BLOCK_SUFFIX)
 
 
 # 会话长度滑动窗口阈值。超过这个估算 token 数就裁掉中间的旧消息，只保留：
@@ -527,16 +551,20 @@ def _handle_stream_chunk(st, chunk, ui, heartbeat_stop, heartbeat_phase):
         ui.show_message("", "think_collapse")
         ui.show_message("\n\n", "spacer")
 
-    # 解析 <think> 标签（兼容非 reasoning 模式）
-    if "<think>" in st.raw_text and not st.think_started:
+    # 解析 <think> / <thought> 标签（兼容非 reasoning 模式）
+    _has_open = "<think>" in st.raw_text or "<thought>" in st.raw_text
+    _open_tag = "<think>" if "<think>" in token else "<thought>" if "<thought>" in token else None
+    if _has_open and not st.think_started:
         st.think_started = True
         st.in_think = True
         st.think_mode = "tag"
         heartbeat_phase[0] = "thinking"
         ui.show_message("Thinking...\n", "think_header")
-        display = token.split("<think>", 1)[-1] if "<think>" in token else st.raw_text.split("<think>", 1)[-1]
-        if "</think>" in display:
-            before, after = display.split("</think>", 1)
+        _first_tag = "<think>" if "<think>" in st.raw_text else "<thought>"
+        display = token.split(_first_tag, 1)[-1] if _first_tag in token else st.raw_text.split(_first_tag, 1)[-1]
+        if "</think>" in display or "</thought>" in display:
+            _close = "</think>" if "</think>" in display else "</thought>"
+            before, after = display.split(_close, 1)
             st.in_think = False
             st.think_mode = None
             st.think_done = True
@@ -548,8 +576,9 @@ def _handle_stream_chunk(st, chunk, ui, heartbeat_stop, heartbeat_phase):
             if after:
                 ui.show_message(after, "ai_msg")
             return
-    elif "</think>" in token:
-        before, after = token.split("</think>", 1)
+    elif "</think>" in token or "</thought>" in token:
+        _close = "</think>" if "</think>" in token else "</thought>"
+        before, after = token.split(_close, 1)
         st.in_think = False
         st.think_mode = None
         st.think_done = True
@@ -729,6 +758,52 @@ def _execute_tool(tc, ui):
         logger.info(f"Plan 模式拒绝调用 {name}")
         return
 
+    # 遥控安全分级拦截（按 config 的 remote_control.mode）：
+    #   chat_only     —— 禁所有工具，纯对话
+    #   safe_readonly —— 只放行 read/search_in_file/list，且过敏感文件黑名单
+    #   unrestricted  —— 不拦
+    if getattr(state, "remote_session", False):
+        from .config import REMOTE_MODE
+        if REMOTE_MODE == "chat_only":
+            ui.show_message(f"\n🔒 远程遥控（纯对话模式），拒绝工具 {name}\n", "tool_tag")
+            state.chat_history.append(ToolMessage(
+                content=(
+                    f"已拒绝 `{name}`：当前遥控为**纯对话模式**（chat_only），"
+                    "禁用所有工具以防信息外流。读写文件 / 命令请在 PC 操作。"
+                ),
+                tool_call_id=call_id,
+            ))
+            logger.info(f"遥控 chat_only 拒绝工具: {name}")
+            return
+        elif REMOTE_MODE == "safe_readonly":
+            # 跨目录搜(search_files)无法逐一过滤黑名单 → 直接禁；只放行可定位单文件的只读
+            _RO_ALLOWED = {"read_file", "search_in_file", "list_directory"}
+            if name not in _RO_ALLOWED:
+                ui.show_message(f"\n🔒 远程遥控（只读模式），拒绝 {name}\n", "tool_tag")
+                state.chat_history.append(ToolMessage(
+                    content=(
+                        f"已拒绝 `{name}`：当前遥控为**只读模式**（safe_readonly），"
+                        f"只允许 {', '.join(sorted(_RO_ALLOWED))}。"
+                        "写文件 / 命令 / 跨目录搜请在 PC 操作。"
+                    ),
+                    tool_call_id=call_id,
+                ))
+                logger.info(f"遥控 safe_readonly 拒绝非只读工具: {name}")
+                return
+            target = args.get("path") or args.get("file") or ""
+            if _hits_remote_blocklist(target):
+                ui.show_message("\n🔒 该文件在遥控敏感黑名单，拒绝远程读取\n", "tool_tag")
+                state.chat_history.append(ToolMessage(
+                    content=(
+                        f"已拒绝读取 `{target}`：该文件在遥控敏感黑名单"
+                        "（config / 密钥 / 长期记忆等），不允许远程读取以防泄露。"
+                    ),
+                    tool_call_id=call_id,
+                ))
+                logger.info(f"遥控黑名单拒绝读取: {target}")
+                return
+        # unrestricted: 不拦，照常往下执行
+
     # 空参数保护：模型流式生成 tool_call 时 arguments 没传全 / JSON 解析失败
     # （常见于 new_string 很长、或服务端流式不稳），会 fallback 成 {}。直接 invoke
     # 只会撞一坨 pydantic 校验错、对模型没指引。这里给清晰中文让它重新完整调用。
@@ -787,6 +862,12 @@ def _execute_tool(tc, ui):
     except Exception as e:
         result = f"工具执行失败: {e}"
         logger.error(f"工具 {name} 执行失败: {e}")
+        # Telegram 通知：工具失败
+        try:
+            from .notify import notify as _notify
+            _notify("error", f"工具失败: {name}", str(e)[:300], "tool_error")
+        except Exception:
+            pass
 
     # 流式工具（run_command）执行过程中已经把每行 stdout 实时 push 到 UI 了；
     # 这里若再 push 一次 result，会把所有输出在末尾**重复显示一遍**。

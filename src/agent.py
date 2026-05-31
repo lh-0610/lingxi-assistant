@@ -209,12 +209,12 @@ def agent_loop(ui):
 
             if state.stop_flag:
                 # 被中断，保存已有内容（保留 thinking blocks 以便回传）
-                clean = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+                clean = re.sub(r"<think>.*?</think>|<thought>.*?</thought>", "", raw_text, flags=re.DOTALL).strip()
                 if clean or (gathered is not None and isinstance(gathered.content, list)):
                     state.chat_history.append(_build_ai_message(gathered, clean, []))
                 break
 
-            clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+            clean_text = re.sub(r"<think>.*?</think>|<thought>.*?</thought>", "", raw_text, flags=re.DOTALL).strip()
 
             if tool_calls:
                 logger.info(f"工具调用: {[tc['name'] for tc in tool_calls]}")
@@ -258,6 +258,19 @@ def agent_loop(ui):
         except Exception as save_err:
             logger.error(f"保存会话失败: {save_err}", exc_info=True)
 
+        # Telegram 通知：任务完成
+        try:
+            if getattr(state, "remote_session", False):
+                # 远程遥控发起：把【完整】回复发回手机（长则分段，不截断）
+                from .telegram_push import push_long
+                push_long("done", "灵犀回复", clean_text or "(无文本回复)")
+            else:
+                # 非远程（你在 PC 前）：发 200 字摘要作完成提醒
+                from .notify import notify as _notify
+                _notify("done", "任务完成", clean_text[:200] if clean_text else "(无文本回复)", "agent_done")
+        except Exception:
+            pass
+
         def _gen_title_bg():
             try:
                 maybe_generate_session_title()
@@ -272,6 +285,12 @@ def agent_loop(ui):
     except Exception as e:
         ui.remove_thinking_indicator()
         logger.error(f"agent_loop 异常: {e}", exc_info=True)
+        # Telegram 通知：agent 异常
+        try:
+            from .notify import notify as _notify
+            _notify("error", "Agent 异常", str(e)[:300], "agent_error")
+        except Exception:
+            pass
         # 简化错误信息显示
         err_msg = str(e)
         if "XML syntax error" in err_msg or "ResponseError" in err_msg:

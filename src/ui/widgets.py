@@ -31,6 +31,7 @@ class SignalBridge(QObject):
     confirm_request = Signal(str, object, object)
     # edit_file 之前弹 diff 预览：发 (path, diff_text, result_dict, event)
     edit_confirm_request = Signal(str, str, object, object)
+    remote_submit = Signal(str)        # Telegram 遥控消息注入（跨线程 → 主线程）
 
 
 class DragDropTextBrowser(QTextBrowser):

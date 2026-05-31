@@ -278,8 +278,8 @@ class SidebarMixin:
         menu.exec(anchor_widget.mapToGlobal(anchor_widget.rect().bottomLeft()))
 
     def _delete_session(self, session_id):
-        if self.is_generating:
-            return
+        if agent.current_session_id == session_id:
+            self._force_stop_generation()
         agent.delete_session(session_id)
         if agent.current_session_id == session_id:
             from ..roles import get_system_prompt
@@ -292,9 +292,8 @@ class SidebarMixin:
         self._refresh_session_list()
 
     def _load_session(self, session_id):
-        if self.is_generating:
-            return
-        agent.save_session()
+        self._force_stop_generation()
+        agent.save_session()          # 先保存当前会话，再加载目标
         if agent.load_session(session_id):
             # 如果加载的会话属于另一个项目，自动跟随切到那个项目（同步 current_project + system prompt）
             from .. import projects as _projects
@@ -322,8 +321,7 @@ class SidebarMixin:
         return None
 
     def _new_chat(self):
-        if self.is_generating:
-            return
+        self._force_stop_generation()
         agent.reset_history()
         self.chat_area.clear()
         self._reset_render_state()
@@ -374,8 +372,7 @@ class SidebarMixin:
         menu.exec(self.project_btn.mapToGlobal(self.project_btn.rect().bottomLeft()))
 
     def _switch_project(self, path):
-        if self.is_generating:
-            return
+        self._force_stop_generation()
         from .. import projects as _projects
         from ..roles import get_system_prompt
 

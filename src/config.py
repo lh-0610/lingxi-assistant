@@ -89,5 +89,27 @@ GPT_SOVITS_SOVITS_MODEL = _config.get("gpt_sovits_sovits_model", "")  # SoVITS �
 # 桌宠动画
 PET_ANIMATION_SPEED = _safe_float("pet_animation_speed", 0.5, min_val=0.1, max_val=5.0)  # 1.0=GIF 原速；0.5=慢 2 倍；2.0=快 2 倍
 
+# 通知（Telegram 推送）
+_notify_cfg = _config.get("notify", {}) or {}
+NOTIFY_ENABLED: bool = _notify_cfg.get("enabled", False)
+NOTIFY_LEVELS: list = _notify_cfg.get("levels", ["error", "action_needed", "done"])
+NOTIFY_THROTTLE_SECONDS: int = _notify_cfg.get("throttle_seconds", 10)
+TELEGRAM_BOT_TOKEN: str = _notify_cfg.get("telegram_bot_token", "")
+TELEGRAM_CHAT_ID: str = _notify_cfg.get("telegram_chat_id", "")
+
+# 遥控（Telegram 远程发送消息给桌面端）
+_remote_cfg = _config.get("remote_control", {}) or {}
+REMOTE_CONTROL: bool = _remote_cfg.get("enabled", False)
+# 遥控安全分级（mode 三选一，默认最安全的 chat_only）：
+#   chat_only     —— 禁所有工具，纯对话（默认；不懂/不配时最安全，不会意外泄露）
+#   safe_readonly —— 可读代码，但敏感文件黑名单拦截；写工具/命令仍禁
+#   unrestricted  —— 不设防，全部工具可用（你完全信任环境时）
+_mode = (_remote_cfg.get("mode") or "chat_only").lower()
+if _mode not in ("chat_only", "safe_readonly", "unrestricted"):
+    _mode = "chat_only"
+REMOTE_MODE: str = _mode
+# safe_readonly 模式下，用户在内置黑名单之外【追加】的敏感文件名/后缀
+REMOTE_BLOCKLIST: list = _remote_cfg.get("readonly_blocklist", []) or []
+
 # MCP Servers 配置（字典，key=server 名，value=启动参数）
 MCP_SERVERS: dict = _config.get("mcp_servers", {}) or {}

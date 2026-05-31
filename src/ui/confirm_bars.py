@@ -423,6 +423,13 @@ class ConfirmBarsMixin:
             self._cmd_confirm_hint.setText("1 / 2 / 3 选择 · Esc 取消")
 
         self.command_confirm_bar.setVisible(True)
+        # Telegram 通知：等待用户确认
+        try:
+            from ..notify import notify as _notify
+            _short_cmd = command[:120].replace("\n", " ")
+            _notify("action_needed", "等待确认", _short_cmd, "confirm_command")
+        except Exception:
+            pass
         # 把焦点交给 bar 本身，1/2/3/Esc 由 eventFilter 接管
         self.command_confirm_bar.setFocus()
 
@@ -683,6 +690,12 @@ class ConfirmBarsMixin:
         self.edit_confirm_diff.setHtml(self._format_diff_html(diff_text))
         self.edit_confirm_bar.setVisible(True)
         self.edit_confirm_bar.setFocus()
+        # Telegram 通知：等待文件编辑确认
+        try:
+            from ..notify import notify as _notify
+            _notify("action_needed", "等待编辑确认", path, "confirm_edit")
+        except Exception:
+            pass
 
     def _resolve_edit_confirm(self, allow: bool, remember: bool = False):
         """按钮点击：写结果 / 加路径白名单 / 隐藏卡片 / 唤醒 worker。"""

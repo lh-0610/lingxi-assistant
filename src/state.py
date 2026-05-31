@@ -48,3 +48,9 @@ ui_ref = None
 #             目的：让 AI 先调研 + 给出执行方案，用户确认后切回 act 才动手
 # 由 ChatUI 顶栏的 Plan/Act 切换按钮修改
 agent_mode = "act"
+
+# Telegram 遥控：当前这轮回复是否由远程消息触发（决定推送行为）
+remote_session: bool = False
+
+# Telegram 遥控：回复完成后是否自动发 Telegram 通知（可由命令开关）
+telegram_stop: bool = False
