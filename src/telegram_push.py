@@ -68,3 +68,79 @@ def push_long(level: str, title: str, message: str, chunk_size: int = 3500) -> b
         t = title if idx == 0 else f"{title}（续 {idx + 1}/{len(chunks)}）"
         ok = push(level, t, chunk) and ok
     return ok
+
+
+
+# ---------------------------------------------------------------------------
+# 操作确认：inline 按钮
+# ---------------------------------------------------------------------------
+
+def push_confirm(text: str, confirm_id: str, is_destructive: bool = False) -> int | None:
+    """发一条带 ✅允许 / ❌拒绝 / 📝记住同类 inline 按钮的确认消息。
+
+    callback_data 格式: ``c:{id}:a`` / ``c:{id}:d`` / ``c:{id}:r``
+    is_destructive=True 时隐藏"记住同类"按钮（危险命令不可永久授权）。
+    返回 message_id（后续 edit_message_text 用），失败返回 None。
+
+    注意：不用 parse_mode——命令/diff 常含未配对的 *_[`` ` `` 等字符，Markdown
+    解析会 400（can't parse entities）让按钮发不出去。纯文本最稳（同 push()）。
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return None
+
+    row = [
+        {"text": "✅ 允许", "callback_data": f"c:{confirm_id}:a"},
+        {"text": "❌ 拒绝", "callback_data": f"c:{confirm_id}:d"},
+    ]
+    if not is_destructive:
+        row.append({"text": "📝 记住同类", "callback_data": f"c:{confirm_id}:r"})
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "reply_markup": {
+            "inline_keyboard": [row],
+        },
+    }
+    try:
+        r = httpx.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("result", {}).get("message_id")
+        logger.warning(f"Telegram push_confirm 失败 [{r.status_code}]: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Telegram push_confirm 异常: {e}")
+    return None
+
+
+def answer_callback(callback_query_id: str, text: str = "") -> bool:
+    """回答 callback_query，解除按钮 loading 状态。"""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    try:
+        r = httpx.post(url, json={
+            "callback_query_id": callback_query_id,
+            "text": text,
+        }, timeout=10)
+        return r.status_code == 200
+    except Exception as e:
+        logger.warning(f"Telegram answer_callback 异常: {e}")
+        return False
+
+
+def edit_message_text(message_id: int, text: str) -> bool:
+    """编辑已有消息的文本（用于把确认按钮替换为结果文案）。"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    try:
+        r = httpx.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "message_id": message_id,
+            "text": text,
+        }, timeout=10)
+        return r.status_code == 200
+    except Exception as e:
+        logger.warning(f"Telegram edit_message_text 异常: {e}")
+        return False

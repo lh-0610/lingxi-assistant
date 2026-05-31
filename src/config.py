@@ -52,7 +52,9 @@ DEEPSEEK_MODELS   = _config.get("deepseek_models", ["deepseek-v4-flash", "deepse
 CLAUDE_CODE_MODEL = _config.get("claude_code_model", "")
 VISION_MODEL_ID   = _config.get("vision_model_id", "")
 # 启动默认选中的模型（按 model_id 匹配；找不到退回列表第一个）
-DEFAULT_MODEL_ID  = _config.get("default_model_id", "mimo-v2.5-pro")
+# 用 `or` 而非 .get 默认值：键存在但为空串（设置页空着保存过）时也回退，
+# 否则会落到 MODEL_LIST[0] = Claude Code，表现为"默认模型莫名变成 claude"
+DEFAULT_MODEL_ID  = _config.get("default_model_id") or "mimo-v2.5-pro"
 
 
 # 自定义模型列表。用户在设置里加自己的 OpenAI/Anthropic 兼容模型。
@@ -110,6 +112,9 @@ if _mode not in ("chat_only", "safe_readonly", "unrestricted"):
 REMOTE_MODE: str = _mode
 # safe_readonly 模式下，用户在内置黑名单之外【追加】的敏感文件名/后缀
 REMOTE_BLOCKLIST: list = _remote_cfg.get("readonly_blocklist", []) or []
+# 遥控时是否把操作确认（run_command / edit_file / MCP）推到手机 Telegram inline 按钮
+# mode=unrestricted + telegram_confirm=true = 远程全控但每步手机审批（推荐组合）
+REMOTE_TELEGRAM_CONFIRM: bool = _remote_cfg.get("telegram_confirm", True)
 
 # MCP Servers 配置（字典，key=server 名，value=启动参数）
 MCP_SERVERS: dict = _config.get("mcp_servers", {}) or {}

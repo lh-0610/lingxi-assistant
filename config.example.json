@@ -59,9 +59,10 @@
   "remote_control": {
     "enabled": false,
     "mode": "chat_only",
-    "readonly_blocklist": []
+    "readonly_blocklist": [],
+    "telegram_confirm": true
   },
-  "_remote_control_说明": "手机 Telegram 遥控 PC 灵犀。enabled=开关。mode 三档安全分级：chat_only（默认，禁所有工具纯对话，最安全）/ safe_readonly（可读代码，但 config/密钥/记忆等敏感文件黑名单拦截，写工具命令仍禁）/ unrestricted（不设防全开，仅在完全信任时用）。readonly_blocklist：safe_readonly 下在内置黑名单外再追加的敏感文件名/后缀。",
+  "_remote_control_说明": "手机 Telegram 遥控 PC 灵犀。enabled=开关。mode 三档安全分级：chat_only（默认，禁所有工具纯对话，最安全）/ safe_readonly（可读代码，但 config/密钥/记忆等敏感文件黑名单拦截，写工具命令仍禁）/ unrestricted（不设防全开，仅在完全信任时用）。readonly_blocklist：safe_readonly 下在内置黑名单外再追加的敏感文件名/后缀。telegram_confirm：遥控时是否把操作确认（run_command/edit_file/MCP）推到手机 Telegram inline 按钮，双向确认，推荐开启。",
 
   "mcp_enabled": true,
   "mcp_servers": {},

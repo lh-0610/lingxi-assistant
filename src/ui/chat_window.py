@@ -98,6 +98,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.bridge.confirm_request.connect(self._on_confirm_request)
         self.bridge.edit_confirm_request.connect(self._on_edit_confirm_request)
         self.bridge.remote_submit.connect(self._on_remote_submit)
+        self.bridge.dismiss_confirm.connect(self._on_dismiss_confirm)
 
         # 让 tools.py 在 worker 线程里能找到主窗口（弹确认框用）
         state.ui_ref = self

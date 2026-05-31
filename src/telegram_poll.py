@@ -20,6 +20,51 @@ _offset = 0               # getUpdates offset
 
 # ─── 内部分发 ────────────────────────────────────────────────────────────────────
 
+def _handle_callback_query(cb: dict):
+    """处理 inline 按钮回调（允许/拒绝/记住同类）。
+
+    callback_data 格式: ``c:{confirm_id}:a|d|r``
+    - a = allow (允许本次)
+    - d = deny   (拒绝)
+    - r = allow + remember (允许并记住同类命令/文件)
+    """
+    from . import telegram_push
+    from .ui.confirm_bars import _resolve_remote_confirm
+
+    # 白名单校验【点按钮的人】 from.id，而非消息所在 chat.id——后者在群组场景下
+    # 任何成员都能过，前者保证只有你本人能批准（私聊里两者等价）
+    from_id = str(cb.get("from", {}).get("id", ""))
+    if from_id != str(TELEGRAM_CHAT_ID):
+        telegram_push.answer_callback(cb["id"], "无权限操作")
+        return
+
+    data = cb.get("data", "")
+    # 格式: "c:{confirm_id}:{action}"
+    parts = data.split(":")
+    if len(parts) == 3 and parts[0] == "c":
+        cid = parts[1]
+        act = parts[2]
+    elif ":" in data:
+        # 兼容旧格式 "allow:CID" / "deny:CID"
+        act_legacy, cid = data.split(":", 1)
+        act = {"allow": "a", "deny": "d"}.get(act_legacy, "")
+    else:
+        telegram_push.answer_callback(cb["id"], "未知操作")
+        return
+
+    if act == "a":
+        ok = _resolve_remote_confirm(cid, allow=True, remember=False)
+        telegram_push.answer_callback(cb["id"], "✅ 已允许" if ok else "已过期")
+    elif act == "d":
+        ok = _resolve_remote_confirm(cid, allow=False, remember=False)
+        telegram_push.answer_callback(cb["id"], "❌ 已拒绝" if ok else "已过期")
+    elif act == "r":
+        ok = _resolve_remote_confirm(cid, allow=True, remember=True)
+        telegram_push.answer_callback(cb["id"], "✅ 已记住同类并允许" if ok else "已过期")
+    else:
+        telegram_push.answer_callback(cb["id"], "未知操作")
+
+
 def _dispatch(text: str):
     """收到白名单消息后的分发逻辑（在轮询线程内调用）。"""
     ui = getattr(state, "ui_ref", None)
@@ -60,12 +105,20 @@ def _poll_loop():
 
             for upd in data.get("result", []):
                 _offset = upd["update_id"] + 1
+
+                # ── inline 按钮回调 ──
+                cb = upd.get("callback_query")
+                if cb:
+                    _handle_callback_query(cb)
+                    continue
+
                 msg = upd.get("message")
                 if not msg:
                     continue
-                chat_id = str(msg["chat"]["id"])
-                if chat_id != str(TELEGRAM_CHAT_ID):
-                    logger.debug(f"忽略非白名单消息: chat_id={chat_id}")
+                # 白名单校验【发消息的人】 from.id（群组场景下比 chat.id 更严，私聊等价）
+                sender_id = str(msg.get("from", {}).get("id", ""))
+                if sender_id != str(TELEGRAM_CHAT_ID):
+                    logger.debug(f"忽略非白名单消息: from_id={sender_id}")
                     continue
                 text = msg.get("text", "")
                 if text:

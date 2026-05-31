@@ -8,6 +8,8 @@
 
 两者都是 Signal → 主线程弹卡 → worker `done.wait()` 同步等待 的模式。
 
+手机遥控模式下，同时把确认推到 Telegram inline 按钮（双向确认，先点先到）。
+
 作为 ChatUI 的 mixin 接入。依赖宿主提供：
 - `self._t(key)` 主题色查表
 - `self._svg_icon(filename, color)` 单色 SVG 图标
@@ -19,11 +21,72 @@
 import threading
 
 from .. import state as _state
+from .. import telegram_push
+from ..config import REMOTE_TELEGRAM_CONFIRM
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
 )
+
+
+# ---------------------------------------------------------------------------
+# 手机 Telegram 遥控确认注册表
+# ---------------------------------------------------------------------------
+# key = confirm_id, value = {"result": dict, "done": threading.Event, "msg_id": int|None}
+_pending_remote_confirms: dict = {}
+_pending_lock = threading.Lock()
+_confirm_counter = [0]
+
+
+def _new_confirm_id() -> str:
+    _confirm_counter[0] += 1
+    return str(_confirm_counter[0])
+
+
+def _resolve_remote_confirm(cid: str, allow: bool, remember: bool = False) -> bool:
+    """从手机端 callback_data 解析操作确认。
+
+    allow: 是否允许操作
+    remember: 允许时是否"记住同类"（对命令：加入白名单；对编辑：加入路径白名单）
+    返回 True 表示找到并处理，False 表示已过期/找不到。
+    answerCallbackQuery 由调用方负责，这里不调。
+    """
+    with _pending_lock:
+        entry = _pending_remote_confirms.pop(cid, None)
+    if entry is None:
+        return False
+    # 只有 done 还没被设置时才写入结果（PC 端可能已经先处理了——先点先到）
+    won = not entry["done"].is_set()
+    if won:
+        entry["result"]["allow"] = allow
+        entry["result"]["by_remote"] = True  # 标记本次由手机决出，worker 清理时不再覆盖文案
+        if remember:
+            entry["result"]["remember"] = True
+        # 手机端明确拒绝 = 停掉本次生成（与 PC 端 _resolve_command_confirm 行为一致），
+        # 否则远程 agent 被拒后会继续往下试别的、反复弹手机确认
+        if not allow:
+            _state.stop_flag = True
+        # 让主线程隐藏可能还挂着的 PC 确认卡（仅 UI，不碰 result/done）。
+        # 必须在 done.set() 之前 emit：dismiss 先入主线程队列，worker 唤醒后即便
+        # 立刻弹下一张卡，FIFO 也保证 dismiss 先处理、不会误清掉新卡。
+        ui = getattr(_state, "ui_ref", None)
+        if ui is not None and hasattr(ui, "bridge"):
+            try:
+                ui.bridge.dismiss_confirm.emit()
+            except Exception:
+                pass
+    entry["done"].set()
+    msg_id = entry.get("msg_id")
+    if msg_id:
+        if allow and remember:
+            label = "✅ 已记住同类并允许"
+        elif allow:
+            label = "✅ 已允许"
+        else:
+            label = "❌ 已拒绝"
+        telegram_push.edit_message_text(msg_id, label)
+    return True
 
 
 class ConfirmBarsMixin:
@@ -732,6 +795,28 @@ class ConfirmBarsMixin:
         if hasattr(self, "edit_confirm_bar"):
             self.edit_confirm_bar.setVisible(False)
 
+    def _on_dismiss_confirm(self):
+        """手机端已决出确认 → 主线程收掉可能还挂着的 PC 卡片。
+
+        只动 UI + 清 UI 状态指针，**绝不碰 result/done**（已由 _resolve_remote_confirm
+        写好并 set）。把 done_event 指针清成 None，使之后误点 PC 卡按钮成为 no-op
+        （_resolve_command_confirm / _resolve_edit_confirm 开头有 None 守卫）。
+        同一时刻只有一个确认在 pending，这里两张卡都收一遍，另一张是 no-op。
+        """
+        if hasattr(self, "command_confirm_bar"):
+            self.command_confirm_bar.setVisible(False)
+            self.command_confirm_text.clear()
+        self._command_confirm_result_holder = None
+        self._command_confirm_done_event = None
+        self._command_confirm_destructive = False
+        if hasattr(self, "edit_confirm_bar"):
+            self.edit_confirm_bar.setVisible(False)
+            self.edit_confirm_diff.clear()
+            self.edit_confirm_path.setText("")
+        self._edit_confirm_result_holder = None
+        self._edit_confirm_done_event = None
+        self._edit_confirm_path = ""
+
     # ══════════════════════════════════════
     # worker 线程同步等待入口
     # ══════════════════════════════════════
@@ -745,19 +830,64 @@ class ConfirmBarsMixin:
           3. 精确字符串命中旧版白名单 → 放行（向后兼容）
           4. 其它 → 弹卡片让用户选
 
+        手机遥控模式（remote_session + REMOTE_TELEGRAM_CONFIRM）下，
+        同时把确认推到 Telegram inline 按钮，PC ↔ Telegram 双向竞争，
+        先点先到。
+
         done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
         # 危险命令必须每次确认，永不被白名单绕过
-        if not self._is_destructive_command(command):
+        is_destructive = self._is_destructive_command(command)
+        if not is_destructive:
             base = self._extract_base_command(command)
             if base and base in self._session_command_prefix_allowlist:
                 return True
             if self._normalize_command(command) in self._session_command_allowlist:
                 return True
+
         result = {}
         done = threading.Event()
+
+        # --- 手机 Telegram 遥控确认（与 PC 卡片竞争，先点先到） ---
+        remote_cid = None
+        remote_msg_id = None
+        if _state.remote_session and REMOTE_TELEGRAM_CONFIRM:
+            remote_cid = _new_confirm_id()
+            with _pending_lock:
+                _pending_remote_confirms[remote_cid] = {
+                    "result": result, "done": done, "msg_id": None,
+                }
+            remote_msg_id = telegram_push.push_confirm(
+                f"⚠️ 执行命令？\n\n{command}\n\n请点击下方按钮 ⬇️",
+                remote_cid,
+                is_destructive=is_destructive,
+            )
+            if remote_msg_id:
+                with _pending_lock:
+                    entry = _pending_remote_confirms.get(remote_cid)
+                    if entry:
+                        entry["msg_id"] = remote_msg_id
+
+        # --- PC 端内联卡片（始终弹，保证 PC 端也能操作） ---
         self.bridge.confirm_request.emit(command, result, done)
         done.wait()
+
+        # 手机端点了"记住同类"——补加前缀白名单（PC 路径已在 _resolve_command_confirm 里加过）
+        if result.get("allow") and result.get("remember") and not is_destructive:
+            base = self._extract_base_command(command)
+            if base:
+                self._session_command_prefix_allowlist.add(base)
+
+        # 清理远程注册表（如果远程那边还没触发）
+        if remote_cid:
+            with _pending_lock:
+                _pending_remote_confirms.pop(remote_cid, None)
+            # 仅当 PC 先点（远程消息还挂着按钮）时补一条结果文案；手机自己点的
+            # 由 _resolve_remote_confirm 已改过消息，不再覆盖（避免错标"PC 端操作"）。
+            if remote_msg_id and not result.get("by_remote"):
+                label = "✅ 已允许" if result.get("allow") else "❌ 已拒绝"
+                telegram_push.edit_message_text(remote_msg_id, f"{label}（PC 端操作）")
+
         return bool(result.get("allow", False))
 
     def confirm_edit(self, path: str, diff_text: str) -> bool:
@@ -766,14 +896,56 @@ class ConfirmBarsMixin:
         本次会话用户主动选过"信任所有对此文件的修改"的话直接放行。
         否则弹 diff 预览卡（参考命令确认卡的非模态机制）。
 
+        手机遥控模式下同时推 Telegram inline 确认（与 PC 卡片竞争）。
+
         done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
         if path and path in self._session_edit_path_allowlist:
             return True
+
         result = {}
         done = threading.Event()
+
+        # --- 手机 Telegram 遥控确认 ---
+        remote_cid = None
+        remote_msg_id = None
+        if _state.remote_session and REMOTE_TELEGRAM_CONFIRM:
+            remote_cid = _new_confirm_id()
+            with _pending_lock:
+                _pending_remote_confirms[remote_cid] = {
+                    "result": result, "done": done, "msg_id": None,
+                }
+            # 截取 diff 前 800 字符（Telegram 消息有 4096 上限）
+            diff_preview = (diff_text or "")[:800]
+            if len(diff_text or "") > 800:
+                diff_preview += "\n…(已截断)"
+            remote_msg_id = telegram_push.push_confirm(
+                f"📝 编辑文件确认\n\n{path}\n\n{diff_preview}\n\n请点击下方按钮 ⬇️",
+                remote_cid,
+            )
+            if remote_msg_id:
+                with _pending_lock:
+                    entry = _pending_remote_confirms.get(remote_cid)
+                    if entry:
+                        entry["msg_id"] = remote_msg_id
+
+        # --- PC 端内联卡片 ---
         self.bridge.edit_confirm_request.emit(path or "", diff_text or "", result, done)
         done.wait()
+
+        # 手机端点了"记住同类"——补加文件白名单（PC 路径已在 _resolve_edit_confirm 里加过）
+        if result.get("allow") and result.get("remember") and path:
+            self._session_edit_path_allowlist.add(path)
+
+        # 清理
+        if remote_cid:
+            with _pending_lock:
+                _pending_remote_confirms.pop(remote_cid, None)
+            # 同 confirm_command：手机自己点的不再覆盖文案（避免错标"PC 端操作"）
+            if remote_msg_id and not result.get("by_remote"):
+                label = "✅ 已允许" if result.get("allow") else "❌ 已拒绝"
+                telegram_push.edit_message_text(remote_msg_id, f"{label}（PC 端操作）")
+
         return bool(result.get("allow", False))
 
     # ══════════════════════════════════════

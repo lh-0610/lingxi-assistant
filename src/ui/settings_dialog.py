@@ -182,7 +182,8 @@ class SettingsDialog(QDialog):
                        "例如：claude-sonnet-4-20250514")
 
         self._add_section(m, "默认模型")
-        self._add_text(m, "default_model_id", "启动默认模型 ID", "mimo-v2.5-pro")
+        self._add_text(m, "default_model_id", "启动默认模型 ID", "mimo-v2.5-pro",
+                       default="mimo-v2.5-pro")
 
         self._add_section(m, "图片识别模型")
         self._add_vision_model_picker(m)
@@ -554,7 +555,7 @@ class SettingsDialog(QDialog):
             return dlg.result_data
         return None
 
-    def _add_text(self, layout, key, label_text, placeholder="", password=False):
+    def _add_text(self, layout, key, label_text, placeholder="", password=False, default=""):
         wrapper = QWidget()
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(0, 0, 0, 0)
@@ -565,10 +566,12 @@ class SettingsDialog(QDialog):
         wl.addWidget(lbl)
 
         edit = QLineEdit()
+        # default：config 缺失或为空串时回填的有效默认值。避免用户没填的关键项
+        # （如 default_model_id）被空白覆盖保存后跑去吃 config 兜底逻辑
         if "." in key:
-            edit.setText(str(self._get_nested(key, "")))
+            edit.setText(str(self._get_nested(key, default) or default))
         else:
-            edit.setText(str(self.config.get(key, "")))
+            edit.setText(str(self.config.get(key, default) or default))
         edit.setPlaceholderText(placeholder)
         edit.setObjectName("settingsInput")
         edit.setMinimumHeight(32)

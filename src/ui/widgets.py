@@ -32,6 +32,8 @@ class SignalBridge(QObject):
     # edit_file 之前弹 diff 预览：发 (path, diff_text, result_dict, event)
     edit_confirm_request = Signal(str, str, object, object)
     remote_submit = Signal(str)        # Telegram 遥控消息注入（跨线程 → 主线程）
+    # 手机端点完确认后，让主线程隐藏可能还挂着的 PC 确认卡（仅 UI，result/done 已由远程写好）
+    dismiss_confirm = Signal()
 
 
 class DragDropTextBrowser(QTextBrowser):
