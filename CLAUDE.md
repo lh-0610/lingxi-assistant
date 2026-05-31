@@ -24,6 +24,9 @@ src/                     # 主代码
   streaming.py           # 全流式：_prepare_stream_history / _handle_stream_chunk / _stream_with_tools + 重试退避 + _execute_tool
   tools.py               # @tool 函数；相对路径走项目根；run_command/edit_file/write_file 弹确认；build_all_tools/get_tool_map（含 MCP）
   mcp_client.py          # MCP 客户端：常驻 asyncio loop 连外部 server，远程工具包成 StructuredTool 注入
+  notify.py              # 统一通知入口（分级/节流/环形历史 → telegram_push）；notify_long 发完整分段
+  telegram_push.py       # Telegram Bot API 推送（push/push_long 分段/push_confirm inline 按钮/answer_callback/edit_message_text）
+  telegram_poll.py       # Telegram 遥控：后台长轮询 getUpdates → from.id 白名单 → 注入 ChatUI / 处理 inline 按钮回调
   memory_store.py        # 长期记忆持久化（原子写 + RLock；remember/forget 存取，注入 system prompt）
   memory.py              # 会话历史 JSON 持久化（RLock 串行化所有读写） + _build_ai_message + move_sessions_to_no_project
   checkpoint.py          # edit/write/append 写盘前 git stash 快照 + 撤销（路径级 git checkout 恢复）
@@ -213,7 +216,8 @@ python main.py
 | `append_file` | 追加（**弹 diff 确认卡**） |
 | `edit_file` | 精确字符串替换（比 write_file 安全省 token；**弹 diff 预览卡** + 路径白名单） |
 | `list_directory` | 列目录 |
-| `run_command` | 执行命令（30s 超时，屏蔽交互式，**执行前弹内联确认卡**；cwd = 项目根；流式输出 + taskkill 杀进程树） |
+| `run_command` | 执行命令（默认 300s 超时、可传 `timeout`；屏蔽交互式，**执行前弹内联确认卡**；cwd = 项目根；流式输出 + taskkill 杀进程树；**`background=True` 转后台**跑 dev server/长服务，立即返回 bg_id） |
+| `read_background_output` / `list_background_commands` / `stop_background_command` | 管理后台命令（read·list 进 `PLAN_MODE_READONLY_TOOLS`、不弹确认；`_bg_procs` 全程 `_bg_lock` 保护、杀进程锁外调；退出时 `stop_all_background` 清理防端口残留） |
 | `search_in_file` | 单文件关键词（`offset`/`limit` 分页） |
 | `search_files` | 跨文件正则搜索（ripgrep 风格，忽略噪声目录） |
 | `generate_image` | ComfyUI / Pollinations 生图（存项目根 outputs/ 或 chat_memory/generated/） |

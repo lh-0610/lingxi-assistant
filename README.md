@@ -28,7 +28,7 @@
 ### 对话核心
 - 🤖 **多模型切换**：MiMo / Qwen / Claude / DeepSeek / 本地 Ollama / 本地 Claude Code CLI，**还可在设置里自填任意 OpenAI / Anthropic 兼容的自定义模型**
 - 🖼️ **多模态**：支持图片输入（自动切到视觉模型 / 多模态模型）
-- 🔧 **工具调用**：文件读写、命令执行、图片生成等。**run_command 执行前在输入框上方弹内联确认卡**（含命令预览 + 1/2/3 数字快捷键 + Esc 取消），危险命令（`rm -rf` / `format` / `sudo` / `drop table` 等）不给"记住"选项。**确认卡无超时**（睡一觉回来还在等你），**点拒绝自动停止 AI 后续重试**
+- 🔧 **工具调用**：文件读写、命令执行、图片生成等。**run_command 执行前在输入框上方弹内联确认卡**（含命令预览 + 1/2/3 数字快捷键 + Esc 取消），危险命令（`rm -rf` / `format` / `sudo` / `drop table` 等）不给"记住"选项。**确认卡无超时**（睡一觉回来还在等你）；**拒绝时可附一句文字反馈**（如"换 async 写法"），AI 据此调整重做，留空则直接停止后续重试
 - 💬 **会话历史**：自动保存、侧边栏切换、智能生成标题
 - 🧠 **思考过程显示**：折叠/展开模型的 reasoning 内容
 - 📊 **Token 用量统计**：实时显示每轮和会话累计用量
@@ -83,6 +83,12 @@
 - 🎨 **ComfyUI 本机**优先（API 模式），支持自定义工作流 JSON
 - ☁️ **Pollinations.ai** 在线 fallback（无 ComfyUI 时自动用）
 - 🧬 LoRA 链 + FaceDetailer + ModelSamplingDiscrete（vPred 模型）
+
+### 远程通知 / 手机遥控（Telegram，可选）
+- 📲 **PC → 手机推送**：任务完成 / 报错 / 等待确认时推到你的 Telegram（分级 + 节流去重），完整回复分段发回不截断
+- 🎮 **手机 → PC 遥控**：手机发消息让灵犀干活，三档安全分级（`chat_only` 纯对话 / `safe_readonly` 只读代码且敏感文件黑名单 / `unrestricted` 不设防），白名单 chat_id 锁死、回调按 `from.id` 校验
+- ✅ **手机审批操作**：run_command / edit_file / MCP 的确认同步推手机 inline 按钮（✅允许 / ❌拒绝 / 📝记住同类），人离开电脑也能远程批；PC 卡与手机按钮**先点先到**，杜绝双重执行
+- 🔒 配 `notify` / `remote_control`（含 `telegram_confirm`）开启；不配则整段静默跳过
 
 ### 系统级
 - ⚙️ **设置弹窗**：所有 API 密钥、模型、语音模块路径等可视化编辑
@@ -408,7 +414,8 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 | `append_file` | 追加内容到文件末尾（**弹 diff 确认卡**） |
 | `edit_file` | **智能容错替换**：分层匹配 L1-L4(精确→行尾空白→缩进重对齐→模糊)，配 47 项回归测试；失败返回最接近片段让模型自纠（**弹 diff 预览卡** + 路径白名单，比 write_file 安全） |
 | `list_directory` | 列出目录内容 |
-| `run_command` | 执行系统命令（30 秒超时，**执行前弹确认卡**，流式输出） |
+| `run_command` | 执行系统命令（默认 **5 分钟**超时、可传 `timeout` 覆盖，**执行前弹确认卡**，流式输出；**`background=True` 转后台**跑 dev server / watch / 长服务，立即返回 bg_id） |
+| `read_background_output` / `list_background_commands` / `stop_background_command` | 管理后台命令：读输出 / 列出 / 停止（read·list 只读，Plan 模式放行；退出时自动清理防端口残留） |
 | `search_in_file` | 单文件关键词搜索（offset/limit 分页） |
 | `search_files` | 跨文件正则搜索（ripgrep 风格） |
 | `generate_image` | 调 ComfyUI / Pollinations 生成图片 |
