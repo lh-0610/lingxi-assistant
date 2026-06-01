@@ -1608,7 +1608,7 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
 # ══════════════════════════════════════
 
 
-def _parse_pytest_output(stdout: str) -> str:
+def _parse_pytest_output(stdout: str, elapsed: float = 0.0) -> str:
     """解析 pytest stdout，提取计数 + 失败用例摘要；解析不到则退回末尾 ~2000 字。"""
     lines = stdout.strip().splitlines()
 
@@ -1642,11 +1642,12 @@ def _parse_pytest_output(stdout: str) -> str:
         return f"（pytest 输出解析未命中计数/失败行，以下为原始输出尾部）\n{tail}"
 
     # ── 拼精炼摘要 ──
+    time_str = f"（{elapsed:.2f}s）" if elapsed > 0 else ""
     parts = []
     if failed or errors:
-        parts.append(f"❌ {failed + errors} failed / {passed} passed")
+        parts.append(f"❌ {failed + errors} failed / {passed} passed{time_str}")
     else:
-        parts.append(f"✅ {passed} passed，全部通过")
+        parts.append(f"✅ {passed} passed{time_str}，全部通过")
 
     if failed_lines:
         parts.append("失败用例：")
@@ -1686,10 +1687,12 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
 
     # ── 执行 ──
     try:
+        t0 = time.time()
         result = subprocess.run(
             cmd, cwd=_shell_cwd(),
             capture_output=True, text=True, timeout=timeout,
         )
+        elapsed = time.time() - t0
     except FileNotFoundError:
         return "pytest 未安装或找不到，请先运行 `pip install pytest` 安装。"
     except subprocess.TimeoutExpired:
@@ -1705,7 +1708,7 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     if stderr and "No module named pytest" in stderr:
         return "pytest 未安装，请先运行 `pip install pytest` 安装。"
 
-    summary = _parse_pytest_output(stdout)
+    summary = _parse_pytest_output(stdout, elapsed)
 
     # pytest 的 warning/提示信息单独附加（有的话挺有用）
     warning_lines = []

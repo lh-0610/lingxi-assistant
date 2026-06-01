@@ -45,6 +45,14 @@ class TestParsePytestOutput:
         assert "1 failed" in out and "2 passed" in out
         assert "t1" in out
 
+    def test_elapsed_shown_when_positive(self):
+        out = _parse_pytest_output("=== 3 passed in 0.1s ===", elapsed=1.5)
+        assert "1.50s" in out           # 传入耗时 → 摘要里显示（X.XXs）
+
+    def test_elapsed_hidden_when_zero(self):
+        out = _parse_pytest_output("=== 3 passed in 0.1s ===")   # 不传（默认 0）
+        assert "s）" not in out          # 0 → 不显示耗时（向后兼容）
+
 
 class TestRunTestsGuard:
     def test_path_escape_rejected(self, project_dir):
