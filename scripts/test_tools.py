@@ -92,7 +92,7 @@ class TestRunCommand:
         """run_command 有 30s 超时，这里只测短命令不会超时。"""
         from src.tools import run_command
 
-        result = run_command.func('python -c "print(1+1)"')
+        result = run_command.func(f'"{sys.executable}" -c "print(1+1)"')
         assert "2" in result
 
 
