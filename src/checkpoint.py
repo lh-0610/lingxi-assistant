@@ -9,6 +9,9 @@
   `undo_last_checkpoint()` pop 栈顶，用 `git stash apply <ref> --force` 恢复
 - 栈 cap 在 50，更旧的自动丢弃；同时 `_prune_checkpoint_stashes` 会把对应的
   旧 git stash 真正 `drop` 掉，防止 stash 无限堆积拖慢 git
+- checkpoint 额外记录目标文件改动前是否存在 / 是否已被 git 跟踪：
+    - AI 新建的文件撤销时删除
+    - 原本未追踪的文件从 stash 的第三个 parent 恢复
 
 为什么 stash + 立即 pop？因为 stash 默认会清空工作目录。我们要"快照但不影响当前"，
 所以 stash 后立刻 pop 回来。stash 列表里仍保留那个 ref，apply 时就拿到了"动手前"的版本。
@@ -65,6 +68,19 @@ def _has_changes(project_root: str) -> bool:
         return False
 
 
+def _path_is_tracked(project_root: str, path: str) -> bool:
+    """目标路径是否已被 git 跟踪。"""
+    try:
+        rel = os.path.relpath(path, project_root) if os.path.isabs(path) else path
+        r = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", rel],
+            cwd=project_root, capture_output=True, timeout=3,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[str]:
     """打一个快照。返回 stash ref（成功）或 None（跳过 / 失败）。
 
@@ -74,12 +90,15 @@ def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[st
     """
     if not _is_git_repo(project_root):
         return None  # 非 git 项目，无 checkpoint 能力
+    full_path = path if os.path.isabs(path) else os.path.join(project_root, path)
+    existed = os.path.exists(full_path)
+    tracked = _path_is_tracked(project_root, full_path) if existed else False
     if not _has_changes(project_root):
         # 工作区干净 → 不需要 stash（HEAD 就是回退点）
         # 我们记一个特殊标记，让 undo 时知道走 `git checkout -- <path>` 路线
         ts = datetime.now().strftime("%H:%M:%S")
         ref = f"__HEAD__:{ts}"
-        _push_stack(project_root, ref, tool_name, path)
+        _push_stack(project_root, ref, tool_name, full_path, existed=existed, tracked=tracked)
         return ref
 
     msg = f"lingxi-checkpoint {datetime.now().strftime('%Y%m%d-%H%M%S')} {tool_name} {path}"
@@ -104,7 +123,7 @@ def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[st
         return None
 
     ref = "stash@{0}"  # 刚 push 进去的就在 0
-    _push_stack(project_root, ref, tool_name, path)
+    _push_stack(project_root, ref, tool_name, full_path, existed=existed, tracked=tracked)
     # 真正把超额的旧快照从 git 里删掉，否则 stash 会无限堆积
     # （之前只 pop 内存里的栈、没 drop git stash，攒到几百张拖慢 git）
     _prune_checkpoint_stashes(project_root)
@@ -145,7 +164,7 @@ def _prune_checkpoint_stashes(project_root: str, keep: int = _MAX_STACK):
         pass
 
 
-def _push_stack(project_root, ref, tool_name, path):
+def _push_stack(project_root, ref, tool_name, path, existed=True, tracked=True):
     with _lock:
         _checkpoint_stack.append({
             "project_root": project_root,
@@ -153,6 +172,8 @@ def _push_stack(project_root, ref, tool_name, path):
             "ts": time.time(),
             "tool": tool_name,
             "path": path,
+            "existed": existed,
+            "tracked": tracked,
         })
         while len(_checkpoint_stack) > _MAX_STACK:
             _checkpoint_stack.pop(0)
@@ -189,11 +210,29 @@ def undo_last_checkpoint() -> tuple[bool, str]:
     if not _is_git_repo(project_root):
         return False, "项目不再是 git 仓库，无法撤销"
 
+    full_path = path if os.path.isabs(path) else os.path.join(project_root, path)
+    rel = os.path.relpath(full_path, project_root)
+    try:
+        if os.path.commonpath([os.path.realpath(full_path), os.path.realpath(project_root)]) != os.path.realpath(project_root):
+            return False, "目标路径超出项目范围，拒绝撤销"
+    except ValueError:
+        return False, "目标路径超出项目范围，拒绝撤销"
+
+    if not cp.get("existed", True):
+        try:
+            if os.path.isfile(full_path) or os.path.islink(full_path):
+                os.remove(full_path)
+                return True, f"已撤销新建文件 {rel}"
+            if not os.path.exists(full_path):
+                return True, f"新建文件 {rel} 已不存在，无需撤销"
+            return False, f"撤销失败：{rel} 已不是普通文件，拒绝删除"
+        except Exception as e:
+            return False, f"撤销失败：{e}"
+
     if ref.startswith("__HEAD__"):
         # 工作区当时干净，只要 checkout HEAD -- <path> 就回到改前
         # 但如果是绝对路径，要转为相对项目根
         try:
-            rel = os.path.relpath(path, project_root) if os.path.isabs(path) else path
             r = subprocess.run(
                 ["git", "checkout", "HEAD", "--", rel],
                 cwd=project_root, capture_output=True, timeout=10,
@@ -221,7 +260,8 @@ def undo_last_checkpoint() -> tuple[bool, str]:
                     break
         target = target or ref
 
-        rel = os.path.relpath(path, project_root) if os.path.isabs(path) else path
+        if not cp.get("tracked", True):
+            target = f"{target}^3"
         r = subprocess.run(
             ["git", "checkout", target, "--", rel],
             cwd=project_root, capture_output=True, timeout=10,
