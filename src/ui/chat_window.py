@@ -1617,6 +1617,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             font.setPixelSize(15)
             font.setWeight(QF.Weight.Bold if bold else QF.Weight.Normal)
             font.setStyleStrategy(QF.StyleStrategy.PreferAntialias)
+            # 必须和聊天区基础字体 / _make_format 一样设 PreferNoHinting，否则用户消息
+            # 用默认 hinting、AI 消息用 NoHinting，两套字脚渲染并排 → 高分屏下笔画粗细不一
+            font.setHintingPreference(QF.HintingPreference.PreferNoHinting)
             f.setFont(font)
             f.setForeground(QColor(color))
             return f
