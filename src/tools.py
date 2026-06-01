@@ -1690,7 +1690,7 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
         t0 = time.time()
         result = subprocess.run(
             cmd, cwd=_shell_cwd(),
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
         elapsed = time.time() - t0
     except FileNotFoundError:
@@ -1725,6 +1725,124 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     return summary
 
 
+# ══════════════════════════════════════
+# Git 只读工具（diff / log，绝不碰 commit/add/push/reset）
+# ══════════════════════════════════════
+
+
+@tool
+def git_diff(path: str = "", staged: bool = False, max_chars: int = 8000) -> str:
+    """查看 git 改动（默认未暂存的工作区改动）。path: 限定文件/目录（相对项目根，空=全部）。
+    staged=True 看已暂存（git add 过）的改动。只读、调研用。"""
+    try:
+        import shutil as _shutil
+        if not _shutil.which("git"):
+            return "git 未安装或不在 PATH 中，无法查看 diff。"
+
+        cwd = _project_cwd()
+        cmd = ["git", "diff"]
+
+        if staged:
+            cmd.append("--staged")
+
+        if path:
+            resolved = _resolve_path(path)
+            root = _project_cwd()
+            try:
+                if os.path.commonpath([os.path.realpath(resolved), os.path.realpath(root)]) != os.path.realpath(root):
+                    return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+            except ValueError:
+                return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+            cmd.extend(["--", path])
+
+        result = subprocess.run(
+            cmd, cwd=cwd,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if "not a git repository" in stderr.lower():
+                return "当前项目不是 git 仓库。"
+            return f"git diff 执行出错: {stderr or '未知错误'}"
+
+        output = result.stdout or ""
+        if not output.strip():
+            return "暂存区没有改动。" if staged else "工作区干净，没有未提交改动。"
+
+        if len(output) > max_chars:
+            output = (
+                output[:max_chars]
+                + f"\n\n... [输出已截断（共 {len(output)} 字符），"
+                f"可用 path 参数缩小到具体文件/目录查看]"
+            )
+        return output
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中，无法查看 diff。"
+    except subprocess.TimeoutExpired:
+        return "git diff 执行超时（10s），仓库可能过大。"
+    except Exception as e:
+        return f"git diff 执行异常: {e}"
+
+
+@tool
+def git_log(path: str = "", limit: int = 15) -> str:
+    """查看最近 git 提交历史（短 hash + 日期 + 提交信息 + 改动文件）。
+    path: 限定某文件/目录（相对项目根）。limit: 条数。只读。"""
+    try:
+        import shutil as _shutil
+        if not _shutil.which("git"):
+            return "git 未安装或不在 PATH 中，无法查看 log。"
+
+        cwd = _project_cwd()
+        cmd = [
+            "git", "log",
+            "-n", str(limit),
+            "--date=short",
+            "--pretty=format:%h %ad %s",
+            "--stat",
+        ]
+
+        if path:
+            resolved = _resolve_path(path)
+            root = _project_cwd()
+            try:
+                if os.path.commonpath([os.path.realpath(resolved), os.path.realpath(root)]) != os.path.realpath(root):
+                    return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+            except ValueError:
+                return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+            cmd.extend(["--", path])
+
+        result = subprocess.run(
+            cmd, cwd=cwd,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if "not a git repository" in stderr.lower():
+                return "当前项目不是 git 仓库。"
+            if "does not have any commits" in stderr:
+                return "仓库还没有任何提交记录。"
+            return f"git log 执行出错: {stderr or '未知错误'}"
+
+        output = result.stdout or ""
+        if not output.strip():
+            return "没有提交历史（仓库可能为空或 path 下无提交记录）。"
+
+        if len(output) > 8000:
+            output = output[:8000] + "\n\n... [输出已截断，可减小 limit 或用 path 限定查看]"
+        return output
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中，无法查看 log。"
+    except subprocess.TimeoutExpired:
+        return "git log 执行超时（10s）。"
+    except Exception as e:
+        return f"git log 执行异常: {e}"
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -1735,6 +1853,7 @@ ALL_TOOLS = [
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
     code_map,
+    git_diff, git_log,
     run_tests,
 ]
 
@@ -1783,6 +1902,8 @@ TOOL_DISPLAY_NAMES = {
     "list_background_commands": "📋 列出后台命令",
     "stop_background_command": "⏹ 停止后台命令",
     "code_map": "🗺 代码地图",
+    "git_diff": "🔀 查看改动",
+    "git_log": "📜 提交历史",
     "run_tests": "🧪 跑测试",
 }
 
