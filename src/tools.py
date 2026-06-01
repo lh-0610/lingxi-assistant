@@ -1523,6 +1523,13 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
 
     # ── 路径起点 ──
     base = _resolve_path(path) if path else _project_cwd()
+    # 安全：不允许 .. 逃出项目根（防扫到项目外 / 敏感目录）
+    root = _project_cwd()
+    try:
+        if os.path.commonpath([os.path.realpath(base), os.path.realpath(root)]) != os.path.realpath(root):
+            return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+    except ValueError:  # 不同盘符（Windows）→ 必然越界
+        return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
     if not os.path.isdir(base):
         return f"失败：目录不存在 {base}"
 

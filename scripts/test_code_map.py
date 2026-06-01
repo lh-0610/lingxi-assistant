@@ -62,3 +62,21 @@ class TestCodeMap:
         out = code_map.func("src")
         assert "in_src" in out
         assert "in_root" not in out      # 限定 src 子目录，不含项目根的
+
+    def test_rejects_path_escape(self, project_dir):
+        # 安全：.. 不能逃出项目根
+        out = code_map.func("../")
+        assert "不允许" in out or "项目范围" in out or "不存在" in out
+
+    def test_skips_node_modules(self, project_dir):
+        (project_dir / "node_modules").mkdir()
+        (project_dir / "node_modules" / "bad.ts").write_text("function noisy() {}", encoding="utf-8")
+        (project_dir / "app.ts").write_text("function real() {}", encoding="utf-8")
+        out = code_map.func("")
+        assert "real" in out
+        assert "noisy" not in out
+
+    def test_extracts_async_py_functions(self, project_dir):
+        (project_dir / "async_mod.py").write_text("async def fetch_data():\n    pass\n", encoding="utf-8")
+        out = code_map.func("")
+        assert "fetch_data" in out
