@@ -1,6 +1,8 @@
 import os
+import sys
 import json
 import time
+import re
 import difflib
 import subprocess
 import threading
@@ -1601,6 +1603,125 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
     return result
 
 
+# ══════════════════════════════════════
+# 测试运行工具
+# ══════════════════════════════════════
+
+
+def _parse_pytest_output(stdout: str) -> str:
+    """解析 pytest stdout，提取计数 + 失败用例摘要；解析不到则退回末尾 ~2000 字。"""
+    lines = stdout.strip().splitlines()
+
+    # ── 计数：从末尾 summary 行抓 passed / failed / error ──
+    passed = failed = errors = 0
+    m_passed = re.search(r'(\d+)\s+passed', stdout)
+    m_failed = re.search(r'(\d+)\s+failed', stdout)
+    m_error  = re.search(r'(\d+)\s+error', stdout)
+    if m_passed:
+        passed = int(m_passed.group(1))
+    if m_failed:
+        failed = int(m_failed.group(1))
+    if m_error:
+        errors = int(m_error.group(1))
+
+    has_counts = bool(m_passed or m_failed or m_error)
+
+    # ── 失败用例行：pytest -q 末尾 "FAILED path::test — ErrorType: msg" ──
+    failed_lines = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith("FAILED "):
+            failed_lines.insert(0, stripped)
+        elif failed_lines:
+            # 遇到非 FAILED 行就停（FAILED 块通常是连续的）
+            break
+
+    # ── 无法解析：退回 stdout 末尾 ~2000 字 ──
+    if not has_counts and not failed_lines:
+        tail = stdout[-2000:] if len(stdout) > 2000 else stdout
+        return f"（pytest 输出解析未命中计数/失败行，以下为原始输出尾部）\n{tail}"
+
+    # ── 拼精炼摘要 ──
+    parts = []
+    if failed or errors:
+        parts.append(f"❌ {failed + errors} failed / {passed} passed")
+    else:
+        parts.append(f"✅ {passed} passed，全部通过")
+
+    if failed_lines:
+        parts.append("失败用例：")
+        for fl in failed_lines[:20]:  # 最多列 20 条
+            # "FAILED path::test — ErrorType: msg" 原样展示
+            parts.append(f"  - {fl[len('FAILED '):]}")
+        if len(failed_lines) > 20:
+            parts.append(f"  ...（共 {len(failed_lines)} 个失败用例，仅列前 20）")
+
+    if failed or errors:
+        parts.append("（用 read_file 打开对应文件定位修复）")
+
+    return "\n".join(parts)
+
+
+@tool
+def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
+    """跑 pytest 测试，返回精炼结果：通过/失败数 + 每个失败用例的位置和错误摘要。
+    path: 测试路径/文件（相对项目根，空 = pytest 自动发现）。k: pytest -k 过滤表达式。
+    比 run_command 跑 pytest 省事——直接给你哪些挂了、错在哪，便于定位修复。"""
+    # ── 构建命令：sys.executable -m pytest（不用裸 pytest） ──
+    cmd = [sys.executable, "-m", "pytest", "--tb=short", "-q"]
+
+    # ── path 安全校验：_resolve_path + commonpath 防逃逸（同 code_map） ──
+    if path:
+        resolved = _resolve_path(path)
+        root = _project_cwd()
+        try:
+            if os.path.commonpath([os.path.realpath(resolved), os.path.realpath(root)]) != os.path.realpath(root):
+                return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+        except ValueError:
+            return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+        cmd.append(resolved)
+
+    if k:
+        cmd.extend(["-k", k])
+
+    # ── 执行 ──
+    try:
+        result = subprocess.run(
+            cmd, cwd=_shell_cwd(),
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError:
+        return "pytest 未安装或找不到，请先运行 `pip install pytest` 安装。"
+    except subprocess.TimeoutExpired:
+        return f"测试超时（>{timeout}s），可能有用例卡住，请检查或增大 timeout。"
+    except Exception as e:
+        return f"运行 pytest 失败: {e}"
+
+    # ── 解析输出 ──
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+
+    # pytest 没装时 stderr 里会有 "No module named pytest"
+    if stderr and "No module named pytest" in stderr:
+        return "pytest 未安装，请先运行 `pip install pytest` 安装。"
+
+    summary = _parse_pytest_output(stdout)
+
+    # pytest 的 warning/提示信息单独附加（有的话挺有用）
+    warning_lines = []
+    for line in (stderr or "").strip().splitlines():
+        if "warning" in line.lower() or "Warning" in line:
+            warning_lines.append(line)
+    if warning_lines and len("\n".join(warning_lines)) < 500:
+        summary += f"\n\n⚠️ pytest warnings:\n" + "\n".join(warning_lines[:10])
+
+    # ── 输出截断防爆 ──
+    if len(summary) > 6000:
+        summary = summary[:6000] + "\n... [输出已截断，超过 6000 字]"
+
+    return summary
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -1611,6 +1732,7 @@ ALL_TOOLS = [
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
     code_map,
+    run_tests,
 ]
 
 
@@ -1658,6 +1780,7 @@ TOOL_DISPLAY_NAMES = {
     "list_background_commands": "📋 列出后台命令",
     "stop_background_command": "⏹ 停止后台命令",
     "code_map": "🗺 代码地图",
+    "run_tests": "🧪 跑测试",
 }
 
 
