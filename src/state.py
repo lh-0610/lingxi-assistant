@@ -54,3 +54,7 @@ remote_session: bool = False
 
 # Telegram 遥控：回复完成后是否自动发 Telegram 通知（可由命令开关）
 telegram_stop: bool = False
+
+# run_command 的当前工作目录（None = 用项目根）
+# 由纯 cd 命令设置，跨命令留存；新对话 / 切项目时重置为 None
+shell_cwd: str | None = None

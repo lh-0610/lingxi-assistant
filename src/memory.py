@@ -405,3 +405,4 @@ def reset_history():
     state.chat_history.append(SystemMessage(content=get_system_prompt()))
     state.current_session_id = None
     state.current_session_title = None
+    state.shell_cwd = None  # cd 上下文回项目根

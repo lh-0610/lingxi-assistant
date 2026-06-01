@@ -302,6 +302,7 @@ class SidebarMixin:
             if project_changed:
                 _projects.set_current(session_project)
                 state.current_project = session_project
+                state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
                 from ..roles import get_system_prompt
                 if state.chat_history and isinstance(state.chat_history[0], SystemMessage):
                     state.chat_history[0] = SystemMessage(content=get_system_prompt())
@@ -386,6 +387,7 @@ class SidebarMixin:
         # 2. 切换项目
         _projects.set_current(path)
         state.current_project = path
+        state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
 
         # 3. 手动清空（不调 agent.reset_history，因为它内部还会再次 save_session）
         state.chat_history.clear()

@@ -400,6 +400,37 @@ def _resolve_path(path: str) -> str:
     return os.path.normpath(os.path.join(_project_cwd(), path))
 
 
+def _shell_cwd() -> str:
+    """run_command 实际用的 cwd：shell_cwd（存在且是目录）否则退回项目根。"""
+    base = getattr(state, "shell_cwd", None)
+    if base and os.path.isdir(base):
+        return base
+    return _project_cwd()
+
+
+def _parse_cd(command: str):
+    """纯 cd 命令 → 返回目标【绝对路径】；非纯 cd（复合/重定向/非 cd）→ None。"""
+    import re as _re
+    s = command.strip()
+    # 含 && || | ; 换行 > < 的复合/重定向命令不算"纯 cd"
+    if any(op in s for op in ("&&", "||", "|", ";", "\n", ">", "<")):
+        return None
+    # "cd" / "cd X"；"cdrom" 不匹配（要求 cd 后面要么结尾要么空白）
+    m = _re.match(r'^cd(?:\s+(.+))?$', s, _re.IGNORECASE)
+    if not m:
+        return None
+    arg = (m.group(1) or "").strip().strip('"').strip("'")
+    if not arg or arg == "~":
+        return _project_cwd()                               # cd / cd ~ → 回项目根
+    if arg.startswith("~") and (len(arg) == 1 or arg[1] in ("/", "\\")):
+        # ~/sub 或 ~\sub → 项目根/sub
+        arg = arg[2:].lstrip("/\\") or "."
+        target = os.path.join(_project_cwd(), arg)
+    else:
+        target = arg if os.path.isabs(arg) else os.path.join(_shell_cwd(), arg)
+    return os.path.normpath(target)
+
+
 @tool
 def read_file(path: str, offset: int = 1, limit: int = READ_FILE_DEFAULT_LIMIT) -> str:
     """读取文件内容，按行返回（带行号前缀，方便后续 edit_file 定位）。
@@ -971,7 +1002,15 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
         parts = [p.strip() for p in cmd_lower.replace("&&", "|").split("|")]
         for part in parts:
             if part == blocked or part.startswith(blocked + " "):
-                return f"拒绝执行: '{blocked}' 是交互式命令，会导致程序挂起"
+                    return f"拒绝执行: '{blocked}' 是交互式命令，会导致程序挂起"
+
+    # ── 纯 cd 拦截：只切目录、不弹确认、不起进程 ──
+    cd_target = _parse_cd(command)
+    if cd_target is not None:
+        if os.path.isdir(cd_target):
+            state.shell_cwd = cd_target
+            return f"已切换工作目录到: {cd_target}"
+        return f"目录不存在: {cd_target}"
 
     # ── 用户确认（同原逻辑）──
     ui = getattr(state, "ui_ref", None)
@@ -988,7 +1027,7 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
             logger.info(f"用户拒绝执行命令: {command}")
             return _msg
 
-    run_cwd = _project_cwd()
+    run_cwd = _shell_cwd()
 
     # stderr 合并进 stdout 走同一管道，按时间顺序输出（不再分开拼接）
     try:
