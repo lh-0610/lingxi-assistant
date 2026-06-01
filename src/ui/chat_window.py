@@ -58,6 +58,23 @@ except Exception as _voice_err:
     VOICE_TTS_DEFAULT_ENABLED = False
 
 
+# 聊天区 HTML 文本里的彩色 emoji → icons/ 下的 SVG 文件（见 docs/emoji_inventory.md）。
+# 8 个概念复用现有 *_lucide.svg，其余用合并进来的 lucide 图标。✓/✗/⚙ 等单色字符符号
+# 按 README 决定保留为字体字形、不在此映射。SVG 走 currentColor，由 _inline_svg_img 按主题着色。
+_EMOJI_ICON = {
+    # 工具显示名（tools.py TOOL_DISPLAY_NAMES）
+    "📖": "book-open.svg", "✏️": "file-pen.svg", "📝": "file-plus.svg",
+    "🪄": "wand-sparkles.svg", "📂": "folder_open_lucide.svg", "⚡": "zap.svg",
+    "🔍": "search.svg", "🌐": "globe.svg", "🎨": "palette.svg",
+    "🧠": "brain_lucide.svg", "🗑️": "trash_lucide.svg", "📋": "clipboard-list.svg",
+    "⏹": "square-stop.svg", "🗺": "map.svg", "🔀": "git-compare.svg",
+    "📜": "scroll-text.svg", "🧪": "flask-conical.svg", "🔧": "wrench.svg",
+    "🔌": "plug.svg",
+    # 工具区还会出现的拦截/安全提示
+    "⚠️": "triangle-alert.svg", "⛔": "octagon-x.svg", "🔒": "lock.svg",
+}
+
+
 class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
              SidebarMixin, HeaderMixin, QMainWindow):
     def __init__(self):
@@ -513,11 +530,34 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             return alt
         with open(svg_path, "r", encoding="utf-8") as f:
             svg = f.read().replace("currentColor", color)
+        # 归一化 SVG 自身宽高到目标尺寸：QTextBrowser 渲染内联 SVG 时按 SVG 自带的
+        # width/height（这批图标都是 24）来画，<img> 的 width/height 未必生效——不归一
+        # 化图标会按 24px 渲染、比 14/15px 文字大，撑破行高看着"不在一行"。
+        svg = svg.replace('width="24" height="24"', f'width="{size}" height="{size}"', 1)
         data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
         return (
             f'<img src="data:image/svg+xml;base64,{data}" width="{size}" height="{size}" '
-            f'alt="{alt}" style="vertical-align:-3px;" />'
+            f'alt="{alt}" style="vertical-align:middle;" />'
         )
+
+    def _emoji_to_svg_html(self, text, color, size=14):
+        """把 text 里 _EMOJI_ICON 已知的 emoji 替换成内联彩色 SVG <img>，
+        其余字符做 HTML 转义。返回可 insertHtml 的片段。最长 emoji 优先匹配
+        （含 FE0F 变体选择符的多码点 emoji 排前），避免被前缀截断。"""
+        import html as _html
+        keys = sorted(_EMOJI_ICON.keys(), key=len, reverse=True)
+        out = []
+        i = 0
+        while i < len(text):
+            for emo in keys:
+                if text.startswith(emo, i):
+                    out.append(self._inline_svg_img(_EMOJI_ICON[emo], color, size, alt=emo))
+                    i += len(emo)
+                    break
+            else:
+                out.append(_html.escape(text[i]))
+                i += 1
+        return "".join(out)
 
 
     def _build_chat_area(self, parent_layout):
@@ -2266,8 +2306,23 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             cursor.insertText(text, fmt)
             self._thinking_end = cursor.position()
         elif tag == "tool_tag":
-            fmt = _make_format(self._t("tool"), 14, QF.Weight.Bold, self._t("tool_bg"))
-            cursor.insertText(text, fmt)
+            # emoji 换成内联 SVG（见 _EMOJI_ICON / docs/emoji_inventory.md），其余保持加粗 + tool 配色 + 背景。
+            # 首尾换行用纯文本插入（HTML 里换行会被折叠丢失），只有中间主体走 insertHtml。
+            lead = len(text) - len(text.lstrip("\n"))
+            trail = len(text) - len(text.rstrip("\n"))
+            core = text[lead: len(text) - trail]
+            tool_fmt = _make_format(self._t("tool"), 14)
+            if lead:
+                cursor.insertText("\n" * lead, tool_fmt)
+            if core:
+                color = self._t("tool")
+                body = self._emoji_to_svg_html(core, color, size=15)
+                cursor.insertHtml(
+                    f'<span style="color:{color};font-weight:bold;'
+                    f'background-color:{self._t("tool_bg")};">{body}</span>'
+                )
+            if trail:
+                cursor.insertText("\n" * trail, tool_fmt)
         elif tag == "tool_detail":
             fmt = _make_format(self._t("tool"), 14, bg=self._t("tool_bg"), family="Consolas")
             cursor.insertText(text, fmt)
