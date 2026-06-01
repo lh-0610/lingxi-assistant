@@ -79,6 +79,29 @@ class TestListDirectory:
         result = list_directory.func(str(f))
         assert any(k in result for k in ("不存在", "不是目录", "错误", "失败", "无效"))
 
+    def test_dirs_before_files(self, project_dir):
+        """文件夹排在文件前面（--group-directories-first 风格）"""
+        # 创建文件和目录，故意用会干扰字母序的名字
+        (project_dir / "z_file.txt").write_text("z", encoding="utf-8")
+        (project_dir / "a_file.txt").write_text("a", encoding="utf-8")
+        (project_dir / "m_dir").mkdir()
+        (project_dir / "b_dir").mkdir()
+        from src.tools import list_directory
+
+        result = list_directory.func(str(project_dir))
+        lines = [l for l in result.splitlines() if l.startswith(("📁", "📄"))]
+        dir_indices = [i for i, l in enumerate(lines) if l.startswith("📁")]
+        file_indices = [i for i, l in enumerate(lines) if l.startswith("📄")]
+        assert dir_indices, "应包含目录"
+        assert file_indices, "应包含文件"
+        assert max(dir_indices) < min(file_indices), \
+            f"所有目录应排在文件之前，实际目录行{dir_indices}，文件行{file_indices}"
+        # 各自内部也应按字母序
+        dir_names = [l.split("📁 ", 1)[1].rstrip("/") for l in lines if l.startswith("📁")]
+        file_names = [l.split("📄 ", 1)[1].split("  (")[0] for l in lines if l.startswith("📄")]
+        assert dir_names == sorted(dir_names), f"目录未按字母序: {dir_names}"
+        assert file_names == sorted(file_names), f"文件未按字母序: {file_names}"
+
 
 # ── run_command ──────────────────────────────────────────
 class TestRunCommand:

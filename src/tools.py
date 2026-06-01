@@ -899,11 +899,11 @@ def list_directory(path: str = ".") -> str:
     try:
         full = _resolve_path(path)
         items = os.listdir(full)
-        result = []
+        dirs, files = [], []
         for item in sorted(items):
             full_item = os.path.join(full, item)
             if os.path.isdir(full_item):
-                result.append(f"📁 {item}/")
+                dirs.append(f"📁 {item}/")
             else:
                 size = os.path.getsize(full_item)
                 if size < 1024:
@@ -912,7 +912,8 @@ def list_directory(path: str = ".") -> str:
                     s = f"{size/1024:.1f}KB"
                 else:
                     s = f"{size/1024/1024:.1f}MB"
-                result.append(f"📄 {item}  ({s})")
+                files.append(f"📄 {item}  ({s})")
+        result = dirs + files
         header = f"[目录: {full}]\n"
         return header + ("\n".join(result) if result else "空目录")
     except Exception as e:
