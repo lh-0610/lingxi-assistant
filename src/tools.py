@@ -1514,6 +1514,86 @@ def stop_all_background():
             pass
 
 
+@tool
+def code_map(path: str = "", max_chars: int = 8000) -> str:
+    """列出项目（或指定子目录）每个源码文件的类/函数清单（带行号），用于快速定位
+    "某功能/类在哪个文件"，省去逐个 read_file 摸索。
+    path: 相对项目根的子目录，空 = 整个项目。只读、安全。"""
+    import re as _re
+
+    # ── 路径起点 ──
+    base = _resolve_path(path) if path else _project_cwd()
+    if not os.path.isdir(base):
+        return f"失败：目录不存在 {base}"
+
+    # ── 按扩展名定义正则 ──
+    _py_re = _re.compile(r'^(?P<indent>\s*)(?P<kw>async\s+def|def|class)\s+(?P<name>\w+)')
+    _js_re = _re.compile(r'^(?P<indent>\s*)(?:export\s+)?(?:async\s+)?(?P<kw>function|class)\s+(?P<name>\w+)')
+    _EXT_MAP = {
+        ".py": _py_re,
+        ".js": _js_re, ".ts": _js_re, ".jsx": _js_re, ".tsx": _js_re,
+    }
+    _exts = set(_EXT_MAP.keys())
+
+    # ── os.walk：复用 search_files 的噪声目录忽略集合 ──
+    files_to_scan = []
+    for root, dirs, filenames in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _SEARCH_IGNORE_DIRS and not d.startswith(".")]
+        for fname in filenames:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _exts:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                if os.path.getsize(fpath) > _SEARCH_MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+            files_to_scan.append((fpath, ext))
+
+    files_to_scan.sort()
+
+    # ── 逐文件正则提取符号 ──
+    output_lines = []
+    for fpath, ext in files_to_scan:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+
+        pat = _EXT_MAP[ext]
+        symbols = []
+        for i, line in enumerate(lines, 1):
+            m = pat.match(line)
+            if m:
+                indent = m.group("indent")
+                keyword = m.group("kw").strip()
+                name = m.group("name")
+                symbols.append((indent, i, keyword, name))
+        if not symbols:
+            continue
+
+        rel = os.path.relpath(fpath, base).replace(os.sep, "/")
+        output_lines.append(rel)
+        for indent, lineno, keyword, name in symbols:
+            level = len(indent) // 2 if indent else 0
+            prefix = "  " * level
+            output_lines.append(f"  L{lineno:<5d} {prefix}{keyword} {name}")
+
+    if not output_lines:
+        return f"在 {base} 下未找到可扫描的源文件（.py/.js/.ts/.jsx/.tsx）"
+
+    result = "\n".join(output_lines)
+    if len(result) > max_chars:
+        result = (
+            result[:max_chars]
+            + f"\n\n... [输出已截断（{len(output_lines)} 行中的 {max_chars} 字符）；"
+            f"用 path 参数缩到子目录重新查看]"
+        )
+    return result
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -1523,6 +1603,7 @@ ALL_TOOLS = [
     remember, forget,
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
+    code_map,
 ]
 
 
@@ -1569,6 +1650,7 @@ TOOL_DISPLAY_NAMES = {
     "read_background_output": "📋 读取后台输出",
     "list_background_commands": "📋 列出后台命令",
     "stop_background_command": "⏹ 停止后台命令",
+    "code_map": "🗺 代码地图",
 }
 
 
