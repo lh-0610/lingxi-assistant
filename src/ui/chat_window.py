@@ -72,6 +72,10 @@ _EMOJI_ICON = {
     "🔌": "plug.svg",
     # 工具区还会出现的拦截/安全提示
     "⚠️": "triangle-alert.svg", "⛔": "octagon-x.svg", "🔒": "lock.svg",
+    # 状态/过程（tool_result 等宽输出 + 错误/重试/图片识别）
+    "📁": "folder_lucide.svg", "📄": "file_text_lucide.svg", "⏱️": "timer.svg",
+    "✅": "circle-check.svg", "❌": "circle-x.svg", "🔎": "scan-search.svg",
+    "🔄": "refresh_cw_lucide.svg",
 }
 
 
@@ -558,6 +562,71 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 out.append(_html.escape(text[i]))
                 i += 1
         return "".join(out)
+
+    def _emoji_qimage(self, filename, color, size):
+        """把 icons/ 下的 SVG 渲染成 size×size 的主题色 QImage（DPR 感知，带缓存）。失败返回 None。"""
+        if not hasattr(self, "_emoji_img_cache"):
+            self._emoji_img_cache = {}
+        ck = (filename, color, size)
+        if ck in self._emoji_img_cache:
+            return self._emoji_img_cache[ck]
+        svg_path = os.path.join(BASE_DIR, "icons", filename)
+        if not os.path.exists(svg_path):
+            self._emoji_img_cache[ck] = None
+            return None
+        from PySide6.QtSvg import QSvgRenderer
+        with open(svg_path, "r", encoding="utf-8") as f:
+            svg = f.read().replace("currentColor", color)
+        renderer = QSvgRenderer(svg.encode("utf-8"))
+        dpr = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
+        side = max(1, int(size * dpr))
+        img = QImage(side, side, QImage.Format.Format_ARGB32)
+        img.fill(Qt.transparent)
+        p = QPainter(img)
+        renderer.render(p)
+        p.end()
+        img.setDevicePixelRatio(dpr)
+        self._emoji_img_cache[ck] = img
+        return img
+
+    def _insert_text_with_icons(self, cursor, text, fmt, size=14):
+        """按 fmt（字体/颜色/背景）插入 text，但把 _EMOJI_ICON 已知 emoji 就地换成内联 SVG 图片。
+        非 emoji 文本一律 insertText 原样插入——等宽 / 空白 / 换行完全保留，适合 tool_result
+        这类等宽工具输出（不能像 tool_tag 那样整段走 HTML，否则空白会被折叠、排版塌掉）。"""
+        from PySide6.QtGui import QTextImageFormat
+        keys = sorted(_EMOJI_ICON.keys(), key=len, reverse=True)
+        fg = fmt.foreground()
+        color = fg.color().name() if fg.style() else self._t("tool_result")
+        bg = fmt.background()
+        doc = self.chat_area.document()
+        n = len(text)
+        i = run_start = 0
+        while i < n:
+            emo = next((k for k in keys if text.startswith(k, i)), None)
+            if emo is None:
+                i += 1
+                continue
+            if i > run_start:
+                cursor.insertText(text[run_start:i], fmt)       # 刷出 emoji 前的普通文本段
+            img = self._emoji_qimage(_EMOJI_ICON[emo], color, size)
+            if img is not None:
+                name = ("emoji_" + _EMOJI_ICON[emo].replace(".", "_").replace("-", "_")
+                        + "_" + color.lstrip("#") + "_" + str(size))
+                doc.addResource(doc.ResourceType.ImageResource, name, img)
+                ifmt = QTextImageFormat()
+                ifmt.setName(name)
+                ifmt.setWidth(size)
+                ifmt.setHeight(size)
+                ifmt.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignMiddle)
+                if bg.style():
+                    ifmt.setBackground(bg)
+                cursor.insertImage(ifmt)
+            else:
+                cursor.insertText(emo, fmt)                      # 渲染失败回退原 emoji
+            i += len(emo)
+            run_start = i
+        if n > run_start:
+            cursor.insertText(text[run_start:n], fmt)
 
 
     def _build_chat_area(self, parent_layout):
@@ -1831,13 +1900,14 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         warn_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         warn_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
         fmt.setFont(warn_font)
-        cursor.insertText(f"\n⚠️ {error_msg}\n", fmt)
+        self._insert_text_with_icons(cursor, f"\n⚠️ {error_msg}\n", fmt, size=15)
 
         # 重试链接（QTextBrowser 支持 anchorClicked）
+        retry_icon = self._inline_svg_img("refresh_cw_lucide.svg", self._t("retry_link"), 16, "重试")
         cursor.insertHtml(
             f'<a href="action:retry" style="color:{self._t("retry_link")};font-size:16px;'
             f'text-decoration:none;background:{self._t("retry_link_bg")};padding:6px 18px;'
-            f'border:1px solid {self._t("retry_link_border")};border-radius:8px;">🔄 重试</a><br><br>'
+            f'border:1px solid {self._t("retry_link_border")};border-radius:8px;">{retry_icon} 重试</a><br><br>'
         )
 
         scroll()
@@ -2328,7 +2398,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             cursor.insertText(text, fmt)
         elif tag == "tool_result":
             fmt = _make_format(self._t("tool_result"), 13, bg=self._t("tool_result_bg"), family="Consolas")
-            cursor.insertText(text, fmt)
+            self._insert_text_with_icons(cursor, text, fmt, size=14)
         elif tag == "spacer":
             cursor.insertText("\n")
         elif tag == "ai_image":
