@@ -434,7 +434,7 @@ class ConfirmBarsMixin:
         # 危险命令在开头加醒目警告
         if is_dangerous:
             result = (
-                f'<span style="color:{danger_color};font-weight:bold">⚠ </span>'
+                self._inline_svg_img("triangle-alert.svg", danger_color, 13, "⚠") + " "
                 + result
             )
 
@@ -490,7 +490,7 @@ class ConfirmBarsMixin:
         self.command_confirm_text.setHtml(body_html)
         # 危险命令：标题加警告 + 隐藏"信任所有同类命令"行
         if self._command_confirm_destructive:
-            self._cmd_confirm_title.setText("⚠ 危险命令 · 是否允许？")
+            self._cmd_confirm_title.setText("危险命令 · 是否允许？")
             self._cmd_remember_btn.setVisible(False)
             self._cmd_confirm_hint.setText("1 选择 · 3 拒绝 · Esc 取消")
         else:
@@ -789,7 +789,12 @@ class ConfirmBarsMixin:
         self._edit_confirm_done_event = done_event
         self._edit_confirm_path = path
 
-        self.edit_confirm_path.setText(f"📝 {path}")
+        import html as _html_mod
+        self.edit_confirm_path.setTextFormat(Qt.RichText)
+        self.edit_confirm_path.setText(
+            self._inline_svg_img("file-pen.svg", "#3b82f6", 14, "编辑")
+            + " " + _html_mod.escape(path)
+        )
         # diff 渲染：加号绿色 / 减号红色 / 头部信息灰色
         self.edit_confirm_diff.setHtml(self._format_diff_html(diff_text))
         self.edit_confirm_bar.setVisible(True)

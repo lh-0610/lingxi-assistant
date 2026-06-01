@@ -2248,7 +2248,10 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             except Exception:
                 pass
 
-        toast = QLabel(text, self)
+        toast = QLabel(self)
+        # 已映射的 emoji（🧠/⚡ 等）换成内联 SVG；未映射的（🟡🟢🔴⚫ 状态点靠颜色表意）原样保留
+        toast.setTextFormat(Qt.RichText)
+        toast.setText(self._emoji_to_svg_html(text, self._t("toast_text"), size=13))
         toast.setStyleSheet(
             f"QLabel {{ background: {self._t('toast_bg')}; color: {self._t('toast_text')}; "
             f"padding: 8px 18px; border: 1px solid {self._t('toast_border')}; border-radius: 10px; "

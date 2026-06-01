@@ -191,7 +191,7 @@ class SettingsDialog(QDialog):
         self._add_custom_models_section(m)
 
         m.addStretch()
-        tabs.addTab(m_scroll, "🤖 模型")
+        tabs.addTab(m_scroll, self._settings_icon("bot.svg"), "模型")
 
         # ── 🎨 绘图 tab ──
         d_scroll, d = self._make_tab()
@@ -206,7 +206,7 @@ class SettingsDialog(QDialog):
                        "启用 FaceDetailer 修脸（需在 ComfyUI 装 Impact Pack）")
 
         d.addStretch()
-        tabs.addTab(d_scroll, "🎨 绘图")
+        tabs.addTab(d_scroll, self._settings_icon("palette.svg"), "绘图")
 
         # ── 🔊 语音 tab ──
         v_scroll, v = self._make_tab()
@@ -214,7 +214,7 @@ class SettingsDialog(QDialog):
         self._add_gpt_sovits_section(v)
 
         v.addStretch()
-        tabs.addTab(v_scroll, "🔊 语音")
+        tabs.addTab(v_scroll, self._settings_icon("volume-2.svg"), "语音")
 
         # ── 📱 远程 tab ──
         r_scroll, r = self._make_tab()
@@ -222,7 +222,7 @@ class SettingsDialog(QDialog):
         self._add_remote_section(r)
 
         r.addStretch()
-        tabs.addTab(r_scroll, "📱 远程")
+        tabs.addTab(r_scroll, self._settings_icon("smartphone.svg"), "远程")
 
         # ── ⚙ 高级 tab ──
         a_scroll, a = self._make_tab()
@@ -244,7 +244,7 @@ class SettingsDialog(QDialog):
         a.addWidget(mcp_hint)
 
         a.addStretch()
-        tabs.addTab(a_scroll, "⚙ 高级")
+        tabs.addTab(a_scroll, self._settings_icon("settings_lucide.svg"), "高级")
 
         root.addWidget(tabs, 1)
 
