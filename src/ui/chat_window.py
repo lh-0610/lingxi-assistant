@@ -790,8 +790,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # @文件名补全器
         self._file_completer = FileCompleter(self)
         self._file_completer.item_selected.connect(self._on_file_completer_selected)
+        self._file_completer.lister = self._list_project_dir  # 逐层浏览：列单层目录的回调
+        self._file_completer.reposition = self._position_completer  # 高度变后重定位（底部贴输入框）
         self._file_completer_files = None  # 缓存的文件列表
         self._file_completer_cache_key = None  # 缓存对应的项目路径
+        self._apply_completer_theme()  # 初始就给 delegate 设好 text_color/sel_bg，否则选中项白字看不清
 
         # 发送按钮
         self.send_btn = QPushButton()
@@ -824,6 +827,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self.command_confirm_bar.setFixedWidth(width)
         if hasattr(self, "edit_confirm_bar"):
             self.edit_confirm_bar.setFixedWidth(width)
+        # 输入框宽度变了：补全浮窗若开着，等布局刷完（singleShot 0）再按 input_container
+        # 的新尺寸/位置重对齐——立即调会拿到布局未稳定的旧几何，导致位置偏
+        if hasattr(self, "_file_completer") and self._file_completer.isVisible():
+            from PySide6.QtCore import QTimer as _QTimer
+            _QTimer.singleShot(0, self._position_completer)
 
 
     def _build_project_indicator(self, parent_layout):
@@ -1037,8 +1045,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         mention = self._get_active_mention()
         if mention is not None:
             _pos, partial = mention
-            files = self._get_project_files()
-            self._file_completer.set_files(files)
+            if not self._file_completer.isVisible():
+                self._file_completer.open_root()   # 首次打 @：从项目根开始逐层浏览
             self._file_completer.filter_and_show(partial)
             self._position_completer()
         else:
@@ -1071,17 +1079,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             return None
         return (idx, partial)
 
-    def _get_project_files(self):
-        """获取当前项目根下的文件列表（跳过噪声目录），带缓存。"""
-        import time
+    def _list_project_dir(self, rel_dir):
+        """列出 项目根/rel_dir 的直接子项 [(name, is_dir)]，跳噪声目录，文件夹优先。
+        逐层浏览：@ 浮窗每次只列一层，选文件夹进入下一层。"""
         project_root = getattr(state, 'current_project', None) or os.getcwd()
-        now = time.time()
-        # 缓存 60 秒
-        if (self._file_completer_cache_key == project_root
-                and self._file_completer_files is not None
-                and now - getattr(self, '_file_completer_cache_ts', 0) < 60):
-            return self._file_completer_files
-
+        target = os.path.join(project_root, rel_dir) if rel_dir else project_root
         ignore = {
             ".git", ".hg", ".svn", "node_modules", "bower_components",
             "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
@@ -1089,49 +1091,52 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             "build", "dist", "target", "out",
             ".next", ".nuxt", ".idea", ".vscode",
         }
-        files = []
-        max_files = 500
-        for dirpath, dirnames, filenames in os.walk(project_root):
-            dirnames[:] = [d for d in dirnames if d not in ignore]
-            for fn in filenames:
-                rel = os.path.relpath(os.path.join(dirpath, fn), project_root)
-                files.append(rel.replace("\\", "/"))
-                if len(files) >= max_files:
-                    break
-            if len(files) >= max_files:
-                break
-        files.sort(key=str.lower)
-        self._file_completer_files = files
-        self._file_completer_cache_key = project_root
-        self._file_completer_cache_ts = now
-        return files
+        try:
+            names = os.listdir(target)
+        except Exception:
+            return []
+        out = []
+        for n in names:
+            if n in ignore:
+                continue
+            is_dir = os.path.isdir(os.path.join(target, n))
+            out.append((n, is_dir))
+        out.sort(key=lambda t: (not t[1], t[0].lower()))  # 文件夹优先，再按名
+        return out
 
     def _position_completer(self):
-        """把补全浮窗定位到输入框光标正下方。"""
-        rect = self.entry.cursorRect()
-        global_pos = self.entry.viewport().mapToGlobal(rect.bottomLeft())
-        # 转成补全器父控件（self 即 ChatUI）的坐标
-        local_pos = self.mapFromGlobal(global_pos)
-        self._file_completer.move(local_pos.x() + 2, local_pos.y() + 2)
-        self._file_completer.setFixedWidth(max(360, self.entry.width() // 2))
+        """把补全浮窗定位到输入框【上方】，宽度/左右与输入框外框对齐。
+        基准用 input_container（带圆角的可见外框），不能用 entry——entry 是框内的
+        文本控件、比外框窄。浮窗是主窗口子控件，用相对主窗口的本地坐标 move + raise_。"""
+        anchor = getattr(self, "input_container", self.entry)
+        self._file_completer.setFixedWidth(anchor.width())  # 与输入框外框等宽
+        ph = self._file_completer.height()
+        top_left = anchor.mapTo(self, anchor.rect().topLeft())
+        self._file_completer.move(top_left.x(), top_left.y() - ph - 4)
+        self._file_completer.raise_()
 
     def _apply_completer_theme(self):
-        """按当前主题给文件补全器涂色。"""
-        t = self.theme
-        if t == "dark":
-            self._file_completer.setStyleSheet(
-                "FileCompleter { background: #1e1e2e; border: 1px solid #45475a; border-radius: 12px; padding: 4px; }")
-            self._file_completer.list_widget.setStyleSheet(
-                "QListWidget { background: transparent; border: none; outline: none; }"
-                "QListWidget::item { padding: 8px 12px; border-radius: 6px; color: #cdd6f4; }"
-                "QListWidget::item:hover, QListWidget::item[hovered=\"true\"] { background: #313244; }")
+        """按当前主题给文件补全器涂色：外框 + hover 走 QSS，文字/选中色交给 delegate
+        （delegate 自绘文字，所以颜色不能只靠 QSS 的 item color）。"""
+        if self.theme == "dark":
+            frame_bg, frame_border = "#1e1e2e", "#45475a"
+            hover_bg, text_color, sel_bg = "#313244", "#cdd6f4", "#585b70"
         else:
-            self._file_completer.setStyleSheet(
-                "FileCompleter { background: #ffffff; border: 1px solid #ddd; border-radius: 12px; padding: 4px; }")
-            self._file_completer.list_widget.setStyleSheet(
-                "QListWidget { background: transparent; border: none; outline: none; }"
-                "QListWidget::item { padding: 8px 12px; border-radius: 6px; color: #333; }"
-                "QListWidget::item:hover, QListWidget::item[hovered=\"true\"] { background: #e6f0ff; }")
+            frame_bg, frame_border = "#ffffff", "#dddddd"
+            hover_bg, text_color, sel_bg = "#e6f0ff", "#333333", "#cfe3ff"
+        self._file_completer.setStyleSheet(
+            f"FileCompleter {{ background: {frame_bg}; border: 1px solid {frame_border}; "
+            f"border-radius: 12px; padding: 4px; }}")
+        self._file_completer.list_widget.setStyleSheet(
+            "QListWidget { background: transparent; border: none; outline: none; }"
+            "QListWidget::item { border-radius: 6px; }"
+            f"QListWidget::item:hover {{ background: {hover_bg}; }}")
+        dlg = self._file_completer.list_widget.itemDelegate()
+        if dlg is not None and hasattr(dlg, "text_color"):
+            dlg.text_color = text_color
+            dlg.sel_bg = sel_bg
+            dlg.folder_icon = self._svg_icon("folder_lucide.svg", "#3b82f6").pixmap(16, 16)
+            dlg.file_icon = self._svg_icon("file_text_lucide.svg", text_color).pixmap(16, 16)
 
     def _on_file_completer_selected(self, relative_path: str):
         """补全浮窗选中文件 → 替换输入框中的 @partial 为 @相对路径。"""
@@ -1143,43 +1148,42 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # 选中从 @ 位置到当前光标之间的文本
         cursor.setPosition(at_pos)
         cursor.setPosition(self.entry.textCursor().position(), QTextCursor.KeepAnchor)
-        # 替换为 "@相对路径 "
+        # 替换为 "@相对路径 "，并给引用上强调色 + 加粗（视觉标识这是文件引用）；
+        # 随后的空格用默认格式插入，避免用户接着打字时文字继续带色
+        from PySide6.QtGui import QTextCharFormat, QColor
+        ref_fmt = QTextCharFormat()
+        ref_fmt.setForeground(QColor("#3b82f6"))
+        ref_fmt.setFontWeight(700)
         self.entry.blockSignals(True)
-        cursor.insertText(f"@{relative_path} ")
+        cursor.insertText(f"@{relative_path}", ref_fmt)
+        cursor.insertText(" ", QTextCharFormat())
+        self.entry.setTextCursor(cursor)                     # 同步光标到空格后
+        self.entry.setCurrentCharFormat(QTextCharFormat())   # 重置输入框当前格式，后续打字恢复默认色
         self.entry.blockSignals(False)
         self.entry.setFocus()
 
     def _expand_file_mentions(self, text: str) -> str:
-        """扫描文本中的 @相对路径，读取文件内容拼到文本末尾。"""
+        """扫描 @相对路径，【不注入文件内容】，而是末尾追加强提示，让 AI 自己用
+        read_file / list_directory 工具读取（历史干净 + 与工具体系一致）。"""
         import re as _re
         project_root = getattr(state, 'current_project', None) or os.getcwd()
         pattern = _re.compile(r'(?<!\S)@([^\s@]+)')
-        matches = list(pattern.finditer(text))
-        if not matches:
-            return text
-
-        MAX_LINES = 500
-        parts = [text, ""]  # 原文 + 空行
-        for m in matches:
+        refs = []
+        for m in pattern.finditer(text):
             rel_path = m.group(1)
             abs_path = os.path.join(project_root, rel_path)
-            if not os.path.isfile(abs_path):
-                continue
-            try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-            except Exception:
-                continue
-            truncated = False
-            if len(lines) > MAX_LINES:
-                lines = lines[:MAX_LINES]
-                truncated = True
-            content = "".join(lines)
-            if truncated:
-                content += f"\n... [已截断，共超过 {MAX_LINES} 行]"
-            parts.append(f"[引用文件 {rel_path}]:")
-            parts.append(f"```\n{content}\n```")
-        return "\n".join(parts)
+            if os.path.isdir(abs_path):
+                refs.append((rel_path, "目录", "list_directory"))
+            elif os.path.isfile(abs_path):
+                refs.append((rel_path, "文件", "read_file"))
+        if not refs:
+            return text
+        lines = [f"  - {rel}（{kind}）→ 用 {tool} 读取" for rel, kind, tool in refs]
+        hint = (
+            "\n\n[用户用 @ 引用了以下文件/目录，请【务必先调用对应工具读取其内容】"
+            "再据此回答，不要凭空作答]：\n" + "\n".join(lines)
+        )
+        return text + hint
 
     def _force_stop_generation(self):
         """强制停止当前生成，立即更新 UI 状态。
@@ -1599,13 +1603,46 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._has_input = False
         self._do_send(text, images)
 
+    def _append_user_text(self, text):
+        """显示用户消息：@文件引用渲染成蓝色加粗，其余用普通 user_msg 样式。"""
+        import re as _re
+        from PySide6.QtGui import QTextCharFormat, QFont as QF
+        scroll = self._scroll_guard()
+        cursor = self.chat_area.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        def _fmt(color, bold=False):
+            f = QTextCharFormat()
+            font = QF("Microsoft YaHei")
+            font.setPixelSize(15)
+            font.setWeight(QF.Weight.Bold if bold else QF.Weight.Normal)
+            font.setStyleStrategy(QF.StyleStrategy.PreferAntialias)
+            f.setFont(font)
+            f.setForeground(QColor(color))
+            return f
+
+        normal = _fmt(self._t("user_msg"))
+        ref = _fmt("#3b82f6", bold=True)
+        pattern = _re.compile(r'(?<!\S)@[^\s@]+')
+        pos = 0
+        for m in pattern.finditer(text):
+            if m.start() > pos:
+                cursor.insertText(text[pos:m.start()], normal)
+            cursor.insertText(m.group(0), ref)
+            pos = m.end()
+        if pos < len(text):
+            cursor.insertText(text[pos:], normal)
+        scroll()
+
     def _do_send(self, text: str, images=None):
         """核心发送逻辑，GUI 和远程共用。"""
         images = images or []
         self._clear_empty_state()
 
-        # @文件引用展开：把 @相对路径 替换为完整文件内容
-        text = self._expand_file_mentions(text)
+        # @文件引用：聊天区只显示原文 display_text，完整文件内容只注入发给 AI 的 send_text
+        # （避免把整个文件内容也刷在聊天界面上）
+        display_text = text
+        send_text = self._expand_file_mentions(text)
 
         # 带图片但当前模型不支持视觉时，不再把整轮任务切给弱视觉模型。
         # 改为先用视觉模型做识别/OCR，再把识别结果作为文本交回当前强模型。
@@ -1630,8 +1667,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._append_html("你\n", "user_label")
         if images:
             self._insert_images_in_chat(images)
-        if text:
-            self._append_html(text + "\n\n", "user_msg")
+        if display_text:
+            self._append_user_text(display_text + "\n\n")
         # 发消息后强制滚到底：看到自己刚发的 + 贴底后 AI 回复会自动跟随
         self._scroll_to_bottom()
 
@@ -1639,7 +1676,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             state.stop_flag = False
             threading.Thread(
                 target=self._run_vision_bridge_agent,
-                args=(text, images, vision_model_name, original_model_name),
+                args=(send_text, images, vision_model_name, original_model_name),
                 daemon=True,
             ).start()
             return
@@ -1651,11 +1688,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             for path, b64 in images:
                 ext = os.path.splitext(path)[1].lower().lstrip(".")
                 content.append(_build_image_content_block(ext, b64))
-            if text:
-                content.append({"type": "text", "text": text})
+            if send_text:
+                content.append({"type": "text", "text": send_text})
             agent.chat_history.append(HumanMessage(content=content))
         else:
-            agent.chat_history.append(HumanMessage(content=text))
+            agent.chat_history.append(HumanMessage(content=send_text))
 
         state.stop_flag = False
         threading.Thread(target=self._run_agent, daemon=True).start()
