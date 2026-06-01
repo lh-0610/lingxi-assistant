@@ -1,8 +1,12 @@
 """run_tests 工具测试：pytest 输出解析（_parse_pytest_output）+ 路径逃逸防护。
 
 核心解析是纯函数，喂假 pytest 文本验证；不嵌套真跑 pytest（端到端已手动验过）。
+_resolve_python 决定用哪个解释器跑 pytest（打包 frozen 安全）。
 """
-from src.tools import _parse_pytest_output, run_tests
+import os
+import sys
+
+from src.tools import _parse_pytest_output, run_tests, _resolve_python
 
 
 class TestParsePytestOutput:
@@ -59,3 +63,26 @@ class TestRunTestsGuard:
         # ../ 逃出项目根 → 直接拒绝，不跑 pytest
         out = run_tests.func("../")
         assert "不允许" in out or "项目范围" in out
+
+
+class TestResolvePython:
+    def test_dev_uses_sys_executable(self, project_dir, monkeypatch):
+        # 开发期（非 frozen）、项目无 venv → 用 sys.executable
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        assert _resolve_python() == sys.executable
+
+    def test_project_venv_preferred(self, project_dir, monkeypatch):
+        # 项目内有 venv → 优先用它的 python（即便开发期）
+        bindir = "Scripts" if os.name == "nt" else "bin"
+        pyname = "python.exe" if os.name == "nt" else "python"
+        vpy = project_dir / ".venv" / bindir
+        vpy.mkdir(parents=True)
+        (vpy / pyname).write_text("", encoding="utf-8")
+        assert _resolve_python() == str(vpy / pyname)
+
+    def test_frozen_skips_exe_uses_system(self, project_dir, monkeypatch):
+        # 打包后 sys.executable=exe 不能 -m pytest：无项目 venv → 退到系统 python
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr("src.tools.shutil.which",
+                            lambda n, *a, **k: r"C:\sys\python.exe" if n in ("python", "python3") else None)
+        assert _resolve_python() == r"C:\sys\python.exe"

@@ -4,6 +4,7 @@ import json
 import time
 import re
 import difflib
+import shutil
 import subprocess
 import threading
 import urllib.parse
@@ -556,7 +557,7 @@ def write_file(path: str, content: str) -> str:
             logger.warning(f"checkpoint 失败（不影响写入）: {e}")
         with open(full, "w", encoding="utf-8") as f:
             f.write(content)
-        return f"成功写入文件: {full}"
+        return f"成功写入文件: {full}" + _auto_check_suffix(full)
     except Exception as e:
         return f"写入失败: {e}"
 
@@ -584,7 +585,7 @@ def append_file(path: str, content: str) -> str:
             logger.warning(f"checkpoint 失败（不影响追加）: {e}")
         with open(full, "a", encoding="utf-8") as f:
             f.write(content)
-        return f"成功追加到文件: {full}"
+        return f"成功追加到文件: {full}" + _auto_check_suffix(full)
     except Exception as e:
         return f"追加失败: {e}"
 
@@ -887,10 +888,11 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
     count = len(spans)
     primary_line = line_nos[0] if line_nos else "?"
     level_hint = f"（{match_desc}）" if "L1" not in match_desc else ""
+    suffix = _auto_check_suffix(full)
     if count == 1:
-        return f"成功编辑 {full}（第 {primary_line} 行附近替换 1 处）{level_hint}"
+        return f"成功编辑 {full}（第 {primary_line} 行附近替换 1 处）{level_hint}" + suffix
     else:
-        return f"成功编辑 {full}（替换全部 {count} 处出现，第一处在第 {primary_line} 行）{level_hint}"
+        return f"成功编辑 {full}（替换全部 {count} 处出现，第一处在第 {primary_line} 行）{level_hint}" + suffix
 
 
 @tool
@@ -1664,13 +1666,31 @@ def _parse_pytest_output(stdout: str, elapsed: float = 0.0) -> str:
     return "\n".join(parts)
 
 
+def _resolve_python():
+    """挑一个真 Python 解释器跑 pytest（不是裸 sys.executable）：
+    ① 项目内 venv（.venv/venv/env）——最贴合被测项目的依赖
+    ② 开发期（非 frozen）用 sys.executable（应用自己的 Python，跟项目同环境时正好）
+    ③ 系统 PATH 上的 python/python3
+    打包(frozen)后 sys.executable=灵犀.exe、`-m pytest` 跑不了，故 frozen 下跳过 ②。"""
+    root = _project_cwd()
+    bindir = "Scripts" if os.name == "nt" else "bin"
+    pyname = "python.exe" if os.name == "nt" else "python"
+    for venv in (".venv", "venv", "env"):
+        cand = os.path.join(root, venv, bindir, pyname)
+        if os.path.isfile(cand):
+            return cand
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    return shutil.which("python") or shutil.which("python3") or sys.executable
+
+
 @tool
 def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     """跑 pytest 测试，返回精炼结果：通过/失败数 + 每个失败用例的位置和错误摘要。
     path: 测试路径/文件（相对项目根，空 = pytest 自动发现）。k: pytest -k 过滤表达式。
     比 run_command 跑 pytest 省事——直接给你哪些挂了、错在哪，便于定位修复。"""
-    # ── 构建命令：sys.executable -m pytest（不用裸 pytest） ──
-    cmd = [sys.executable, "-m", "pytest", "--tb=short", "-q"]
+    # ── 构建命令：<解释器> -m pytest（frozen 下 sys.executable=exe 不能用，见 _resolve_python） ──
+    cmd = [_resolve_python(), "-m", "pytest", "--tb=short", "-q"]
 
     # ── path 安全校验：_resolve_path + commonpath 防逃逸（同 code_map） ──
     if path:
@@ -1724,6 +1744,139 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
         summary = summary[:6000] + "\n... [输出已截断，超过 6000 字]"
 
     return summary
+
+
+# ══════════════════════════════════════
+# 自我校验闭环：静态检查（lint/语法），编辑后自动回灌错误给模型自修
+# ══════════════════════════════════════
+
+
+def _bundled_ruff():
+    """打包随 app 发的 ruff 可执行文件（onefile 在 _MEIPASS、onedir 在 exe 旁）。
+    见 lingxi.spec 的 _ruff_datas。没有返回 None。"""
+    name = "ruff.exe" if os.name == "nt" else "ruff"
+    bases = [getattr(sys, "_MEIPASS", None)]
+    if getattr(sys, "frozen", False):
+        bases.append(os.path.dirname(sys.executable))
+    for base in bases:
+        if base:
+            p = os.path.join(base, name)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def _run_code_check(full_path: str):
+    """对单个文件跑静态检查。返回 (issues, checker)：
+    - checker=None → 没有可用检查器（不支持的语言且没配 check_command）
+    - issues=""    → 检查通过、无问题
+    - issues=非空  → 问题文本（file:line: 说明）
+    Python 优先 ruff（只选 F/E9 = pyflakes 正确性 + 语法错，避开风格噪声），
+    没装 ruff 退化到 py_compile（只查语法）。其它语言走 config 的 check_command。"""
+    from .config import CHECK_COMMAND
+    ext = os.path.splitext(full_path)[1].lower()
+    cwd = _shell_cwd()
+
+    # 其它语言：用户自定义命令（shell 执行，{file} 占位）
+    if CHECK_COMMAND:
+        return _run_check_subprocess(CHECK_COMMAND.replace("{file}", full_path), cwd, True, "check_command")
+
+    if ext != ".py":
+        return None, None
+
+    # Python：优先 ruff。打包后 sys.executable=exe，-m ruff 跑不了，所以 frozen 下只认
+    # 独立二进制（ruff 是自包含 exe）；开发期才用 sys.executable -m ruff（不看 PATH 最稳）。
+    import importlib.util
+    frozen = getattr(sys, "frozen", False)
+    bundled = _bundled_ruff()
+    ruff_cmd = None
+    if bundled:
+        # 最优先：随包发的 ruff.exe（打包产物开箱即用、版本可控）
+        ruff_cmd = [bundled, "check", "--select", "F,E9", full_path]
+    elif not frozen and importlib.util.find_spec("ruff") is not None:
+        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--select", "F,E9", full_path]
+    elif shutil.which("ruff"):
+        ruff_cmd = [shutil.which("ruff"), "check", "--select", "F,E9", full_path]
+    if ruff_cmd:
+        return _run_check_subprocess(ruff_cmd, cwd, False, "ruff")
+
+    # 兜底：内置 compile() 进程内查语法——不起子进程，打包后（sys.executable=exe）照样可用。
+    # 只查语法错（抓不到未定义名/未用导入），建议在应用 Python 里 pip install ruff 拿完整检查。
+    return _py_syntax_check(full_path), "py_compile"
+
+
+def _run_check_subprocess(cmd, cwd, use_shell, checker):
+    """跑一个检查命令，返回 (issues, checker)。退出码 0 = 通过("")；非 0 = 问题文本。"""
+    try:
+        r = subprocess.run(
+            cmd, cwd=cwd, shell=use_shell, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+    except Exception:
+        return None, None
+    if r.returncode == 0:
+        return "", checker
+    out = ((r.stdout or "") + ("\n" + r.stderr if r.stderr else "")).strip()
+    if len(out) > 2000:
+        out = out[:2000] + "\n... [检查输出已截断]"
+    return out or f"{checker} 返回非零退出码（无输出）", checker
+
+
+def _py_syntax_check(full_path):
+    """用内置 compile() 在进程内查 Python 语法错（不起子进程，打包后也能用）。
+    通过返回 ""；语法错返回 "文件:行: SyntaxError: ..."；读不了文件返回 ""（不打扰）。"""
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            src = f.read()
+    except Exception:
+        return ""
+    try:
+        compile(src, full_path, "exec")
+        return ""
+    except SyntaxError as e:
+        return f"{os.path.basename(full_path)}:{e.lineno or '?'}: SyntaxError: {e.msg}"
+    except Exception as e:
+        return f"{os.path.basename(full_path)}: 语法检查失败: {e}"
+
+
+def _auto_check_suffix(full_path: str) -> str:
+    """编辑/写入成功后自动校验，返回追加到工具结果的提示串。
+    无问题 / 不支持的语言 / 开关关闭 → 返回 ""（不打扰）。"""
+    from .config import AUTO_CHECK_AFTER_EDIT
+    if not AUTO_CHECK_AFTER_EDIT:
+        return ""
+    try:
+        issues, checker = _run_code_check(full_path)
+    except Exception:
+        return ""
+    if not checker or not issues:
+        return ""
+    return f"\n\n⚠️ 自动校验（{checker}）发现问题，请修复后再继续：\n{issues}"
+
+
+@tool
+def check_code(path: str) -> str:
+    """静态检查单个代码文件（lint/语法），返回问题列表。Python 用 ruff（没装则
+    py_compile 只查语法）；其它语言用 config 的 check_command（{file} 占位）。
+    path: 要检查的文件（相对项目根）。注：编辑文件后已会自动校验，这个用于手动复查。"""
+    if not path:
+        return "请指定要检查的文件 path。"
+    resolved = _resolve_path(path)
+    root = _project_cwd()
+    try:
+        if os.path.commonpath([os.path.realpath(resolved), os.path.realpath(root)]) != os.path.realpath(root):
+            return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+    except ValueError:
+        return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+    if not os.path.exists(resolved):
+        return f"文件不存在: {resolved}"
+    issues, checker = _run_code_check(resolved)
+    if checker is None:
+        ext = os.path.splitext(resolved)[1] or "（无扩展名）"
+        return f"没有可用的检查器处理 {ext} 文件。可在 config.json 配 check_command（用 {{file}} 占位）。"
+    if not issues:
+        return f"✓ {checker} 检查通过，无问题。"
+    return f"{checker} 检查发现问题：\n{issues}"
 
 
 # ══════════════════════════════════════
@@ -1855,7 +2008,7 @@ ALL_TOOLS = [
     read_background_output, list_background_commands, stop_background_command,
     code_map,
     git_diff, git_log,
-    run_tests,
+    run_tests, check_code,
 ]
 
 
@@ -1906,6 +2059,7 @@ TOOL_DISPLAY_NAMES = {
     "git_diff": "🔀 查看改动",
     "git_log": "📜 提交历史",
     "run_tests": "🧪 跑测试",
+    "check_code": "🔎 代码检查",
 }
 
 

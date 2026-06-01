@@ -1,6 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import shutil as _shutil
+
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+# 随包发 ruff（完整 lint）：构建时定位系统 ruff，打进包根目录（运行时落在 _MEIPASS，
+# tools._bundled_ruff() 会优先找它）。找不到就跳过——产物退化到内置 py_compile 语法检查，
+# 不影响打包。要指定特定 ruff 用环境变量 RUFF_PATH。
+_ruff_path = os.environ.get("RUFF_PATH") or _shutil.which("ruff")
+if _ruff_path and os.path.isfile(_ruff_path):
+    _ruff_datas = [(_ruff_path, '.')]
+    print(f"[lingxi.spec] 随包打入 ruff: {_ruff_path}")
+else:
+    _ruff_datas = []
+    print("[lingxi.spec] 未找到 ruff，跳过；产物将退化到 py_compile 语法检查。"
+          "（pip install ruff 或设 RUFF_PATH 可启用完整 lint）")
 
 # MCP 客户端（可选功能）：mcp SDK 的子模块大多是函数内懒导入
 # （如 from mcp.client.sse import sse_client），PyInstaller 静态分析抓不到，
@@ -24,7 +39,7 @@ a = Analysis(
         ('assets', 'assets'),               # 桌宠 GIF + 静态立绘（走 RESOURCE_DIR/_MEIPASS 读）
         ('roles', 'roles'),                 # 默认角色卡目录
         ('config.example.json', '.'),       # 配置模板，首次启动时复制成 config.json
-    ] + _mcp_datas,
+    ] + _ruff_datas + _mcp_datas,
     hiddenimports=[
         # LangChain 各 provider 包，PyInstaller 静态分析有时识别不到
         'langchain_anthropic',

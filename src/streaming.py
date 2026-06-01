@@ -67,6 +67,7 @@ PLAN_MODE_READONLY_TOOLS = {
     "read_background_output", "list_background_commands",  # 读后台输出也算只读
     "code_map",  # 代码地图只读扫描
     "git_diff", "git_log",  # 只读 git：只看 diff/log，绝不碰 commit/add/push
+    "check_code",  # 静态检查只读分析（lint/语法），不改文件
 }
 
 

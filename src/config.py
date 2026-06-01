@@ -69,6 +69,12 @@ DEFAULT_MODEL_ID  = _config.get("default_model_id") or "mimo-v2.5-pro"
 # }
 CUSTOM_MODELS = _config.get("custom_models", [])
 
+# 自我校验闭环：编辑文件后自动跑静态检查（lint/语法），把错误回灌给模型自修
+AUTO_CHECK_AFTER_EDIT = _config.get("auto_check_after_edit", True)
+# 非 Python 项目可自定义检查命令，用 {file} 占位被检文件；
+# 留空 = 只对 Python 自动用 ruff（没装则退化到 py_compile 只查语法）
+CHECK_COMMAND = _config.get("check_command", "")
+
 # 语音
 VOICE_STT_MODEL = _config.get("voice_stt_model", "small")            # whisper 模型 size
 VOICE_STT_LANGUAGE = _config.get("voice_stt_language", "zh")
