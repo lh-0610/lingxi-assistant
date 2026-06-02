@@ -2452,15 +2452,16 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
         except Exception:
             pass
 
-    # ② 轮询（心跳判活）：进度推进就实时上报、重置卡死计时；进度连续 STALL 秒不动判卡死。
-    STALL = 90                      # 进度多少秒不推进 = 判定卡死
+    # ② 轮询直到 completed / failed / 总超时。
+    # 注意：Agnes 实测全程报 progress=0、最后一跳到 100（5 秒视频 ~122s），所以【不能靠进度判卡死】——
+    # 只认 status 判活；进度不可靠时按【时间】报"还在生成（已等 Xs）"心跳，让人知道没死。
     poll_url = f"{base}/{task_id}"
     t0 = time.time()
-    last_progress = -1              # 见过的最大进度
-    last_advance = t0               # 进度上次推进的时刻（心跳）
-    last_shown = -1                 # 上次报给 UI 的进度（≥15% 才报一次，防刷屏）
+    last_beat = t0                  # 上次给 UI 报活的时刻
+    last_shown_prog = -1
     data = {}
     video_url = None
+    BEAT = 25                       # 每隔多少秒报一次"还在生成"
     while time.time() - t0 < max_wait:
         time.sleep(6)
         try:
@@ -2468,30 +2469,28 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
         except Exception:
             continue
         status = (data.get("status") or "").lower()
-        prog = data.get("progress", 0) or 0
-        if prog > last_progress:                 # 心跳：进度涨了 → 活着，重置卡死计时
-            last_progress = prog
-            last_advance = time.time()
-            if _ui is not None and prog - last_shown >= 15:
-                last_shown = prog
-                try:
-                    _ui.show_message(f"\n🎬 视频生成中 {prog}%...\n", "tool_result")
-                except Exception:
-                    pass
         if status == "completed":
-            video_url = data.get("video_url")
+            # 实际视频地址在 remixed_from_video_id（Agnes 文档写 video_url，但实测对不上）
+            video_url = data.get("video_url") or data.get("remixed_from_video_id") or data.get("url")
             break
         if status in ("failed", "error", "cancelled"):
             _finrec(error=f"任务 {task_id} status={status}: {str(data)[:500]}")
             return f"视频生成失败（status={status}）: {str(data)[:300]}"
-        if time.time() - last_advance > STALL:   # 心跳超时：进度卡住太久 → 判卡死，提前放弃
-            _finrec(error=f"任务 {task_id} 进度 {STALL}s 无推进（卡在 {last_progress}%）")
-            return (f"视频生成疑似卡住：进度停在 {last_progress}% 超过 {STALL}s 没动，已放弃。"
-                    f"任务 {task_id}，可去 Agnes 后台查看。")
+        # 心跳：有真实进度就报进度，否则按时间报"还在生成（已等 Xs）"
+        prog = data.get("progress", 0) or 0
+        now = time.time()
+        if _ui is not None and (prog - last_shown_prog >= 15 or now - last_beat >= BEAT):
+            last_shown_prog = max(last_shown_prog, prog)
+            last_beat = now
+            tip = f"{prog}%" if prog > 0 else f"已等 {int(now - t0)}s"
+            try:
+                _ui.show_message(f"\n🎬 视频生成中（{tip}）...\n", "tool_result")
+            except Exception:
+                pass
     if not video_url:
-        _finrec(error=f"任务 {task_id} 总时长超 {max_wait}s，最后状态: {str(data)[:300]}")
-        return (f"视频生成超过总时长上限（{max_wait}s），任务 {task_id} 可能仍在处理。"
-                "可调大 max_wait 重试，或去 Agnes 后台查看。")
+        _finrec(error=f"任务 {task_id} 超 {max_wait}s 未完成，最后状态: {str(data)[:300]}")
+        return (f"视频生成超过 {max_wait}s 仍未完成（任务 {task_id}）。可能还在处理，"
+                "可稍后查或调大 max_wait。")
 
     # ③ 下载 mp4 到 outputs/
     try:

@@ -83,23 +83,28 @@ class TestGenerateVideo:
         assert captured.get("model") == "agnes-video-v2.0"
 
     def test_total_cap(self, project_dir, monkeypatch):
-        # max_wait=0 → 循环不进，直接命中总时长上限分支
+        # max_wait=0 → 循环不进，直接命中总时长上限分支（不靠进度判卡死，只认 status + 总上限）
         monkeypatch.setattr(config, "AGNES_API_KEY", "k")
         monkeypatch.setattr("src.tools.time.sleep", lambda *_: None)
         monkeypatch.setattr(requests, "post",
                             lambda *a, **k: FakeResp(200, {"id": "t", "status": "queued"}))
         monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp(200, {"status": "processing"}))
-        assert "总时长上限" in generate_video.func("x", max_wait=0)
+        assert "未完成" in generate_video.func("x", max_wait=0)
 
-    def test_stall_detection(self, project_dir, monkeypatch):
-        # 进度永远卡在 10% → 心跳超时（>90s 无推进）提前判卡死
+    def test_video_url_from_remixed_field(self, project_dir, monkeypatch):
+        # Agnes 实测把视频地址放在 remixed_from_video_id（不是文档写的 video_url）→ 也要能取到
         monkeypatch.setattr(config, "AGNES_API_KEY", "k")
         monkeypatch.setattr("src.tools.time.sleep", lambda *_: None)
-        # 让 time.time() 每次 +40s，几轮后累计无推进超过 STALL(90s)
-        seq = iter([1000 + 40 * i for i in range(500)])
-        monkeypatch.setattr("src.tools.time.time", lambda: next(seq))
         monkeypatch.setattr(requests, "post",
                             lambda *a, **k: FakeResp(200, {"id": "t", "status": "queued"}))
-        monkeypatch.setattr(requests, "get",
-                            lambda *a, **k: FakeResp(200, {"status": "processing", "progress": 10}))
-        assert "卡住" in generate_video.func("x", max_wait=100000)
+
+        def fake_get(url, *a, **k):
+            if url.endswith("/t"):
+                return FakeResp(200, {"status": "completed", "progress": 100,
+                                      "remixed_from_video_id": "http://v/real.mp4",
+                                      "size": "1152x768", "seconds": "5.0"})
+            return FakeResp(200, content=b"VID")
+        monkeypatch.setattr(requests, "get", fake_get)
+        out = generate_video.func("x", max_wait=60)
+        assert "已生成视频" in out
+        assert glob.glob(os.path.join(str(project_dir), "outputs", "*.mp4"))
