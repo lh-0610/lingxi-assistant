@@ -1854,6 +1854,274 @@ def _auto_check_suffix(full_path: str) -> str:
     return f"\n\n⚠️ 自动校验（{checker}）发现问题，请修复后再继续：\n{issues}"
 
 
+def _parse_patch(content: str):
+    """解析 patch 字符串，返回 (operations, errors)。
+
+    每个 operation 是 dict:
+      {"action": "add"|"update"|"delete", "path": str, "content": str,
+       "hunks": [{"hint": str, "lines": [str]}] (update only),
+       "new_lines": [str] (add only)}
+    errors 是 list[str]。
+    """
+    raw_lines = content.split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines = raw_lines[:-1]
+
+    if not any(l.startswith("*** Begin Patch") for l in raw_lines):
+        return [], ["缺少 *** Begin Patch 标记"]
+
+    operations = []
+    errors = []
+    current_op = None
+
+    for line in raw_lines:
+        sline = line.strip()
+
+        # 整体开始/结束标记（忽略）
+        if sline == "*** Begin Patch":
+            continue
+        if sline == "*** End Patch":
+            break
+
+        if sline.startswith("*** Update File:"):
+            path = sline[len("*** Update File:"):].strip()
+            current_op = {"action": "update", "path": path, "hunks": []}
+            operations.append(current_op)
+        elif sline.startswith("*** Add File:"):
+            path = sline[len("*** Add File:"):].strip()
+            current_op = {"action": "add", "path": path, "new_lines": []}
+            operations.append(current_op)
+        elif sline.startswith("*** Delete File:"):
+            path = sline[len("*** Delete File:"):].strip()
+            current_op = {"action": "delete", "path": path}
+            operations.append(current_op)
+        elif sline.startswith("***"):
+            errors.append(f"无法识别的文件操作: {sline}")
+        elif current_op is not None and current_op["action"] == "update":
+            if line.startswith("@@"):
+                hint = line[2:].strip()
+                current_op["hunks"].append({"hint": hint, "lines": []})
+            elif current_op["hunks"]:
+                current_op["hunks"][-1]["lines"].append(line)
+            else:
+                if line and not line.startswith(" "):
+                    errors.append(f"在 hunk 头 (@@) 之前遇到非上下文行: {line}")
+                current_op.setdefault("_preamble", []).append(line)
+        elif current_op is not None and current_op["action"] == "add":
+            if line.startswith("+"):
+                current_op["new_lines"].append(line[1:])
+            elif not line.strip():
+                pass
+            else:
+                current_op["new_lines"].append(line)
+
+    return operations, errors
+
+
+@tool
+def apply_patch(patch: str) -> str:
+    """批量文件补丁工具：在一个原子操作中创建、修改、删除多个文件。
+
+    Patch 格式（类似 git diff，但靠上下文定位、不用行号）：
+
+    *** Begin Patch
+    *** Update File: src/utils.py
+    @@
+     def greet(name):
+    -    print("hi")
+    +    print(f"hi {name}")
+    *** Add File: src/bar.py
+    +def baz():
+    +    return 1
+    *** Delete File: src/old.py
+    *** End Patch
+
+    规则（务必照做，否则文件内容会错）：
+    - 每个文件块以 *** Update File / Add File / Delete File: <相对路径> 开头
+    - Update 用 @@ 起一个 hunk；行首第一个字符是标记：空格=上下文、- =删除、+ =新增
+    - **标记后【紧跟】内容，标记和内容之间不要再加空格**：写 `+def x():` / `+    return 1`，
+      别写 `+ def x():`——那个空格会变成文件内容，导致缩进 / 语法错。缩进是内容自身的缩进。
+    - 上下文行写文件里【真实存在且连续】的行，**不能跳过中间的空行或其它行**
+      （定位靠精确匹配，不够精确会判失败、让你补全上下文重试，绝不模糊猜测）
+    - Add File：每行都是 +<内容>；目标已存在 → 失败
+    - Delete File：无 hunk；目标不存在 → 失败
+    - 路径不能用 ../ 逃出项目；任何 hunk 定位失败或路径非法 → 整个 patch 中止、不改任何文件
+    - 改完自动跑代码检查（lint/语法），有问题会一并提示
+    """
+    # ── Phase 1: 解析 ──
+    operations, parse_errors = _parse_patch(patch)
+    if parse_errors:
+        return "Patch 格式错误:\n" + "\n".join(f"  - {e}" for e in parse_errors)
+
+    if not operations:
+        return "Patch 为空（没有文件操作）。"
+
+    # ── Phase 2: 校验 + 内存计算（不写盘）──
+    root = _project_cwd()
+    resolved_ops = []       # (action, full_path, old_content, new_content, resolved_path)
+    errors = []
+
+    for op in operations:
+        action = op["action"]
+        path = op["path"]
+        if not path:
+            errors.append(f"路径为空（{action} 操作）")
+            continue
+
+        resolved = _resolve_path(path)
+        try:
+            if os.path.commonpath([os.path.realpath(resolved), os.path.realpath(root)]) != os.path.realpath(root):
+                errors.append(f"路径超出项目范围，不允许: {path}")
+                continue
+        except ValueError:
+            errors.append(f"路径超出项目范围，不允许: {path}")
+            continue
+
+        if action == "update":
+            if not os.path.isfile(resolved):
+                errors.append(f"文件不存在，无法更新: {path}")
+                continue
+            with open(resolved, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            hunk_failures = []
+            for i, hunk in enumerate(op["hunks"]):
+                # hunk → old_block(上下文+删除行) / new_block(上下文+新增行)，复用 edit_file 的
+                # _locate_edit 做【连续块】匹配 + 缩进对齐（不自己造"允许间隙"的匹配器——那会把
+                # 上下文行锚到文件里不相干的散落位置、产出垃圾编辑）。
+                old_lines, new_lines = [], []
+                for line in hunk["lines"]:
+                    if line.startswith("-"):
+                        old_lines.append(line[1:])
+                    elif line.startswith("+"):
+                        new_lines.append(line[1:])
+                    else:
+                        c = line[1:] if line.startswith(" ") else line
+                        old_lines.append(c)
+                        new_lines.append(c)
+
+                if not old_lines:
+                    hunk_failures.append(f"Hunk {i+1}: 无上下文/删除行，无法定位（纯新增请带上下文）")
+                    continue
+
+                old_block = "\n".join(old_lines)
+                new_block = "\n".join(new_lines)
+                status, spans, new_texts, info = _locate_edit(content, old_block, new_block, False)
+                # 多文件原子补丁不做模糊猜测：只接受精确 / 规范化(去行尾空白 + 缩进重对齐)匹配，
+                # 且必须唯一命中。none/fuzzy/multi 一律判失败——让模型补全连续上下文重试，
+                # 绝不在原子补丁里靠相似度猜位置（会 silent 改错地方）。
+                if status not in ("exact", "normalized") or len(spans) != 1:
+                    reason = {
+                        "none": "未找到对应连续块",
+                        "fuzzy": "只能模糊匹配，上下文不够精确",
+                        "multi": "匹配到多处无法确定",
+                    }.get(status, status)
+                    hunk_failures.append(f"Hunk {i+1} 定位失败（{reason}）——请给更精确的连续上下文")
+                    continue
+                start, end = spans[0]
+                content = content[:start] + new_texts[0] + content[end:]
+
+            if hunk_failures:
+                errors.append(f"文件 {path}:\n" + "\n".join(f"  - {e}" for e in hunk_failures))
+                continue
+
+            resolved_ops.append((action, path, resolved, None, content))
+
+        elif action == "add":
+            if os.path.exists(resolved):
+                errors.append(f"文件已存在，无法新增: {path}")
+                continue
+            new_content = "\n".join(op.get("new_lines", []))
+            if new_content and not new_content.endswith("\n"):
+                new_content += "\n"
+            resolved_ops.append((action, path, resolved, None, new_content))
+
+        elif action == "delete":
+            if not os.path.exists(resolved):
+                errors.append(f"文件不存在，无法删除: {path}")
+                continue
+            resolved_ops.append((action, path, resolved, None, None))
+
+    if errors:
+        return "Patch 校验失败:\n" + "\n".join(f"  - {e}" for e in errors)
+
+    # ── Phase 3: 汇总 diff ──
+    all_diffs = []
+    for action, path, resolved, _, new_content in resolved_ops:
+        if action == "update":
+            with open(resolved, "r", encoding="utf-8") as f:
+                old_content = f.read()
+            diff_text = "".join(difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=f"a/{path}", tofile=f"b/{path}", n=3,
+            ))
+            if diff_text:
+                all_diffs.append(diff_text)
+        elif action == "add":
+            diff_text = "".join(difflib.unified_diff(
+                [],
+                new_content.splitlines(keepends=True),
+                fromfile="/dev/null", tofile=f"b/{path}", n=3,
+            ))
+            all_diffs.append(diff_text)
+        elif action == "delete":
+            with open(resolved, "r", encoding="utf-8") as f:
+                old_content = f.read()
+            diff_text = "".join(difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                [],
+                fromfile=f"a/{path}", tofile="/dev/null", n=3,
+            ))
+            all_diffs.append(diff_text)
+
+    if not all_diffs:
+        return "Patch 为空（没有实际变化）。"
+
+    combined_diff = "\n".join(all_diffs)
+
+    # ── Phase 4: 用户确认 ──
+    allowed, reject = _confirm_file_write("(patch)", "", combined_diff)
+    if not allowed:
+        return reject
+
+    # ── Phase 5: 写盘 ──
+    added_files = 0
+    modified_files = 0
+    deleted_files = 0
+    check_warnings = []
+
+    for action, path, resolved, _, new_content in resolved_ops:
+        try:
+            _checkpoint.make_checkpoint(root, f"apply_patch_{action}", resolved)
+        except Exception as e:
+            logger.warning(f"checkpoint 失败（不影响 patch 应用）: {e}")
+
+        if action == "add":
+            os.makedirs(os.path.dirname(os.path.abspath(resolved)), exist_ok=True)
+            with open(resolved, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            added_files += 1
+        elif action == "update":
+            with open(resolved, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            modified_files += 1
+        elif action == "delete":
+            os.remove(resolved)
+            deleted_files += 1
+
+        if action in ("add", "update"):
+            issues, checker = _run_code_check(resolved)
+            if checker and issues:
+                check_warnings.append(f"{path}:\n{issues}")
+
+    # ── 组装结果 ──
+    parts = [f"Patch 已应用: {added_files} 个新增, {modified_files} 个修改, {deleted_files} 个删除"]
+    if check_warnings:
+        parts.append("\n⚠️ 自动校验发现问题:\n" + "\n".join(check_warnings))
+    return "\n".join(parts)
+
+
 @tool
 def check_code(path: str) -> str:
     """静态检查单个代码文件（lint/语法），返回问题列表。Python 用 ruff（没装则
@@ -2009,6 +2277,7 @@ ALL_TOOLS = [
     code_map,
     git_diff, git_log,
     run_tests, check_code,
+    apply_patch,
 ]
 
 
@@ -2060,6 +2329,7 @@ TOOL_DISPLAY_NAMES = {
     "git_log": "📜 提交历史",
     "run_tests": "🧪 跑测试",
     "check_code": "🔎 代码检查",
+    "apply_patch": "📦 批量补丁",
 }
 
 
