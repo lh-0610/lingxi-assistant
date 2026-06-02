@@ -434,36 +434,41 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                         if isinstance(_blk, dict) and _blk.get('type') == 'text' and _blk.get('text'):
                             _text_parts.append(_blk['text'])
                     _ai_content = "\n".join(_text_parts)
-                # 工具调用轮次显示工具摘要
-                if not _ai_content or not _ai_content.strip():
-                    # 显示工具调用摘要
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        tool_names = [tc.get('name', '?') for tc in msg.tool_calls if isinstance(tc, dict)]
-                        if tool_names:
-                            rendered_any = True
-                            self._append_html("灵犀", "ai_label")
-                            self._append_html(f"🔧 调用了工具: {', '.join(tool_names)}\n\n", "tool_result")
-                    continue
-                rendered_any = True
+                _has_text = bool(_ai_content and _ai_content.strip())
+                _tool_names = [tc.get('name', '?') for tc in (getattr(msg, 'tool_calls', None) or [])
+                               if isinstance(tc, dict)]
                 ai_name = agent.get_current_role_name() or "AI"
-                self._append_html(f"{ai_name}\n", "ai_label")
-                styled_html = self._md_to_html(_ai_content)
-                cursor = self.chat_area.textCursor()
-                cursor.movePosition(QTextCursor.End)
-                cursor.insertHtml(styled_html)
-                # 同 _render_markdown：用表格 spacer 撑开正文与按钮间的距离，
-                # QTextDocument 对 <div margin> 支持太差
-                spacer = '<table border="0" cellspacing="0" cellpadding="0"><tr><td style="height:18px;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>'
-                cursor.insertHtml(spacer)
-                msg_idx = len(self._msg_buffers)
-                self._msg_buffers[str(msg_idx)] = _ai_content
-                copy_icon = self._inline_svg_img("copy_lucide.svg", self._t("copy_link"), 15, "Copy")
-                cursor.insertHtml(
-                    f'<a href="action:copy_msg:{msg_idx}" style="color:{self._t("copy_link")};font-size:13px;'
-                    f'text-decoration:none;padding:3px 8px;background:{self._t("copy_link_bg")};border-radius:5px;" title="复制">'
-                    f'{copy_icon}</a>'
-                )
-                cursor.insertText("\n\n")
+
+                # 有正文就渲染正文 + 复制按钮
+                if _has_text:
+                    rendered_any = True
+                    self._append_html(f"{ai_name}\n", "ai_label")
+                    styled_html = self._md_to_html(_ai_content)
+                    cursor = self.chat_area.textCursor()
+                    cursor.movePosition(QTextCursor.End)
+                    cursor.insertHtml(styled_html)
+                    # 同 _render_markdown：用表格 spacer 撑开正文与按钮间的距离，
+                    # QTextDocument 对 <div margin> 支持太差
+                    spacer = '<table border="0" cellspacing="0" cellpadding="0"><tr><td style="height:18px;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>'
+                    cursor.insertHtml(spacer)
+                    msg_idx = len(self._msg_buffers)
+                    self._msg_buffers[str(msg_idx)] = _ai_content
+                    copy_icon = self._inline_svg_img("copy_lucide.svg", self._t("copy_link"), 15, "Copy")
+                    cursor.insertHtml(
+                        f'<a href="action:copy_msg:{msg_idx}" style="color:{self._t("copy_link")};font-size:13px;'
+                        f'text-decoration:none;padding:3px 8px;background:{self._t("copy_link_bg")};border-radius:5px;" title="复制">'
+                        f'{copy_icon}</a>'
+                    )
+                    cursor.insertText("\n\n")
+
+                # 有工具调用就显示摘要——不管这条 AIMessage 有没有正文。
+                # （之前只在"无正文"时显示，导致 MiMo "短文字 + 工具调用"同条时工具被吞，
+                #   恢复的历史看不出调了哪些工具，整段很怪）
+                if _tool_names:
+                    rendered_any = True
+                    if not _has_text:
+                        self._append_html(f"{ai_name}\n", "ai_label")
+                    self._append_html(f"🔧 调用了工具: {', '.join(_tool_names)}\n\n", "tool_result")
             elif msg.__class__.__name__ == "ToolMessage":
                 # generate_image 的工具结果：重新显示生成的图片
                 content = msg.content or ""
