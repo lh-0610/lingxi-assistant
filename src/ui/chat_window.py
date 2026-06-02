@@ -868,6 +868,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._file_completer_files = None  # 缓存的文件列表
         self._file_completer_cache_key = None  # 缓存对应的项目路径
         self._apply_completer_theme()  # 初始就给 delegate 设好 text_color/sel_bg，否则选中项白字看不清
+        self._file_completer.hide()    # 必须显式隐藏：它是主窗口子控件，不 hide 的话窗口一 show
+                                       # 就会空着冒出来（停在 0,0，缩放窗口时被 _resize_input_container 重定位到输入框上方）
 
         # 发送按钮
         self.send_btn = QPushButton()
