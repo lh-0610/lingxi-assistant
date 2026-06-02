@@ -1722,6 +1722,14 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         display_text = text
         send_text = self._expand_file_mentions(text)
 
+        # 上传/拖拽/粘贴的图片都带本地路径——把路径注入给模型（像 @文件一样），它就能拿去做
+        # 图生视频（generate_video）或其它图片处理。视觉看图仍走 base64 block，这里只多给个"文件句柄"。
+        if images:
+            _paths = "、".join(p for p, _ in images)
+            _hint = (f"[本次随消息上传了 {len(images)} 张图片，本地路径"
+                     f"（做图生视频 generate_video 或需要图片文件时可直接把路径传给工具）：{_paths}]")
+            send_text = (send_text + "\n\n" + _hint) if send_text else _hint
+
         # 带图片但当前模型不支持视觉时，不再把整轮任务切给弱视觉模型。
         # 改为先用视觉模型做识别/OCR，再把识别结果作为文本交回当前强模型。
         use_vision_bridge = bool(images) and not agent.current_model_supports_vision()

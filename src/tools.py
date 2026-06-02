@@ -2394,7 +2394,8 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
                    num_frames: int = 121, frame_rate: int = 24, max_wait: int = 600) -> str:
     """用 Agnes Video V2.0 生成视频（文生视频；传 image 则图生视频/让图动起来）。
     异步任务：创建 → 轮询（带进度心跳）→ 下载 mp4 存到项目 outputs/。
-    prompt: 视频内容文字描述。image: 可选，输入图片 URL。
+    prompt: 视频内容文字描述。image: 可选，输入图片——可传 http(s) URL，也可传本地文件路径
+            （本地路径会自动上传到 litterbox 临时图床 1h 换成公网 URL，因为 Agnes 只能拉公网图）。
     width/height: 默认 1152x768。num_frames: 帧数，需 ≤441 且为 8n+1（默认 121≈5 秒 @24fps）。
     frame_rate: FPS（1-60）。max_wait: 总时长上限秒数（兜底，默认 600）。
     轮询用心跳判活：进度推进就实时上报、不砍；进度卡住 90 秒不动判为卡死、提前放弃。
@@ -2404,12 +2405,31 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
         return "未配置 Agnes API key，请在 config.json 填 agnes_api_key（agnes-ai.com 免费申请）。"
     import requests as _requests
 
+    # 图生视频：image 可以是 http(s) URL（直接用）或本地路径。本地路径自动上传到 litterbox
+    # 临时图床（1h 后过期，比永久图床隐私）换成公网 URL——Agnes 服务器只能拉公网图。
+    if image and not image.lower().startswith(("http://", "https://")):
+        img_path = _resolve_path(image)
+        if not os.path.isfile(img_path):
+            return f"图片不存在: {image}"
+        try:
+            with open(img_path, "rb") as _f:
+                up = _requests.post(
+                    "https://litterbox.catbox.moe/resources/internals/api.php",
+                    data={"reqtype": "fileupload", "time": "1h"},
+                    files={"fileToUpload": _f}, timeout=60)
+            url = (up.text or "").strip()
+            if not (200 <= up.status_code < 300) or not url.startswith("http"):
+                return f"本地图片上传失败（litterbox）：HTTP {up.status_code} {up.text[:200]}"
+            image = url     # 换成公网临时 URL
+        except Exception as e:
+            return f"本地图片上传失败：{e}"
+
     base = "https://apihub.agnes-ai.com/v1/videos"
     headers = {"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"}
     body = {"model": "agnes-video-v2.0", "prompt": prompt,
             "width": width, "height": height, "num_frames": num_frames, "frame_rate": frame_rate}
     if image:
-        body["image"] = image     # 图生视频
+        body["image"] = image     # 图生视频（此时已是公网 URL）
 
     # F12 调试记录：把这次 Agnes API 调用的请求 / 响应 / 错误记进 debug inspector。
     # 用 _finrec 在每个出口统一收尾，保证无论成功失败都能在 F12 看到。

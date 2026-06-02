@@ -108,3 +108,25 @@ class TestGenerateVideo:
         out = generate_video.func("x", max_wait=60)
         assert "已生成视频" in out
         assert glob.glob(os.path.join(str(project_dir), "outputs", "*.mp4"))
+
+    def test_local_image_uploaded_to_litterbox(self, project_dir, monkeypatch):
+        # 本地图片路径 → 先传 litterbox 换公网 URL → 该 URL 进 Agnes 请求体的 image 字段
+        monkeypatch.setattr(config, "AGNES_API_KEY", "k")
+        monkeypatch.setattr("src.tools.time.sleep", lambda *_: None)
+        img = project_dir / "pic.png"
+        img.write_bytes(b"\x89PNG_fake_image")
+        captured = {}
+
+        def fake_post(url, *a, **k):
+            if "litterbox" in url:
+                return FakeResp(200, text="https://litter.catbox.moe/abc.png")
+            captured.update(k.get("json") or {})        # Agnes 创建任务
+            return FakeResp(200, {"id": "t", "status": "queued"})
+        monkeypatch.setattr(requests, "post", fake_post)
+        monkeypatch.setattr(
+            requests, "get",
+            lambda u, *a, **k: (FakeResp(200, {"status": "completed",
+                                               "remixed_from_video_id": "http://v/x.mp4"})
+                                if u.endswith("/t") else FakeResp(200, content=b"V")))
+        generate_video.func("animate it", image=str(img), max_wait=60)
+        assert captured.get("image") == "https://litter.catbox.moe/abc.png"
