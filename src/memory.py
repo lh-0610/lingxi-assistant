@@ -309,6 +309,10 @@ def load_session(session_id):
 
     state.current_session_id = session_id
     state.current_session_title = data.get("title")
+    state.current_plan = []  # 旧会话没存计划，残留当前计划会误导
+    # 切换会话时清空压缩缓存（压缩是运行时状态，不持久化到会话文件）
+    state.compaction["summary"] = ""
+    state.compaction["covered_upto"] = 0
     logger.info(f"会话已加载: {session_id}")
     return True
 
@@ -406,3 +410,7 @@ def reset_history():
     state.current_session_id = None
     state.current_session_title = None
     state.shell_cwd = None  # cd 上下文回项目根
+    state.current_plan = []  # 计划是会话级临时状态，新对话清空
+    # 压缩缓存也一并清空，新会话从头开始
+    state.compaction["summary"] = ""
+    state.compaction["covered_upto"] = 0

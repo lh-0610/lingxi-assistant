@@ -62,5 +62,6 @@ docs/
 
 # 临时输出
 output/
+outputs/
 tmp/
 *.tmp

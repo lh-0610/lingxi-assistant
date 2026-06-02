@@ -9,7 +9,7 @@ import os
 import time
 import threading as _threading
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from . import state
 from . import debug_log
@@ -17,6 +17,7 @@ from .paths import logger
 from .models import MODEL_LIST, current_model_supports_vision
 from .tools import TOOL_DISPLAY_NAMES, get_tool_map
 from .limits import (
+    COMPACTION_SUMMARY_MAX_CHARS,
     HISTORY_KEEP_RECENT,
     HISTORY_TOKEN_BUDGET,
     STREAM_RETRY_ATTEMPTS,
@@ -63,6 +64,7 @@ STREAMING_TOOLS = {"run_command"}
 PLAN_MODE_READONLY_TOOLS = {
     "read_file", "list_directory", "search_in_file", "search_files",
     "remember", "forget",  # 记笔记不该被 Plan 拦
+    "update_plan",  # 列计划是 Plan 模式的核心动作
     "notify_user",  # 通知用户不该被 Plan 拦
     "read_background_output", "list_background_commands",  # 读后台输出也算只读
     "code_map",  # 代码地图只读扫描
@@ -190,6 +192,137 @@ def _maybe_trim_history(messages, budget=HISTORY_TOKEN_BUDGET, keep_recent=HISTO
         f"如需查阅，请在 UI 上滚动查看完整对话。]"
     )
     return head + [placeholder] + tail, dropped
+
+
+# ── 会话历史压缩（Compaction）──
+# 超 token 预算时把中段旧消息总结成一条摘要，替代直接丢弃。
+
+_COMPACT_SYSTEM_PROMPT = (
+    "下面是一段较早的对话历史。请压缩成一段简洁摘要，保留对后续工作有用的信息：\n"
+    "- 用户最初的核心需求 / 目标\n"
+    "- 已经完成的操作（改过哪些文件、跑了什么命令/测试、结论）\n"
+    "- 重要的发现、决定、踩过的坑\n"
+    "- 尚未完成的事项\n"
+    f"丢掉寒暄和中间试错的冗余细节。用中文，{COMPACTION_SUMMARY_MAX_CHARS} 字以内，分点列出。"
+)
+
+
+def _msg_to_plain_text(msg) -> str:
+    """把单条消息渲染成可读纯文本（给压缩调用用，避免 tool_use/tool_result 配对问题）。"""
+    cls = msg.__class__.__name__
+    content = getattr(msg, "content", "") or ""
+
+    # 提取文本：content 可能是 str 或 list of content blocks
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for blk in content:
+            if isinstance(blk, dict) and blk.get("type") == "text" and blk.get("text"):
+                parts.append(blk["text"])
+        text = "\n".join(parts)
+    else:
+        text = str(content)
+
+    if cls == "HumanMessage":
+        return f"用户: {text}"
+    elif cls == "AIMessage":
+        tcs = getattr(msg, "tool_calls", None) or []
+        if tcs:
+            tc_str = ", ".join(
+                f"{tc.get('name', '?')}({tc.get('args', {})})" for tc in tcs
+            )
+            return f"助手: [调用工具 {tc_str}]" + (f"\n{text}" if text.strip() else "")
+        return f"助手: {text}"
+    elif cls == "ToolMessage":
+        tc_id = getattr(msg, "tool_call_id", "") or ""
+        return f"[工具 {tc_id} 结果]: {text[:500]}"
+    elif cls == "SystemMessage":
+        return f"[系统]: {text}"
+    return text
+
+
+def _compact_history(
+    messages, budget=HISTORY_TOKEN_BUDGET, keep_recent=HISTORY_KEEP_RECENT
+):
+    """超预算时用 LLM 压缩中段消息为摘要（滚动缓存 + 失败降级）。
+
+    返回 (新 messages, dropped_count)。不 mutate state.chat_history。
+    缓存命中（covered_upto >= cut）时不调 LLM，零成本复用。
+    """
+    est = _estimate_tokens(messages)
+    if est <= budget:
+        return messages, 0
+
+    # 分离：system + tail（保留最近 keep_recent 条原始消息）
+    has_system = bool(messages) and isinstance(messages[0], SystemMessage)
+    system_msg = messages[0] if has_system else None
+    tail = messages[-keep_recent:] if keep_recent > 0 else messages[-1:]
+    # 去重：system 可能和 tail 头一条重合
+    if system_msg and tail and system_msg is tail[0]:
+        tail = list(tail[1:])
+
+    # 压缩区间 [1, cut)，cut = len(messages) - keep_recent
+    cut = len(messages) - keep_recent
+    if cut <= 1:
+        return messages, 0  # 没有中段可压缩
+
+    comp = state.compaction
+    prev_summary = comp.get("summary", "")
+    prev_covered = comp.get("covered_upto", 0)
+
+    if prev_covered >= cut and prev_summary:
+        # ── 缓存命中：中段没新增，直接复用旧摘要，不调 LLM ──
+        summary = prev_summary
+    else:
+        # ── 需要压缩：旧摘要 + 「上次覆盖点之后的新增中段」喂 LLM 总结 ──
+        # 有旧摘要时只取 messages[prev_covered:cut] 的新增段，避免把已压进
+        # prev_summary 的旧消息又作为原文重发一遍（滚动压缩的关键，否则二次
+        # 压缩反而比不压更费 token）。首次压缩（无旧摘要）取整个中段 [1:cut]。
+        mid_start = prev_covered if (prev_summary and prev_covered >= 1) else 1
+        mid_msgs = messages[mid_start:cut]
+        mid_msgs = _strip_images_for_text_only_model(mid_msgs)
+        mid_text = "\n".join(_msg_to_plain_text(m) for m in mid_msgs)
+
+        if prev_summary:
+            full_text = f"[之前已有摘要]:\n{prev_summary}\n\n[新增对话]:\n{mid_text}"
+        else:
+            full_text = mid_text
+
+        compress_msgs = [
+            SystemMessage(content=_COMPACT_SYSTEM_PROMPT),
+            HumanMessage(content=full_text),
+        ]
+
+        try:
+            resp = state.llm.invoke(compress_msgs)
+            # 提取纯文本（兼容 Anthropic content block list 和 OpenAI 字符串）
+            raw = getattr(resp, "content", "") or ""
+            if isinstance(raw, list):
+                parts = [
+                    b.get("text", "")
+                    for b in raw
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                summary = "\n".join(parts).strip()
+            else:
+                summary = str(raw).strip()
+            # 裁剪过长摘要（留 1 字符给省略号）
+            if len(summary) > COMPACTION_SUMMARY_MAX_CHARS:
+                summary = summary[: COMPACTION_SUMMARY_MAX_CHARS - 1] + "…"
+            # 更新缓存
+            comp["summary"] = summary
+            comp["covered_upto"] = cut
+        except Exception:
+            # ── 失败降级：回退到现有的直接裁剪 ──
+            logger.warning("会话历史压缩失败，降级到直接裁剪", exc_info=True)
+            return _maybe_trim_history(messages, budget, keep_recent)
+
+    # ── 组装：system + 摘要 + tail ──
+    summary_msg = SystemMessage(content=f"[历史摘要]:\n{summary}")
+    result = ([system_msg] if system_msg else []) + [summary_msg] + list(tail)
+    dropped = len(messages) - len(result)
+    return result, dropped
 
 
 def _wrap_system_for_cache(messages, fresh_system_text: str, provider: str):
@@ -363,14 +496,14 @@ def _prepare_stream_history(ui):
             history_for_send, fresh_system, provider=MODEL_LIST[state.current_model_index][1],
         )
 
-    # 滑动窗口：超过预算就裁掉中段。state.chat_history 本身不改，UI 上保留完整历史，
-    # 只是本次发给 LLM 的 history_for_send 被压缩了。
-    history_for_send, _trimmed = _maybe_trim_history(history_for_send)
+    # 会话历史压缩：超过预算时用 LLM 压缩中段为摘要（滚动缓存，失败降级裁剪）。
+    # state.chat_history 本身不改，UI 上保留完整历史，只是发给 LLM 的 history_for_send 被压缩。
+    history_for_send, _trimmed = _compact_history(history_for_send)
     if _trimmed > 0:
-        logger.info(f"会话历史超阈值，本轮裁剪 {_trimmed} 条旧消息")
+        logger.info(f"会话历史超阈值，本轮压缩裁剪 {_trimmed} 条旧消息")
         try:
             ui.show_message(
-                f"\n⚠️ 对话历史过长，本轮自动裁掉中间 {_trimmed} 条（保留首条 system 提示 + 最近"
+                f"\n⚠️ 对话历史过长，本轮自动压缩中间 {_trimmed} 条旧消息为摘要（保留首条 system 提示 + 最近"
                 f" {HISTORY_KEEP_RECENT} 条）。UI 上仍保留完整。\n",
                 "tool_result",
             )

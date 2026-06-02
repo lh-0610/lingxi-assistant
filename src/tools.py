@@ -1443,6 +1443,36 @@ def notify_user(title: str, message: str, level: str = "info") -> str:
     return "通知未发送（Telegram 未配置或被节流）"
 
 
+@tool
+def update_plan(plan: str) -> str:
+    """创建或更新当前任务的执行计划（待办清单）。
+
+    **何时用**：任务需要 3 步以上、或要改多个文件时，动手前先调一次列出全部步骤；
+    之后每开始/完成一步就再调一次更新状态，直到所有步骤都 [x]。
+
+    plan: 多行文本，每行一个步骤，行首用状态标记：
+      [ ] 未开始    [~] 进行中（同一时间只标一个）    [x] 已完成
+    每次传**完整的当前计划**（全量覆盖，不是增量追加）。
+
+    示例：
+      update_plan("[x] 读 config.py 看结构\n[~] 在 state.py 加状态\n[ ] 加 update_plan 工具")
+    """
+    from . import state
+    items = state.parse_plan(plan)
+    state.current_plan = items
+    # 预留 UI 钩子：当前阶段 UI 没实现 show_plan，hasattr 判空安全跳过
+    _ui = getattr(state, "ui_ref", None)
+    if _ui is not None and hasattr(_ui, "show_plan"):
+        try:
+            _ui.show_plan(list(items))
+        except Exception:
+            pass
+    if not items:
+        return "计划已清空。"
+    done = sum(1 for it in items if it["status"] == "done")
+    return f"计划已更新（{done}/{len(items)} 完成）：\n" + state.render_plan(items)
+
+
 # ══════════════════════════════════════
 # 后台命令管理工具
 # ══════════════════════════════════════
@@ -2535,6 +2565,7 @@ ALL_TOOLS = [
     search_in_file, search_files,
     generate_image,
     remember, forget,
+    update_plan,
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
     code_map,
@@ -2587,6 +2618,7 @@ TOOL_DISPLAY_NAMES = {
     "generate_video": "🎬 生成视频",
     "remember": "🧠 记住事实",
     "forget": "🗑️ 遗忘记忆",
+    "update_plan": "📋 更新计划",
     "read_background_output": "📋 读取后台输出",
     "list_background_commands": "📋 列出后台命令",
     "stop_background_command": "⏹ 停止后台命令",

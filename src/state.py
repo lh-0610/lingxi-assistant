@@ -6,6 +6,8 @@
 agent.py 在启动阶段会初始化 llm / llm_with_tools / chat_history。
 其它模块**只读为主，按需写**。
 """
+import re
+
 from langchain_core.messages import SystemMessage
 
 
@@ -58,3 +60,61 @@ telegram_stop: bool = False
 # run_command 的当前工作目录（None = 用项目根）
 # 由纯 cd 命令设置，跨命令留存；新对话 / 切项目时重置为 None
 shell_cwd: str | None = None
+
+# 会话历史压缩缓存（滚动压缩避免每轮重复调 LLM）。
+# summary: 上次压缩生成的摘要文本；covered_upto: 它已覆盖到 chat_history 的第几条。
+compaction = {"summary": "", "covered_upto": 0}
+
+# 当前任务计划（会话级临时状态，不持久化）。由 update_plan 工具维护，
+# 每轮注入 system prompt 让模型看到进度，防"做一半就收尾"。
+# 每项: {"text": str, "status": "pending"|"in_progress"|"done"}
+current_plan: list = []
+
+# 计划状态标记 ↔ 显示符号。放这里（state 无 src 内部依赖）让 tools/roles 都能
+# import，避免 tools↔roles 循环 import。
+_PLAN_STATUS_MARK = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
+
+# 解析单行 checklist：可选的 markdown 列表前缀（- / * / + / "1." / "1)"）+ 一个
+# checkbox（中括号内允许多/少空格）。group(1)=状态字符，group(2)=步骤文本。
+_PLAN_LINE_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)?\[\s*([^\]]?)\s*\]\s*(.*)$")
+
+# checkbox 内字符（小写比较）→ 状态。容忍模型写的各种"完成/进行中"变体。
+_PLAN_CHAR_STATUS = {
+    "": "pending", " ": "pending",
+    "x": "done", "✓": "done", "√": "done", "v": "done",
+    "~": "in_progress", "-": "in_progress", "/": "in_progress", ">": "in_progress",
+}
+
+
+def parse_plan(plan_text: str) -> list:
+    """把多行 checklist 文本解析成 [{'text','status'}, ...]。行首标记决定状态。
+
+    容错：允许行首带 markdown 列表前缀（- / * / 1.）、checkbox 内多/少空格、
+    大小写（[X]）、及常见完成/进行中字符（✓ / ~ 等）。没有 checkbox 的行按
+    pending 处理、整行作为文本。
+    """
+    items = []
+    for raw in (plan_text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = _PLAN_LINE_RE.match(line)
+        if m:
+            status = _PLAN_CHAR_STATUS.get(m.group(1).lower(), "pending")
+            text = m.group(2).strip()
+        else:
+            status, text = "pending", line
+        if text:
+            items.append({"text": text, "status": status})
+    return items
+
+
+def render_plan(plan: list) -> str:
+    """把 current_plan 渲染回 Markdown checklist 文本。"""
+    if not plan:
+        return ""
+    out = []
+    for item in plan:
+        mark = _PLAN_STATUS_MARK.get(item.get("status"), "[ ]")
+        out.append(f"{mark} {item.get('text', '')}")
+    return "\n".join(out)
