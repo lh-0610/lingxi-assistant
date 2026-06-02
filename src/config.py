@@ -123,5 +123,8 @@ REMOTE_BLOCKLIST: list = _remote_cfg.get("readonly_blocklist", []) or []
 # 配了 telegram_bot_token/chat_id 才实际生效（push_confirm 内部会校验，没配则静默跳过）。
 REMOTE_TELEGRAM_CONFIRM: bool = _remote_cfg.get("telegram_confirm", True)
 
+# 网络搜索（Tavily）
+WEB_SEARCH_API_KEY: str = _config.get("web_search_api_key", "")
+
 # MCP Servers 配置（字典，key=server 名，value=启动参数）
 MCP_SERVERS: dict = _config.get("mcp_servers", {}) or {}

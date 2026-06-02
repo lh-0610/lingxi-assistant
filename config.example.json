@@ -49,6 +49,9 @@
   "vision_model_id":   "",
   "default_model_id":  "mimo-v2.5-pro",
 
+  "web_search_api_key": "",
+  "_web_search_说明": "web_search 工具用 Tavily 搜网络（tavily.com 免费申请 key）。留空 = web_search 不可用（会优雅提示），不影响 fetch_url 抓网址（fetch_url 无需 key）。",
+
   "notify": {
     "enabled": false,
     "levels": ["error", "action_needed", "done"],

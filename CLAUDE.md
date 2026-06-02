@@ -226,6 +226,8 @@ python main.py
 | `run_tests` | 跑 pytest（`sys.executable -m pytest`，精炼失败定位 + 总耗时；`encoding=utf-8` 防 GBK 崩） |
 | `git_diff` / `git_log` | 只读 git（看改动/历史；commonpath 越界防护；**绝不碰 commit/add/push**；Plan 只读放行） |
 | `check_code` | 静态检查单文件（lint/语法）：Python 用 `ruff check --select F,E9`（没装退化到 `py_compile`），其它语言用 config 的 `check_command`；只读不弹确认、Plan 放行 |
+| `apply_patch` | 多文件原子补丁（Codex 风格 `*** Begin Patch`）：一次建/改/删多文件；hunk 复用 `_locate_edit` 连续块匹配（拒绝模糊猜测）；全量校验通过才落盘，任一失败整体中止；写工具、Plan/遥控自动拦 |
+| `fetch_url` / `web_search` | 网络只读：`fetch_url` 抓网址（http(s) only、HTML 去标签转文本、二进制拒绝、无需 key）；`web_search` 用 Tavily（config `web_search_api_key`，没配优雅降级）。均进 Plan 只读、**不进遥控白名单**（网络外发默认不给远程） |
 
 > 写盘类工具（edit/write/append）共用 `tools.py:_confirm_file_write()`：算 unified diff → `ui.confirm_edit` 弹蓝色卡片 → worker 阻塞等审批。CLI/测试无 UI 时直接放行。
 

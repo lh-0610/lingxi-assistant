@@ -15,7 +15,7 @@ from . import state
 from . import debug_log
 from .paths import logger
 from .models import MODEL_LIST, current_model_supports_vision
-from .tools import TOOL_MAP, TOOL_DISPLAY_NAMES, get_tool_map
+from .tools import TOOL_DISPLAY_NAMES, get_tool_map
 from .limits import (
     HISTORY_KEEP_RECENT,
     HISTORY_TOKEN_BUDGET,
@@ -68,6 +68,8 @@ PLAN_MODE_READONLY_TOOLS = {
     "code_map",  # 代码地图只读扫描
     "git_diff", "git_log",  # 只读 git：只看 diff/log，绝不碰 commit/add/push
     "check_code",  # 静态检查只读分析（lint/语法），不改文件
+    "fetch_url",  # 抓取网页只读
+    "web_search",  # 网络搜索只读
 }
 
 
