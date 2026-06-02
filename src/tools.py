@@ -2389,6 +2389,83 @@ def web_search(query: str, max_results: int = 5) -> str:
     return "\n\n".join(lines)
 
 
+@tool
+def generate_video(prompt: str, image: str = "", width: int = 1152, height: int = 768,
+                   num_frames: int = 121, frame_rate: int = 24, max_wait: int = 300) -> str:
+    """用 Agnes Video V2.0 生成视频（文生视频；传 image 则图生视频/让图动起来）。
+    异步任务：创建 → 轮询直到完成 → 下载 mp4 存到项目 outputs/。
+    prompt: 视频内容文字描述。image: 可选，输入图片 URL。
+    width/height: 默认 1152x768。num_frames: 帧数，需 ≤441 且为 8n+1（默认 121≈5 秒 @24fps）。
+    frame_rate: FPS（1-60）。max_wait: 最长等待秒数（视频生成较慢，默认 300）。
+    需在 config.json 配 agnes_api_key（agnes-ai.com 免费申请）。"""
+    from .config import AGNES_API_KEY
+    if not AGNES_API_KEY:
+        return "未配置 Agnes API key，请在 config.json 填 agnes_api_key（agnes-ai.com 免费申请）。"
+    import requests as _requests
+
+    base = "https://apihub.agnes-ai.com/v1/videos"
+    headers = {"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"}
+    body = {"model": "agnes-video-v2.0", "prompt": prompt,
+            "width": width, "height": height, "num_frames": num_frames, "frame_rate": frame_rate}
+    if image:
+        body["image"] = image     # 图生视频
+
+    # ① 创建任务
+    try:
+        r = _requests.post(base, json=body, headers=headers, timeout=30)
+    except Exception as e:
+        return f"创建视频任务失败: {e}"
+    if not (200 <= r.status_code < 300):
+        return f"创建视频任务失败 HTTP {r.status_code}: {r.text[:300]}"
+    try:
+        task_id = r.json().get("id")
+    except Exception:
+        return f"创建任务响应无法解析: {r.text[:300]}"
+    if not task_id:
+        return f"创建任务未返回 task id: {r.text[:300]}"
+
+    _ui = getattr(state, "ui_ref", None)
+    if _ui is not None:
+        try:
+            _ui.show_message(f"\n🎬 视频任务已提交（{task_id}），生成中（约 1-3 分钟）...\n", "tool_result")
+        except Exception:
+            pass
+
+    # ② 轮询直到 completed / failed / 超时
+    poll_url = f"{base}/{task_id}"
+    t0 = time.time()
+    data = {}
+    video_url = None
+    while time.time() - t0 < max_wait:
+        time.sleep(6)
+        try:
+            data = _requests.get(poll_url, headers=headers, timeout=30).json()
+        except Exception:
+            continue
+        status = (data.get("status") or "").lower()
+        if status == "completed":
+            video_url = data.get("video_url")
+            break
+        if status in ("failed", "error", "cancelled"):
+            return f"视频生成失败（status={status}）: {str(data)[:300]}"
+    if not video_url:
+        return (f"视频生成超时（>{max_wait}s），任务 {task_id} 可能仍在处理。"
+                "可稍后调大 max_wait 重试，或去 Agnes 后台查看。")
+
+    # ③ 下载 mp4 到 outputs/
+    try:
+        out_dir = os.path.join(_project_cwd(), "outputs")
+        os.makedirs(out_dir, exist_ok=True)
+        fpath = os.path.join(out_dir, "video_" + time.strftime("%Y%m%d_%H%M%S") + ".mp4")
+        vr = _requests.get(video_url, timeout=180)
+        with open(fpath, "wb") as f:
+            f.write(vr.content)
+    except Exception as e:
+        return f"视频已生成但下载失败: {e}\n可直接打开源 URL: {video_url}"
+    return (f"已生成视频: {fpath}"
+            f"（{data.get('size', '?')}, {data.get('seconds', '?')}s）\n源 URL: {video_url}")
+
+
 # 导出
 ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
@@ -2403,6 +2480,7 @@ ALL_TOOLS = [
     run_tests, check_code,
     apply_patch,
     fetch_url, web_search,
+    generate_video,
 ]
 
 
@@ -2444,6 +2522,7 @@ TOOL_DISPLAY_NAMES = {
     "search_in_file": "🔍 单文件搜索",
     "search_files": "🌐 跨文件搜索",
     "generate_image": "🎨 生成图片",
+    "generate_video": "🎬 生成视频",
     "remember": "🧠 记住事实",
     "forget": "🗑️ 遗忘记忆",
     "read_background_output": "📋 读取后台输出",

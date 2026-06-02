@@ -126,5 +126,8 @@ REMOTE_TELEGRAM_CONFIRM: bool = _remote_cfg.get("telegram_confirm", True)
 # 网络搜索（Tavily）
 WEB_SEARCH_API_KEY: str = _config.get("web_search_api_key", "")
 
+# Agnes AI 视频生成（agnes-ai.com，免费 API key）
+AGNES_API_KEY: str = _config.get("agnes_api_key", "")
+
 # MCP Servers 配置（字典，key=server 名，value=启动参数）
 MCP_SERVERS: dict = _config.get("mcp_servers", {}) or {}

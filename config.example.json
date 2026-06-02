@@ -52,6 +52,9 @@
   "web_search_api_key": "",
   "_web_search_说明": "web_search 工具用 Tavily 搜网络（tavily.com 免费申请 key）。留空 = web_search 不可用（会优雅提示），不影响 fetch_url 抓网址（fetch_url 无需 key）。",
 
+  "agnes_api_key": "",
+  "_agnes_说明": "generate_video 工具用 Agnes Video V2.0 生成视频（agnes-ai.com 免费申请 key）。留空 = 视频生成不可用（会优雅提示）。异步生成，约 1-3 分钟，视频存到项目 outputs/。",
+
   "notify": {
     "enabled": false,
     "levels": ["error", "action_needed", "done"],
