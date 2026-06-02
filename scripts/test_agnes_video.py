@@ -82,11 +82,24 @@ class TestGenerateVideo:
         assert captured.get("image") == "http://img/a.png"
         assert captured.get("model") == "agnes-video-v2.0"
 
-    def test_timeout(self, project_dir, monkeypatch):
+    def test_total_cap(self, project_dir, monkeypatch):
+        # max_wait=0 → 循环不进，直接命中总时长上限分支
         monkeypatch.setattr(config, "AGNES_API_KEY", "k")
         monkeypatch.setattr("src.tools.time.sleep", lambda *_: None)
         monkeypatch.setattr(requests, "post",
                             lambda *a, **k: FakeResp(200, {"id": "t", "status": "queued"}))
-        # 永远 processing → 触发超时分支（max_wait=0 立即超时）
         monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp(200, {"status": "processing"}))
-        assert "超时" in generate_video.func("x", max_wait=0)
+        assert "总时长上限" in generate_video.func("x", max_wait=0)
+
+    def test_stall_detection(self, project_dir, monkeypatch):
+        # 进度永远卡在 10% → 心跳超时（>90s 无推进）提前判卡死
+        monkeypatch.setattr(config, "AGNES_API_KEY", "k")
+        monkeypatch.setattr("src.tools.time.sleep", lambda *_: None)
+        # 让 time.time() 每次 +40s，几轮后累计无推进超过 STALL(90s)
+        seq = iter([1000 + 40 * i for i in range(500)])
+        monkeypatch.setattr("src.tools.time.time", lambda: next(seq))
+        monkeypatch.setattr(requests, "post",
+                            lambda *a, **k: FakeResp(200, {"id": "t", "status": "queued"}))
+        monkeypatch.setattr(requests, "get",
+                            lambda *a, **k: FakeResp(200, {"status": "processing", "progress": 10}))
+        assert "卡住" in generate_video.func("x", max_wait=100000)
