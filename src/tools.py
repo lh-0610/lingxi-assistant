@@ -2410,18 +2410,38 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
     if image:
         body["image"] = image     # 图生视频
 
+    # F12 调试记录：把这次 Agnes API 调用的请求 / 响应 / 错误记进 debug inspector。
+    # 用 _finrec 在每个出口统一收尾，保证无论成功失败都能在 F12 看到。
+    try:
+        from .debug_log import make_api_record, finalize_api_record
+        _rec = make_api_record("agnes-video-v2.0", "agnes", f"POST {base}", body)
+    except Exception:
+        _rec = None
+
+    def _finrec(text="", error=None):
+        if _rec is not None:
+            try:
+                finalize_api_record(_rec, text, error)
+            except Exception:
+                pass
+
     # ① 创建任务
     try:
         r = _requests.post(base, json=body, headers=headers, timeout=30)
     except Exception as e:
+        _finrec(error=f"创建请求异常: {e}")
         return f"创建视频任务失败: {e}"
     if not (200 <= r.status_code < 300):
+        _finrec(error=f"HTTP {r.status_code}: {r.text[:500]}")
         return f"创建视频任务失败 HTTP {r.status_code}: {r.text[:300]}"
     try:
-        task_id = r.json().get("id")
+        create_resp = r.json()
+        task_id = create_resp.get("id")
     except Exception:
+        _finrec(error=f"创建响应无法解析: {r.text[:500]}")
         return f"创建任务响应无法解析: {r.text[:300]}"
     if not task_id:
+        _finrec(error=f"无 task id: {str(create_resp)[:500]}")
         return f"创建任务未返回 task id: {r.text[:300]}"
 
     _ui = getattr(state, "ui_ref", None)
@@ -2447,8 +2467,10 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
             video_url = data.get("video_url")
             break
         if status in ("failed", "error", "cancelled"):
+            _finrec(error=f"任务 {task_id} status={status}: {str(data)[:500]}")
             return f"视频生成失败（status={status}）: {str(data)[:300]}"
     if not video_url:
+        _finrec(error=f"任务 {task_id} 超时（>{max_wait}s），最后状态: {str(data)[:300]}")
         return (f"视频生成超时（>{max_wait}s），任务 {task_id} 可能仍在处理。"
                 "可稍后调大 max_wait 重试，或去 Agnes 后台查看。")
 
@@ -2461,7 +2483,9 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
         with open(fpath, "wb") as f:
             f.write(vr.content)
     except Exception as e:
+        _finrec(text=f"video_url={video_url}", error=f"下载失败: {e}")
         return f"视频已生成但下载失败: {e}\n可直接打开源 URL: {video_url}"
+    _finrec(text=f"已生成 {fpath}\n{str(data)[:500]}")
     return (f"已生成视频: {fpath}"
             f"（{data.get('size', '?')}, {data.get('seconds', '?')}s）\n源 URL: {video_url}")
 

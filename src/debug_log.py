@@ -152,6 +152,42 @@ def finalize_record(
     recorder.add(record)
 
 
+def make_api_record(model: str, provider: str, endpoint: str, request_body) -> dict:
+    """给非 LLM 的外部 API 调用（如视频生成）造一条 F12 record。
+    request_body（dict/str）塞进 messages 显示，沿用 LLM record 的结构、F12 直接能展示。"""
+    return {
+        "id": uuid.uuid4().hex[:8],
+        "ts": time.time(),
+        "model": model,
+        "provider": provider,
+        "endpoint": endpoint,
+        "_start_ns": time.perf_counter_ns(),
+        "request": {
+            "system_prompt": "",
+            "messages": [{"role": "请求", "content": _sanitize_content(request_body)}],
+            "tools": [],
+            "max_tokens": None,
+        },
+        "response": None,
+        "error": None,
+        "elapsed_ms": 0,
+    }
+
+
+def finalize_api_record(record: dict, result_text: str = "", error: Optional[str] = None) -> None:
+    """填非 LLM API record 的响应/错误并入 ring buffer（F12 刷新）。"""
+    record["elapsed_ms"] = (time.perf_counter_ns() - record.pop("_start_ns", 0)) // 1_000_000
+    if error is not None:
+        record["error"] = error
+    record["response"] = {
+        "text": _sanitize_content(result_text or ""),
+        "tool_calls": [],
+        "usage": {},
+        "thinking": "",
+    }
+    recorder.add(record)
+
+
 def record_summary(record: dict) -> str:
     """一行摘要，给 UI 列表用。"""
     import datetime as _dt
