@@ -1811,6 +1811,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if sess is None:
             sess = _session.get_active()
         sess.is_generating = True
+        sess.suppress_render = False   # 本轮开始：允许实时渲染（中途被切走才会置 True）
         sess.thread = threading.current_thread()
         _session.bind_thread(sess)
         try:
@@ -1827,6 +1828,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if sess is None:
             sess = _session.get_active()
         sess.is_generating = True
+        sess.suppress_render = False   # 本轮开始：允许实时渲染（中途被切走才会置 True）
         sess.thread = threading.current_thread()
         _session.bind_thread(sess)
         try:
@@ -1883,9 +1885,16 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         active_sess = _session.get_active()
         if finished_sess is not active_sess:
             # 后台会话完成：只刷侧栏列表（显示新标题/状态），不碰前台 UI
+            finished_sess.suppress_render = False
             self._refresh_session_list()
             return
         # 活跃会话完成：完整收尾
+        # 本轮被切走过 → 实时输出被抑制了（只显示了占位），完成时整体重绘 chat_history 补全
+        if finished_sess.suppress_render:
+            finished_sess.suppress_render = False
+            self._reset_render_state()
+            self._redraw_chat()
+            self._scroll_to_bottom()
         self._ai_reply_start = None
         self._update_btn_state("enabled" if self._has_input else "disabled")
         self._refresh_session_list()
@@ -2314,7 +2323,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # 后台会话路由：非活跃会话只标 needs_redraw，不发 UI 信号
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active():
+        if _sess is not _session.get_active() or _sess.suppress_render:
             _sess.needs_redraw = True
             return
         # 桌宠思考动画：thinking_indicator 出现时切 think
@@ -2328,7 +2337,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """线程安全：显示错误信息和重试按钮"""
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active():
+        if _sess is not _session.get_active() or _sess.suppress_render:
             _sess.needs_redraw = True
             return
         pet = getattr(self, "pet", None)
@@ -2339,7 +2348,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def remove_thinking_indicator(self):
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active():
+        if _sess is not _session.get_active() or _sess.suppress_render:
             _sess.needs_redraw = True
             return
         pet = getattr(self, "pet", None)
@@ -2351,7 +2360,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """线程安全：更新等待指示器文本"""
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active():
+        if _sess is not _session.get_active() or _sess.suppress_render:
             _sess.needs_redraw = True
             return
         self.bridge.update_thinking.emit(text)
@@ -2475,7 +2484,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """线程安全：从 agent 线程通知 UI 更新 token 用量"""
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active():
+        if _sess is not _session.get_active() or _sess.suppress_render:
             _sess.needs_redraw = True
             return
         self.bridge.token_usage.emit(session_usage, round_usage)

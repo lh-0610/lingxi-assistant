@@ -229,6 +229,13 @@ class TestSessionStateIsolation:
         assert a.pending_confirm[0] == "command"
         assert b.pending_confirm is None  # 不影响别的会话
 
+    def test_suppress_render_per_session(self):
+        """suppress_render 默认 False、会话级（本轮被切走后抑制实时渲染、完成整体重绘）。"""
+        a, b = Session(), Session()
+        assert a.suppress_render is False and b.suppress_render is False
+        a.suppress_render = True
+        assert b.suppress_render is False
+
 
 # ════════════════════════════════════════════════════════════════════
 # 4. 线程绑定路由（Step 1 基础）

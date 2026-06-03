@@ -55,7 +55,7 @@ class Session:
     __slots__ = tuple(_SESSION_FIELDS) + (
         "is_generating", "thread", "key", "needs_redraw", "project",
         "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
-        "pending_confirm",
+        "pending_confirm", "suppress_render",
     )
 
     def __init__(self):
@@ -74,6 +74,9 @@ class Session:
         # 后台会话（非 active）发起的命令/编辑确认：暂存在这里，不打断前台；切到该会话时
         # 才弹卡。形如 ("command", command, result, done) 或 ("edit", path, diff, result, done)。
         self.pending_confirm = None
+        # 本轮生成期间是否被切走过：一旦切走，本轮就不再实时接续渲染（切回也不），改为
+        # 显示"生成中"占位、完成时整体重绘——避免"切回看到空界面+继续输出"的割裂。
+        self.suppress_render = False
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。
