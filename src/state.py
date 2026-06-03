@@ -1,15 +1,29 @@
-"""运行期可变全局状态。
+"""运行期可变全局状态 + 会话级状态代理。
 
-把状态集中到一个模块，避免模块间循环 import（streaming.py / claude_code.py
-需要读写 chat_history / stop_flag 等，从这里取就行）。
+历史上这里集中持有所有运行期可变全局，避免模块间循环 import。多会话并发重构后
+分成两类：
 
-agent.py 在启动阶段会初始化 llm / llm_with_tools / chat_history。
-其它模块**只读为主，按需写**。
+- **全局共享**（所有会话共用）：llm / llm_with_tools / current_model_index /
+  reasoning_enabled / ui_ref / current_project / agent_mode 等，仍是本模块的普通
+  变量。
+- **会话级**（每个会话一份）：chat_history / stop_flag / session_token_usage /
+  compaction / current_plan / shell_cwd / 会话 id·title / remote_session 等，真身
+  在 session.Session；本模块通过文件末尾的代理把 `state.X` 读写转发到"当前线程
+  的当前会话"（session.current_session()），所以现有 state.X / agent.X 代码无需改动。
+
+读写全局字段照旧 `state.X` / `state.X = ...`；会话级字段同样 `state.X` / `state.X = ...`
+（自动落到当前线程的当前会话）。
 """
 import re
+import sys as _sys
+import types as _types
 
-from langchain_core.messages import SystemMessage
+from . import session as _session
 
+
+# ══════════════════════════════════════
+# 全局共享字段（所有会话共用，普通模块变量）
+# ══════════════════════════════════════
 
 # 当前选中的模型在 MODEL_LIST 里的索引
 current_model_index = 0
@@ -20,19 +34,6 @@ reasoning_enabled = True
 # 当前 LangChain LLM 实例（启动时由 agent.py 创建）
 llm = None
 llm_with_tools = None
-
-# 对话历史（启动时由 agent.py 用 SystemMessage 初始化）
-chat_history = []
-
-# 当前会话标识
-current_session_id = None
-current_session_title = None
-
-# 用户停止生成的标志
-stop_flag = False
-
-# Token 用量统计（累计 + 上一轮）
-session_token_usage = {"input": 0, "output": 0, "total": 0}
 
 # 当前激活的项目根路径；None = 无项目（全局工作区）
 # 由侧边栏项目切换器修改，会话列表按这个 filter
@@ -47,31 +48,29 @@ ui_ref = None
 #   "act"  —— 默认。AI 可以调任何工具直接动手
 #   "plan" —— 计划模式。AI 只能调"只读"工具（read/search/list），
 #             不能 edit/write/append/run_command/generate_image。
-#             目的：让 AI 先调研 + 给出执行方案，用户确认后切回 act 才动手
-# 由 ChatUI 顶栏的 Plan/Act 切换按钮修改
+# 由 ChatUI 顶栏的 Plan/Act 切换按钮修改。
+# （后续 Phase 会改成会话级；P1 暂为全局，行为与重构前一致）
 agent_mode = "act"
-
-# Telegram 遥控：当前这轮回复是否由远程消息触发（决定推送行为）
-remote_session: bool = False
 
 # Telegram 遥控：回复完成后是否自动发 Telegram 通知（可由命令开关）
 telegram_stop: bool = False
 
-# run_command 的当前工作目录（None = 用项目根）
-# 由纯 cd 命令设置，跨命令留存；新对话 / 切项目时重置为 None
-shell_cwd: str | None = None
 
-# 会话历史压缩缓存（滚动压缩避免每轮重复调 LLM）。
-# summary: 上次压缩生成的摘要文本；covered_upto: 它已覆盖到 chat_history 的第几条。
-compaction = {"summary": "", "covered_upto": 0}
+# ══════════════════════════════════════
+# 会话级字段（每会话一份，真身在 session.Session）
+# ══════════════════════════════════════
+# 下列名字**不在**本模块定义为普通变量——它们由文件末尾的代理 property 转发到
+# session.current_session()。清单是 session._SESSION_FIELDS：
+#   chat_history / current_session_id / current_session_title / stop_flag /
+#   session_token_usage / compaction / current_plan / shell_cwd / remote_session /
+#   _last_text_only_image_warning
 
-# 当前任务计划（会话级临时状态，不持久化）。由 update_plan 工具维护，
-# 每轮注入 system prompt 让模型看到进度，防"做一半就收尾"。
-# 每项: {"text": str, "status": "pending"|"in_progress"|"done"}
-current_plan: list = []
 
-# 计划状态标记 ↔ 显示符号。放这里（state 无 src 内部依赖）让 tools/roles 都能
-# import，避免 tools↔roles 循环 import。
+# ══════════════════════════════════════
+# 计划解析 / 渲染（无状态工具，tools.py / roles.py 共用，放这避免循环 import）
+# ══════════════════════════════════════
+
+# 计划状态标记 ↔ 显示符号。
 _PLAN_STATUS_MARK = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 
 # 解析单行 checklist：可选的 markdown 列表前缀（- / * / + / "1." / "1)"）+ 一个
@@ -118,3 +117,36 @@ def render_plan(plan: list) -> str:
         mark = _PLAN_STATUS_MARK.get(item.get("status"), "[ ]")
         out.append(f"{mark} {item.get('text', '')}")
     return "\n".join(out)
+
+
+# ══════════════════════════════════════
+# 会话级字段代理：把 state.X 读写转发到"当前线程的当前会话"
+# ══════════════════════════════════════
+# 模块本身不支持 property，所以用 sys.modules 把本模块替换成一个带 property 的
+# ModuleType 子类实例（给"模块"加 property 的标准技巧）。会话级字段（property，
+# data descriptor）的读/写都落到 session.current_session() 对应字段；全局字段、
+# 常量、函数原样保留在代理实例上。
+class _StateModule(_types.ModuleType):
+    pass
+
+
+def _make_session_prop(_name):
+    def _getter(self):
+        return getattr(_session.current_session(), _name)
+
+    def _setter(self, value):
+        setattr(_session.current_session(), _name, value)
+
+    return property(_getter, _setter)
+
+
+for _field in _session._SESSION_FIELDS:
+    setattr(_StateModule, _field, _make_session_prop(_field))
+
+_proxy = _StateModule(__name__)
+# 把本模块现有的全局变量 / 常量 / 函数 / dunder 搬到代理实例。会话级字段不在
+# globals 里（本模块根本没定义它们），property 已在 class 上负责转发。
+_proxy.__dict__.update(
+    {k: v for k, v in globals().items() if k not in _session._SESSION_FIELDS}
+)
+_sys.modules[__name__] = _proxy

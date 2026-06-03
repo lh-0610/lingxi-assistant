@@ -1784,11 +1784,21 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         threading.Thread(target=self._run_agent, daemon=True).start()
 
     def _run_agent(self):
-        agent.agent_loop(self)
-        self.bridge.finished.emit()
+        # 把这个 worker 线程绑定到它要跑的会话：之后 agent_loop / tools 里所有
+        # state.X（会话级）都落到这个 session，不受主线程切换 active 影响。
+        # P1 单会话时绑的就是 active，行为等价；多会话时这是隔离的关键。
+        from .. import session as _session
+        _session.bind_thread(_session.get_active())
+        try:
+            agent.agent_loop(self)
+        finally:
+            _session.unbind_thread()
+            self.bridge.finished.emit()
 
     def _run_vision_bridge_agent(self, text, images, vision_model_name, original_model_name):
         """非视觉模型收到图片时：视觉模型只负责识别，原模型负责最终回答。"""
+        from .. import session as _session
+        _session.bind_thread(_session.get_active())
         try:
             self.show_message(
                 f"\n🔎 使用「{vision_model_name}」识别图片，随后交给「{original_model_name}」继续处理\n",
@@ -1822,6 +1832,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         except Exception as e:
             self.show_retry(f"图片识别失败: {str(e)[:100]}")
         finally:
+            _session.unbind_thread()
             self.bridge.finished.emit()
 
     def _on_finished(self):
