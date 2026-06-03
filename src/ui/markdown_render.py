@@ -26,6 +26,12 @@ class MarkdownRenderMixin:
         speak=True 时朗读（仅最终回复用）；多轮工具调用的中间轮传 speak=False，
         只渲染不朗读——否则 TTS 会把每轮"我先看下文件"之类的过程话都念出来。
         """
+        # 后台会话路由：非活跃会话只标 needs_redraw，不发 UI 信号
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         self.bridge.render_md.emit(md_text)
         if not speak:
             return

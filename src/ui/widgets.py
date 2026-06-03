@@ -23,7 +23,7 @@ class SignalBridge(QObject):
     update_thinking = Signal(str)          # 更新等待指示器文
     render_md = Signal(str)                # 渲染 Markdown 替换最后的纯文
     show_retry = Signal(str)               # 显示重试按钮 + 错误信息
-    finished = Signal()
+    finished = Signal(object)              # (finished_session) 完成生成的会话对象
     token_usage = Signal(dict, dict)   # (session_usage, round_usage)
     sessions_refresh = Signal()        # 异步标题生成完后刷新侧栏会话列表
     # 让 worker 线程能阻塞式请求 UI 弹确认框：发 (命令文本, 用于回传结果的 dict,
@@ -430,6 +430,40 @@ class HistoryRow(QWidget):
     def watch_hover(self, widget):
         # 兼容旧调用，无操作
         pass
+
+
+class LoadingSpinner(QWidget):
+    """旋转的缺口圆环 loading 指示（侧栏会话"生成中"用）。
+
+    QPainter 自绘一段 270° 圆弧 + QTimer 转角度——比字符 spinner（◐◓◑◒）更像
+    网页那种转圈，且不依赖字体里有没有那些几何字符的 glyph。
+    """
+
+    def __init__(self, size=16, color="#3b82f6", parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._angle = 0
+        self._color = QColor(color)
+        self._timer = QTimer(self)   # parent=self → 控件被 deleteLater 时一并回收
+        self._timer.timeout.connect(self._rotate)
+        self._timer.start(50)
+
+    def _rotate(self):
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPen
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        m = 2.0
+        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
+        pen = QPen(self._color)
+        pen.setWidthF(2.0)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        # Qt drawArc 角度单位 = 1/16 度；负号让它顺时针转，270° 留个缺口
+        painter.drawArc(rect, int(-self._angle * 16), int(270 * 16))
 
 
 class CloseConfirmDialog(QDialog):

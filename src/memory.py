@@ -106,41 +106,77 @@ def _build_ai_message(gathered, clean_text, tool_calls):
         )
 
 
-def save_session():
+def save_session(*, session=None):
+    """保存当前会话到本地文件（追加/更新）。
+
+    session=None → 从 state 代理读（兼容旧调用）；
+    session=<Session> → 直接从该 Session 对象读（用于保存后台会话）。
+    """
     _ensure_memory_dir()
-    if len(state.chat_history) <= 1:
+
+    from . import session as _session_mod
+    # 要保存的会话对象：None 模式经代理拿当前线程的会话（主线程=active / worker=它的会话）
+    sess = _session_mod.current_session() if session is None else session
+
+    if session is None:
+        chat_history = state.chat_history
+        current_session_id = state.current_session_id
+        current_session_title = state.current_session_title
+    else:
+        chat_history = session.chat_history
+        current_session_id = session.current_session_id
+        current_session_title = session.current_session_title
+
+    if len(chat_history) <= 1:
         return
 
-    if not state.current_session_id:
-        # 加微秒(%f)避免同一秒内连续新建会话时 id 碰撞、后建的覆盖先建的丢数据
-        state.current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    is_first_save = not current_session_id
+    if is_first_save:
+        current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        if session is None:
+            state.current_session_id = current_session_id
+        else:
+            session.current_session_id = current_session_id
 
-    title = state.current_session_title or "新对话"
-    for msg in state.chat_history:
+    # project tag 取**会话自己锚定的归属**，不取全局 current_project：会话**首次落盘**
+    # （拿到 id 那一刻）锚定为当时的全局项目，之后即使切了项目也不变。修"无项目会话被
+    # 切项目后误归到新项目"——根因是 worker 的 save 可能晚于主线程 set_current，取全局
+    # 就被打上新 tag。（兜底：已有 id 但 project 未锚定，如异常路径，也用当时全局。）
+    if is_first_save or getattr(sess, "project", _session_mod._UNSET) is _session_mod._UNSET:
+        sess.project = state.current_project
+    current_project = sess.project
+
+    title = current_session_title or "新对话"
+    for msg in chat_history:
         if isinstance(msg, HumanMessage):
             c = msg.content
             if isinstance(c, list):
-                # 多模态消息，取第一个 text 部分
                 texts = [p["text"] for p in c if isinstance(p, dict) and p.get("type") == "text"]
                 c = texts[0] if texts else "[图片]"
-            if not state.current_session_title:
+            if not current_session_title:
                 title = c[:30].replace("\n", " ")
             break
 
-    session_file = os.path.join(MEMORY_DIR, f"{state.current_session_id}.json")
+    session_file = os.path.join(MEMORY_DIR, f"{current_session_id}.json")
     data = {
-        "id": state.current_session_id,
+        "id": current_session_id,
         "title": title,
         "updated": datetime.now().isoformat(),
-        "project": state.current_project,   # 当前所属项目（None = 无项目/全局）
-        "messages": [_msg_to_dict(m) for m in state.chat_history],
+        "project": current_project,
+        "messages": [_msg_to_dict(m) for m in chat_history],
     }
-    # 会话文件 + 索引文件作为一个原子事务，避免中途被 delete_session 删掉
     with _LOCK:
         with open(session_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        _update_index(state.current_session_id, title, state.current_project)
-    logger.info(f"会话已保存: {state.current_session_id} - {title}")
+        _update_index(current_session_id, title, current_project)
+    logger.info(f"会话已保存: {current_session_id} - {title}")
+
+    # 新会话存盘拿到 id 后，把注册表里的临时 key（_new_N）迁移成 id；
+    # 否则 load_session(id) 用 id 查注册表查不到，会重复建一个 Session 与内存里的脱节。
+    from . import session as _session
+    target = session if session is not None else _session.current_session()
+    if target is not None and target.key != current_session_id:
+        _session.rekey(target, current_session_id)
 
 
 def _first_user_text():
@@ -294,8 +330,12 @@ def _update_index(session_id, title, project=None):
                 logger.warning(f"删除旧会话文件失败 {old_id}: {e}")
 
 
-def load_session(session_id):
-    state.session_token_usage = {"input": 0, "output": 0, "total": 0}
+def load_session(session_id, *, session=None):
+    """加载指定会话文件到内存。
+
+    session=None → 写当前前台 Session（经 state 代理）；
+    session=<Session> → 直接写目标 Session 对象（用于加载后台会话，避免污染前台）。
+    """
     session_file = os.path.join(MEMORY_DIR, f"{session_id}.json")
     with _LOCK:
         if not os.path.exists(session_file):
@@ -303,16 +343,32 @@ def load_session(session_id):
         with open(session_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-    state.chat_history.clear()
-    for d in data["messages"]:
-        state.chat_history.append(_dict_to_msg(d))
+    if session is None:
+        # 穿透 state 代理 → 当前活跃 Session（兼容旧调用）
+        from . import session as _session_mod
+        state.session_token_usage = {"input": 0, "output": 0, "total": 0}
+        state.chat_history.clear()
+        for d in data["messages"]:
+            state.chat_history.append(_dict_to_msg(d))
+        state.current_session_id = session_id
+        state.current_session_title = data.get("title")
+        state.current_plan = []
+        state.compaction["summary"] = ""
+        state.compaction["covered_upto"] = 0
+        # 锚定会话所属项目为磁盘记录值（而非当前全局），切项目后再 save 不会改它
+        _session_mod.current_session().project = data.get("project")
+    else:
+        # 直接写目标 Session（可能是后台会话，不能经过 state 代理）
+        session.session_token_usage = {"input": 0, "output": 0, "total": 0}
+        session.chat_history.clear()
+        for d in data["messages"]:
+            session.chat_history.append(_dict_to_msg(d))
+        session.current_session_id = session_id
+        session.current_session_title = data.get("title")
+        session.current_plan = []
+        session.compaction = {"summary": "", "covered_upto": 0}
+        session.project = data.get("project")  # 锚定为磁盘记录的项目归属
 
-    state.current_session_id = session_id
-    state.current_session_title = data.get("title")
-    state.current_plan = []  # 旧会话没存计划，残留当前计划会误导
-    # 切换会话时清空压缩缓存（压缩是运行时状态，不持久化到会话文件）
-    state.compaction["summary"] = ""
-    state.compaction["covered_upto"] = 0
     logger.info(f"会话已加载: {session_id}")
     return True
 
@@ -388,6 +444,8 @@ def move_sessions_to_no_project(old_path):
 
 
 def delete_session(session_id):
+    from .session import drop as drop_session
+
     session_file = os.path.join(MEMORY_DIR, f"{session_id}.json")
     with _LOCK:
         if os.path.exists(session_file):
@@ -399,18 +457,36 @@ def delete_session(session_id):
             index = [i for i in index if i["id"] != session_id]
             with open(MEMORY_INDEX, "w", encoding="utf-8") as f:
                 json.dump(index, f, ensure_ascii=False, indent=2)
+    # 同步清除会话注册表（不再持有该 Session 对象）
+    drop_session(session_id)
     logger.info(f"会话已删除: {session_id}")
 
 
-def reset_history():
-    state.session_token_usage = {"input": 0, "output": 0, "total": 0}
-    save_session()
-    state.chat_history.clear()
-    state.chat_history.append(SystemMessage(content=get_system_prompt()))
-    state.current_session_id = None
-    state.current_session_title = None
-    state.shell_cwd = None  # cd 上下文回项目根
-    state.current_plan = []  # 计划是会话级临时状态，新对话清空
-    # 压缩缓存也一并清空，新会话从头开始
-    state.compaction["summary"] = ""
-    state.compaction["covered_upto"] = 0
+def reset_history(*, session=None):
+    """重置聊天历史。
+
+    session=None → 重置当前前台 Session（经 state 代理）；
+    session=<Session> → 重置指定 Session。
+    """
+    if session is None:
+        # 穿透 state 代理 → 当前活跃 Session
+        state.session_token_usage = {"input": 0, "output": 0, "total": 0}
+        save_session()
+        state.chat_history.clear()
+        state.chat_history.append(SystemMessage(content=get_system_prompt()))
+        state.current_session_id = None
+        state.current_session_title = None
+        state.shell_cwd = None
+        state.current_plan = []
+        state.compaction["summary"] = ""
+        state.compaction["covered_upto"] = 0
+    else:
+        # 直接操作目标 Session
+        save_session(session=session)
+        session.session_token_usage = {"input": 0, "output": 0, "total": 0}
+        session.chat_history = [SystemMessage(content=get_system_prompt())]
+        session.current_session_id = None
+        session.current_session_title = None
+        session.shell_cwd = None
+        session.current_plan = []
+        session.compaction = {"summary": "", "covered_upto": 0}

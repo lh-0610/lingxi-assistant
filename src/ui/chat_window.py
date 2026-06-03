@@ -5,23 +5,22 @@ ChatUI 暴露给 agent 的全部公开方法（show_message / render_final_markd
 remove_thinking_indicator / show_token_usage / show_retry）都是线程安全 wrapper。
 """
 import os
-import sys
 import json
 import base64
 import threading
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
-    QTextBrowser, QPushButton, QLabel, QFrame, QScrollArea,
-    QSplitter, QSizePolicy, QFileDialog, QComboBox, QMenu, QMessageBox,
-    QDialog, QLineEdit, QCheckBox
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel,
+    QSizePolicy, QFileDialog, QMenu, QMessageBox,
+    QDialog,
 )
-from PySide6.QtCore import Qt, Signal, QObject, QSize, QTimer, QPoint
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import (
     QFont, QIcon, QTextCursor, QColor, QTextCharFormat, QPixmap, QImage,
-    QPainter, QPolygon, QAction,
+    QPainter, QAction,
 )
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from .. import agent
 from .. import state
@@ -29,11 +28,10 @@ from ._base import BASE_DIR, CONFIG_PATH
 from .theme import THEMES, build_stylesheet, load_saved_theme, save_theme_choice
 from .widgets import (
     CloseConfirmDialog, DragDropTextBrowser, DragDropTextEdit, FileCompleter,
-    HistoryRow, SignalBridge,
+    SignalBridge,
 )
 from .helpers import (
     _build_image_content_block, _make_button_icon, _make_upload_icon,
-    _strip_markdown_for_tts,
 )
 from .prefs import _load_ui_prefs, _save_ui_prefs
 from .settings_dialog import SettingsDialog
@@ -95,6 +93,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
+        # 注意：self.is_generating 已迁移至 session.is_generating
+        # 构造时仍初始化一份作为 fallback（不应在正常流程中使用）
         self.is_generating = False
         self._has_input = False
         self._sidebar_visible = True
@@ -113,7 +113,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.bridge.update_thinking.connect(self._update_thinking)
         self.bridge.render_md.connect(self._render_markdown)
         self.bridge.show_retry.connect(self._show_retry)
-        self.bridge.finished.connect(self._on_finished)
+        self.bridge.finished.connect(self._on_finished_sess)
         self.bridge.token_usage.connect(self._update_token_usage)
         self.bridge.sessions_refresh.connect(self._refresh_session_list)
         self.bridge.confirm_request.connect(self._on_confirm_request)
@@ -347,6 +347,13 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._thinking_history.clear()
         self._code_blocks.clear()
         self._msg_buffers.clear()
+        # 渲染游标归位（只服务实时渲染，切会话时必须清）
+        self._ai_reply_start = None
+        self._thinking_start = None
+        self._thinking_end = None
+        self._think_block_start = None
+        self._think_block_chars = 0
+        self._think_block_text = ""
         if hasattr(self, "_image_paths"):
             self._image_paths.clear()
         if hasattr(self, "chat_area"):
@@ -365,7 +372,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         )
 
     def _redraw_chat(self):
-        import markdown
         self.chat_area.clear()
         if hasattr(self, "_image_paths"):
             self._image_paths.clear()
@@ -1101,7 +1107,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         has_input = bool(text) or bool(self._pending_images)
         if has_input != self._has_input:
             self._has_input = has_input
-            if not self.is_generating:
+            from .. import session as _session
+            if not _session.get_active().is_generating:
                 self._update_btn_state("enabled" if has_input else "disabled")
 
         # 自动调整高度（不低于 80）
@@ -1267,21 +1274,24 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         并立即刷新按钮/输入框，这样调用方（切会话 / 新对话等）可以继续往下执行，
         而不用等 worker 线程退出。
         """
-        if not self.is_generating:
+        from .. import session as _session
+        sess = _session.get_active()
+        if not sess.is_generating:
             return
         state.stop_flag = True
         self._release_pending_confirm()
         self._release_pending_edit()
         # 立即标记生成结束——_on_finished 再被触发时会跳过重复处理
-        self.is_generating = False
+        sess.is_generating = False
+        sess.thread = None
         self._ai_reply_start = None
         # 对齐 _on_finished 的按钮恢复（输入框有内容则 enabled）。
-        # 注意：灵犀原写的 self.input_box 不存在（真名是 input_container），且那套
-        # setProperty/unpolish 多余——_update_btn_state 已经够恢复按钮态。
         self._update_btn_state("enabled" if self._has_input else "disabled")
 
     def _on_send_click(self):
-        if self.is_generating:
+        from .. import session as _session
+        sess = _session.get_active()
+        if sess.is_generating:
             self._force_stop_generation()
         elif self._has_input or self._pending_images:
             self._send_message()
@@ -1381,7 +1391,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
 
     def _pick_image(self):
-        if self.is_generating:
+        from .. import session as _session
+        if _session.get_active().is_generating:
             return
         paths, _ = QFileDialog.getOpenFileNames(
             self, "选择图片", "",
@@ -1392,7 +1403,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _show_plus_menu(self):
         """点 + 按钮：弹菜单选「上传图片 / 导入项目」。"""
-        if self.is_generating:
+        from .. import session as _session
+        if _session.get_active().is_generating:
             return
         menu = QMenu(self)
 
@@ -1650,7 +1662,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         has_input = bool(text) or bool(self._pending_images)
         if has_input != self._has_input:
             self._has_input = has_input
-            if not self.is_generating:
+            from .. import session as _session
+            if not _session.get_active().is_generating:
                 self._update_btn_state("enabled" if has_input else "disabled")
 
     # ── 发送消息 ──
@@ -1661,7 +1674,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _on_remote_submit(self, text: str):
         """远程消息注入槽（主线程）。"""
-        if not text or self.is_generating:
+        from .. import session as _session
+        if not text or _session.get_active().is_generating:
             return
         state.remote_session = True
         self._do_send(text)
@@ -1669,7 +1683,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def _send_message(self):
         text = self.entry.toPlainText().strip()
         images = self._pending_images[:]
-        if (not text and not images) or self.is_generating:
+        from .. import session as _session
+        if (not text and not images) or _session.get_active().is_generating:
             return
         # GUI 专属清理
         self.entry.clear()
@@ -1745,8 +1760,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 return
             vision_model_name = agent.MODEL_LIST[vision_idx][0]
 
-        self.is_generating = True
         self._update_btn_state("stop")
+        # 捕获当前会话——worker 线程绑到它，不受后续切换 active 影响
+        from .. import session as _session
+        sess = _session.get_active()
+        _session.register(sess)   # 确保在注册表里（启动初始会话首次发消息时落册）
+        sess.is_generating = True
 
         # 显示用户消息
         self._append_html("\n", "spacer")
@@ -1762,7 +1781,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             state.stop_flag = False
             threading.Thread(
                 target=self._run_vision_bridge_agent,
-                args=(send_text, images, vision_model_name, original_model_name),
+                args=(send_text, images, vision_model_name, original_model_name, sess),
                 daemon=True,
             ).start()
             return
@@ -1780,25 +1799,43 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         else:
             agent.chat_history.append(HumanMessage(content=send_text))
 
-        state.stop_flag = False
-        threading.Thread(target=self._run_agent, daemon=True).start()
+        # 立即存盘 + 刷侧栏：让会话马上出现在侧栏，长任务时开新对话也能切回它
+        # （否则要等 worker 跑完才 save 进 index → 正在跑的会话在侧栏找不到）。
+        try:
+            agent.save_session()
+        except Exception:
+            pass
+        self._refresh_session_list()
 
-    def _run_agent(self):
+        state.stop_flag = False
+        threading.Thread(target=self._run_agent, args=(sess,), daemon=True).start()
+
+    def _run_agent(self, sess=None):
         # 把这个 worker 线程绑定到它要跑的会话：之后 agent_loop / tools 里所有
         # state.X（会话级）都落到这个 session，不受主线程切换 active 影响。
         # P1 单会话时绑的就是 active，行为等价；多会话时这是隔离的关键。
         from .. import session as _session
-        _session.bind_thread(_session.get_active())
+        if sess is None:
+            sess = _session.get_active()
+        sess.is_generating = True
+        sess.thread = threading.current_thread()
+        _session.bind_thread(sess)
         try:
             agent.agent_loop(self)
         finally:
+            sess.is_generating = False
+            sess.thread = None
             _session.unbind_thread()
-            self.bridge.finished.emit()
+            self.bridge.finished.emit(sess)
 
-    def _run_vision_bridge_agent(self, text, images, vision_model_name, original_model_name):
+    def _run_vision_bridge_agent(self, text, images, vision_model_name, original_model_name, sess=None):
         """非视觉模型收到图片时：视觉模型只负责识别，原模型负责最终回答。"""
         from .. import session as _session
-        _session.bind_thread(_session.get_active())
+        if sess is None:
+            sess = _session.get_active()
+        sess.is_generating = True
+        sess.thread = threading.current_thread()
+        _session.bind_thread(sess)
         try:
             self.show_message(
                 f"\n🔎 使用「{vision_model_name}」识别图片，随后交给「{original_model_name}」继续处理\n",
@@ -1828,18 +1865,34 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 content.append({"type": "text", "text": text})
             agent.chat_history.append(HumanMessage(content=content))
             agent.chat_history.append(HumanMessage(content=bridge_text))
+            # 立即存盘 + 刷侧栏（worker 线程→主线程信号），让该会话马上进侧栏可切回
+            try:
+                agent.save_session()
+            except Exception:
+                pass
+            self.bridge.sessions_refresh.emit()
             agent.agent_loop(self)
         except Exception as e:
             self.show_retry(f"图片识别失败: {str(e)[:100]}")
         finally:
+            sess.is_generating = False
+            sess.thread = None
             _session.unbind_thread()
-            self.bridge.finished.emit()
+            self.bridge.finished.emit(sess)
 
-    def _on_finished(self):
-        # 如果已经被 _force_stop_generation 提前处理过，跳过重复刷新
-        if not self.is_generating and not state.stop_flag:
+    def _on_finished_sess(self, finished_sess):
+        """finished 信号槽：区分活跃会话 vs 后台会话。
+
+        - finished_sess == active → 活跃会话结束，走完整收尾（刷 UI/按钮/撤销等）
+        - finished_sess != active → 后台会话结束，只刷侧栏，不碰前台 UI
+        """
+        from .. import session as _session
+        active_sess = _session.get_active()
+        if finished_sess is not active_sess:
+            # 后台会话完成：只刷侧栏列表（显示新标题/状态），不碰前台 UI
+            self._refresh_session_list()
             return
-        self.is_generating = False
+        # 活跃会话完成：完整收尾
         self._ai_reply_start = None
         self._update_btn_state("enabled" if self._has_input else "disabled")
         self._refresh_session_list()
@@ -2200,7 +2253,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _on_retry(self):
         """点击重试：重新执行 agent_loop"""
-        if self.is_generating:
+        from .. import session as _session
+        sess = _session.get_active()
+        if sess.is_generating:
             return
         # 移除上次失败的 AI 消息（如果最后一条是 AI 的空消息）
         from langchain_core.messages import AIMessage
@@ -2217,10 +2272,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             elif isinstance(_c, str) and not _c.strip():
                 agent.chat_history.pop()
 
-        self.is_generating = True
+        _session.register(sess)
+        sess.is_generating = True
         self._update_btn_state("stop")
         state.stop_flag = False
-        threading.Thread(target=self._run_agent, daemon=True).start()
+        threading.Thread(target=self._run_agent, args=(sess,), daemon=True).start()
 
 
     def _show_toast(self, text, duration=1500):
@@ -2262,6 +2318,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def show_message(self, text, tag):
         """线程安全：从 agent 线程发送信号到 UI 线程"""
+        # 后台会话路由：非活跃会话只标 needs_redraw，不发 UI 信号
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         # 桌宠思考动画：thinking_indicator 出现时切 think
         if tag == "thinking_indicator":
             pet = getattr(self, "pet", None)
@@ -2271,12 +2333,22 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def show_retry(self, error_msg):
         """线程安全：显示错误信息和重试按钮"""
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         pet = getattr(self, "pet", None)
         if pet is not None:
             pet.set_thinking(False)
         self.bridge.show_retry.emit(error_msg)
 
     def remove_thinking_indicator(self):
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         pet = getattr(self, "pet", None)
         if pet is not None:
             pet.set_thinking(False)
@@ -2284,6 +2356,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def update_thinking_indicator(self, text):
         """线程安全：更新等待指示器文本"""
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         self.bridge.update_thinking.emit(text)
 
     def _append_html(self, text, tag):
@@ -2403,6 +2480,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def show_token_usage(self, session_usage, round_usage):
         """线程安全：从 agent 线程通知 UI 更新 token 用量"""
+        from .. import session as _session
+        _sess = _session.current_session()
+        if _sess is not _session.get_active():
+            _sess.needs_redraw = True
+            return
         self.bridge.token_usage.emit(session_usage, round_usage)
 
 

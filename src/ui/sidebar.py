@@ -205,10 +205,15 @@ class SidebarMixin:
         self.history_layout.insertWidget(self.history_layout.count() - 1, title_btn)
 
         # 会话列表
+        from .. import session as _session
         for s in sessions[:30]:
             sid = s["id"]
             title = s["title"]
             is_current = (sid == agent.current_session_id)
+            # 运行态：生成中 → loading 转圈；后台完成、尚未查看（needs_redraw）→ 绿点绿字
+            _so = _session.get(sid)
+            is_gen = bool(_so and _so.is_generating)
+            is_done_unseen = bool(_so and not is_gen and getattr(_so, "needs_redraw", False))
 
             row = HistoryRow()
             row.setStyleSheet("background: transparent;")
@@ -217,8 +222,16 @@ class SidebarMixin:
             row_layout.setSpacing(4)
 
             display_title = title if len(title) <= 12 else title[:12] + "..."
+            if is_done_unseen:
+                display_title = "● " + display_title   # 绿点（颜色由 historyItemDone class 给）
             btn = QPushButton(display_title)
-            btn.setProperty("class", "historyItemActive" if is_current else "historyItem")
+            if is_current:
+                _cls = "historyItemActive"
+            elif is_done_unseen:
+                _cls = "historyItemDone"
+            else:
+                _cls = "historyItem"
+            btn.setProperty("class", _cls)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(title)
             # 注意：不要在这里 setStyleSheet。给 btn 设自己的 stylesheet 会切断
@@ -228,23 +241,33 @@ class SidebarMixin:
             btn.setMinimumWidth(0)
             btn.clicked.connect(lambda checked=False, s=sid: self._load_session(s))
 
-            del_btn = QPushButton("×")
-            del_btn.setObjectName("historyDeleteBtn")
-            del_btn.setFixedSize(22, 22)
-            del_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            del_btn.setCursor(Qt.PointingHandCursor)
-            del_btn.setStyleSheet(
-                f"QPushButton#historyDeleteBtn {{ background: transparent; border: none; "
-                f"color: {self._t('del_btn')}; font-size: 16px; font-weight: bold; "
-                f"border-radius: 12px; padding: 0; }}"
-                f"QPushButton#historyDeleteBtn:hover {{ color: {self._t('del_btn_hover')}; "
-                f"background: {self._t('del_btn_hover_bg')}; }}"
-            )
-            del_btn.clicked.connect(lambda checked=False, s=sid: self._delete_session(s))
-
             row_layout.addWidget(btn, 1)
-            row_layout.addWidget(del_btn, 0, Qt.AlignVCenter)
+            if is_gen:
+                # 生成中：删除位置改放 loading 转圈（不显示删除，避免误删正在跑的会话）
+                row_layout.addWidget(self._make_loading_spinner(), 0, Qt.AlignVCenter)
+            else:
+                del_btn = QPushButton("×")
+                del_btn.setObjectName("historyDeleteBtn")
+                del_btn.setFixedSize(22, 22)
+                del_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                del_btn.setCursor(Qt.PointingHandCursor)
+                del_btn.setStyleSheet(
+                    f"QPushButton#historyDeleteBtn {{ background: transparent; border: none; "
+                    f"color: {self._t('del_btn')}; font-size: 16px; font-weight: bold; "
+                    f"border-radius: 12px; padding: 0; }}"
+                    f"QPushButton#historyDeleteBtn:hover {{ color: {self._t('del_btn_hover')}; "
+                    f"background: {self._t('del_btn_hover_bg')}; }}"
+                )
+                del_btn.clicked.connect(lambda checked=False, s=sid: self._delete_session(s))
+                row_layout.addWidget(del_btn, 0, Qt.AlignVCenter)
             self.history_layout.insertWidget(self.history_layout.count() - 1, row)
+
+    def _make_loading_spinner(self):
+        """侧栏会话行"生成中"指示：旋转的缺口圆环（widgets.LoadingSpinner）。"""
+        from .widgets import LoadingSpinner
+        spin = LoadingSpinner(size=16, color="#3b82f6")
+        spin.setToolTip("生成中…")
+        return spin
 
     def _show_project_header_menu(self, anchor_widget, project_path):
         """项目标题右键菜单：移除项目（仅注册项目可移除）。"""
@@ -292,30 +315,44 @@ class SidebarMixin:
         self._refresh_session_list()
 
     def _load_session(self, session_id):
-        self._force_stop_generation()
-        agent.save_session()          # 先保存当前会话，再加载目标
-        if agent.load_session(session_id):
-            # 如果加载的会话属于另一个项目，自动跟随切到那个项目（同步 current_project + system prompt）
-            from .. import projects as _projects
-            session_project = self._get_session_project(session_id)
-            project_changed = session_project != _projects.get_current()
-            if project_changed:
-                _projects.set_current(session_project)
-                state.current_project = session_project
-                state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
-                from ..roles import get_system_prompt
-                if state.chat_history and isinstance(state.chat_history[0], SystemMessage):
-                    state.chat_history[0] = SystemMessage(content=get_system_prompt())
-            self._reset_render_state()
-            self._redraw_chat()
-            # 打开历史会话后滚到底，看最新一轮对话（_redraw_chat 本身不滚，因为它
-            # 也被切主题调用，那时不该跳到底）
-            self._scroll_to_bottom()
-            self._refresh_session_list()
-            # 工作目录可能已跟着会话切走，刷新底部项目指示条（之前漏了这步，
-            # 导致点 A 项目的会话、底部还显示上一个项目的路径）
-            if project_changed:
-                self._refresh_project_indicator()
+        from .. import session as _session
+        # 存当前 active（不打断正在后台跑的会话；save 内部会把它 re-key 进注册表）
+        agent.save_session()
+        # 命中注册表 → 该会话已在内存（可能正在后台跑），直接切 active，绝不重读盘覆盖它
+        target = _session.get(session_id)
+        if target is None:
+            # 未打开：新建 Session 读盘填充并注册（key = session_id）
+            target = _session.Session()
+            if not agent.load_session(session_id, session=target):
+                return
+            _session.register(target)
+        _session.set_active(target)
+        target.needs_redraw = False  # 切过去查看了 → 清"完成未读"标记（侧栏绿点消失）
+
+        # 加载的会话属于另一个项目 → 跟随切项目（同步 current_project + system prompt）
+        from .. import projects as _projects
+        session_project = self._get_session_project(session_id)
+        project_changed = session_project != _projects.get_current()
+        if project_changed:
+            _projects.set_current(session_project)
+            state.current_project = session_project
+            state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
+            from ..roles import get_system_prompt
+            if state.chat_history and isinstance(state.chat_history[0], SystemMessage):
+                state.chat_history[0] = SystemMessage(content=get_system_prompt())
+
+        # 重绘目标会话（state.chat_history 已代理到新 active=target）
+        self._reset_render_state()
+        self._redraw_chat()
+        self._scroll_to_bottom()
+        self._refresh_session_list()
+        if project_changed:
+            self._refresh_project_indicator()
+        # 同步前台按钮态：目标会话正在后台跑 → 停止态；否则按输入框恢复
+        if target.is_generating:
+            self._update_btn_state("stop")
+        else:
+            self._update_btn_state("enabled" if self._has_input else "disabled")
 
     def _get_session_project(self, session_id):
         """从 index 取指定 session 的 project 字段（不在 index 中返回 None）。"""
@@ -325,12 +362,20 @@ class SidebarMixin:
         return None
 
     def _new_chat(self):
-        self._force_stop_generation()
-        agent.reset_history()
+        from .. import session as _session
+        from ..roles import get_system_prompt
+        # 存当前 active（不打断正在后台跑的会话），再新建一个空会话切过去；
+        # 旧会话留在注册表，可从侧栏切回（若在跑则继续后台跑）。
+        agent.save_session()
+        new_sess = _session.Session()
+        new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
+        _session.register(new_sess)   # 临时 key（无 id，存盘后由 save 的 re-key 换成 id）
+        _session.set_active(new_sess)
         self.chat_area.clear()
         self._reset_render_state()
         self._refresh_session_list()
         self._show_empty_state()
+        self._update_btn_state("enabled" if self._has_input else "disabled")
 
     # ── 项目切换器 ──
 
@@ -376,25 +421,25 @@ class SidebarMixin:
         menu.exec(self.project_btn.mapToGlobal(self.project_btn.rect().bottomLeft()))
 
     def _switch_project(self, path):
-        self._force_stop_generation()
         from .. import projects as _projects
         from ..roles import get_system_prompt
+        from .. import session as _session
 
-        # 1. 先保存当前会话（用「旧」project tag）
-        #    必须早于 set_current；否则 save_session 会用新 tag 把旧会话覆盖
+        # 1. 先存当前会话（用它自己锚定的 project；set_current 不会影响它的 tag）
         agent.save_session()
 
-        # 2. 切换项目
+        # 2. 切换项目（全局当前项目 + tools 项目根）
         _projects.set_current(path)
         state.current_project = path
         state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
 
-        # 3. 手动清空（不调 agent.reset_history，因为它内部还会再次 save_session）
-        state.chat_history.clear()
-        state.chat_history.append(SystemMessage(content=get_system_prompt()))
-        state.current_session_id = None
-        state.current_session_title = None
-        state.session_token_usage = {"input": 0, "output": 0, "total": 0}
+        # 3. 新建空会话切过去（它的 project 首次 save 时锚定为新项目）。旧会话留注册表，
+        #    若正在后台跑则继续——不再 _force_stop_generation、也不清空它的 chat_history
+        #    （那会和正在跑的 worker 抢同一个 list，正是"无项目对话被归到新项目"的来源）。
+        new_sess = _session.Session()
+        new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
+        _session.register(new_sess)
+        _session.set_active(new_sess)
 
         # 4. UI
         self.chat_area.clear()
@@ -402,6 +447,7 @@ class SidebarMixin:
         self._refresh_session_list()
         self._refresh_project_indicator()
         self._show_empty_state()
+        self._update_btn_state("enabled" if self._has_input else "disabled")
 
     def _add_project(self):
         from .. import projects as _projects

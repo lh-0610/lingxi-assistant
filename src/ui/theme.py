@@ -582,6 +582,22 @@ QPushButton[class="historyItemActive"] {{
     padding: 9px 0 9px {p['history_active_pad_left']};
     border-radius: 8px;
 }}
+/* 后台会话完成、尚未查看：绿点 + 绿字（切回该会话查看后恢复普通样式）。
+ * 绿色两主题通用，故硬编码不走 palette。*/
+QPushButton[class="historyItemDone"] {{
+    background: transparent;
+    border: none;
+    color: #22c55e;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    padding: 9px 0 9px 12px;
+    border-radius: 8px;
+}}
+QPushButton[class="historyItemDone"]:hover {{
+    background-color: {p['history_hover_bg']};
+    color: #16a34a;
+}}
 
 /* 聊天区 */
 #chatArea {{

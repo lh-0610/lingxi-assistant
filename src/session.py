@@ -36,6 +36,9 @@ _SESSION_FIELDS = {
     "_last_text_only_image_warning": lambda: None,
 }
 
+# 哨兵：Session.project 的"尚未锚定"初值，区别于合法的 None（无项目/全局）。
+_UNSET = object()
+
 
 class Session:
     """一个会话的全部会话级运行时状态。
@@ -44,7 +47,9 @@ class Session:
     is_generating / thread 是运行态，由 UI / agent 直接拿 Session 对象访问。
     """
 
-    __slots__ = tuple(_SESSION_FIELDS) + ("is_generating", "thread")
+    __slots__ = tuple(_SESSION_FIELDS) + (
+        "is_generating", "thread", "key", "needs_redraw", "project",
+    )
 
     def __init__(self):
         for name, factory in _SESSION_FIELDS.items():
@@ -52,6 +57,13 @@ class Session:
         # 运行态（不经 state 代理）
         self.is_generating = False
         self.thread = None
+        # 多会话生命周期（P2）
+        self.key = None           # 注册表里的键（已存盘=session_id；新会话=临时键 _new_<n>）
+        self.needs_redraw = False  # 后台会话跑完置 True，切回时触发重绘
+        # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
+        # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
+        # 切项目，若取全局 current_project 就会被打上新项目 tag。
+        self.project = _UNSET
 
 
 # ── 当前会话路由 ──
@@ -92,3 +104,58 @@ def bind_thread(session: "Session") -> None:
 def unbind_thread() -> None:
     """解除当前线程的会话绑定（worker 退出时调）。"""
     _thread_local.session = None
+
+
+# ── 多会话注册表 API（P2）──
+
+def new_session_key() -> str:
+    """生成一个临时 key（_new_0, _new_1, ...），用于未存盘的新会话。"""
+    with _lock:
+        i = 0
+        while f"_new_{i}" in sessions:
+            i += 1
+        return f"_new_{i}"
+
+
+def register(sess: Session) -> str:
+    """将 Session 注册到 sessions 注册表；返回 key。
+
+    - 若 sess 已有 key（已注册），直接返回。
+    - 若 sess 有 current_session_id（已存盘），用 id 作 key。
+    - 否则分配临时 key。
+    """
+    with _lock:
+        if sess.key is not None:
+            return sess.key
+        key = sess.current_session_id or new_session_key()
+        sess.key = key
+        sessions[key] = sess
+        return key
+
+
+def get(key: str):
+    """按 key 查注册表；找不到返回 None。"""
+    with _lock:
+        return sessions.get(key)
+
+
+def drop(key: str) -> None:
+    """从注册表移除。"""
+    with _lock:
+        sessions.pop(key, None)
+
+
+def rekey(sess: Session, new_key: str) -> None:
+    """会话存盘拿到正式 id 后，把注册表里的临时 key（_new_N）换成 id。
+
+    不迁移的话：新会话存盘前 key 是 _new_0，存盘后 current_session_id 有了但注册表
+    仍以 _new_0 为键 → load_session(id) 用 id 查注册表查不到，会重复建一个 Session，
+    和内存里正在跑的那个脱节。
+    """
+    if not new_key:
+        return
+    with _lock:
+        if sess.key is not None and sess.key != new_key:
+            sessions.pop(sess.key, None)
+        sess.key = new_key
+        sessions[new_key] = sess
