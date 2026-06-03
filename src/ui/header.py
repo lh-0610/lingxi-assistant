@@ -170,7 +170,8 @@ class HeaderMixin:
     # ── 顶栏按钮交互 ──
 
     def _on_model_changed(self, index):
-        if self.is_generating:
+        from .. import session as _session
+        if _session.get_active().is_generating:
             self._force_stop_generation()
         agent.switch_model(index)
         # 根据模型是否支持思考，更新开关状态
@@ -240,7 +241,8 @@ class HeaderMixin:
             self._refresh_header_compactness()
 
     def _load_role_card(self):
-        if self.is_generating:
+        from .. import session as _session
+        if _session.get_active().is_generating:
             self._force_stop_generation()
 
         def _apply_role_card(path):

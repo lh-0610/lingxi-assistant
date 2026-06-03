@@ -290,7 +290,13 @@ def maybe_generate_session_title():
 
     state.current_session_title = title
     _ensure_memory_dir()
-    _update_index(state.current_session_id, title, state.current_project)
+    # project tag 用【本会话】锚定的归属，不取全局 current_project：标题生成是后台线程，
+    # 跑的时候用户可能已切到别的项目，取全局会把这个会话的 tag 写错。
+    from . import session as _session_mod
+    _proj = _session_mod.current_session().project
+    if _proj is _session_mod._UNSET:
+        _proj = state.current_project
+    _update_index(state.current_session_id, title, _proj)
     _write_session_title(state.current_session_id, title)
     logger.info(f"自动标题已生成: {state.current_session_id} - {title}")
 

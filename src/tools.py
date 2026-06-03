@@ -385,10 +385,15 @@ def _call_comfy(prompt, width, height):
 def _project_cwd() -> str:
     """所有命令 / 文件工具的有效工作目录。
 
-    优先用 state.current_project（用户在侧边栏切换的项目根）；
-    没设或路径已不存在时，回退到 Python 进程的 cwd（一般是项目源码目录）。
+    优先用【当前会话】锚定的 project：多会话下 worker 跑工具时用它自己会话的项目根，
+    不会因为用户在前台切了项目就把 A 会话的 read_file/run_command 落到 B。会话还没锚定
+    （_UNSET，如刚新建没存盘）→ 回退全局 state.current_project；都没有 / 路径不存在 →
+    进程 cwd。None 是合法的"无项目（全局）"。
     """
-    proj = getattr(state, "current_project", None)
+    from . import session as _session
+    proj = _session.current_session().project
+    if proj is _session._UNSET:
+        proj = getattr(state, "current_project", None)
     if proj and os.path.isdir(proj):
         return proj
     return os.getcwd()

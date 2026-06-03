@@ -647,3 +647,18 @@ class TestSwitchDoesNotCorruptBackground:
         assert state.reasoning_enabled is True
         # 切来切去互不影响
         assert a.current_model_index == 1 and b.current_model_index == 3
+
+    def test_project_cwd_follows_session_not_global(self, tmp_path, monkeypatch):
+        """_project_cwd 优先用当前会话锚定的 project，不被全局 current_project 影响
+        （后台会话跑工具时 cwd 不跟前台切项目走）。"""
+        from src import session as _session, state
+        from src.tools import _project_cwd
+        d_sess = tmp_path / "sessproj"
+        d_sess.mkdir()
+        d_global = tmp_path / "globalproj"
+        d_global.mkdir()
+        monkeypatch.setattr(state, "current_project", str(d_global))  # 全局指向 B
+        s = _session.Session()
+        s.project = str(d_sess)                                       # 会话锚定 A
+        _session.set_active(s)
+        assert _project_cwd() == str(d_sess)                          # 用会话的 A，不是全局 B

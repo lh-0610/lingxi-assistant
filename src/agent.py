@@ -277,7 +277,14 @@ def agent_loop(ui):
         except Exception:
             pass
 
+        # 捕获本轮的会话：标题生成在新线程跑，必须 bind 到这个会话，否则
+        # maybe_generate_session_title 读 state.current_session_id/title/model 会落到
+        # 当时的 active（用户可能已切走），把标题/项目 tag 写错会话。
+        from . import session as _session
+        _title_sess = _session.current_session()
+
         def _gen_title_bg():
+            _session.bind_thread(_title_sess)
             try:
                 maybe_generate_session_title()
                 bridge = getattr(ui, "bridge", None)
@@ -285,6 +292,8 @@ def agent_loop(ui):
                     bridge.sessions_refresh.emit()  # 标题出来后刷新侧栏（线程安全）
             except Exception as e:
                 logger.error(f"自动生成标题失败: {e}", exc_info=True)
+            finally:
+                _session.unbind_thread()
 
         _threading.Thread(target=_gen_title_bg, daemon=True).start()
 

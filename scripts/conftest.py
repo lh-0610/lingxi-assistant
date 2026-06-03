@@ -20,6 +20,7 @@ def project_dir(tmp_path):
     测试结束后自动恢复原 state。
     """
     from src import state
+    from src import session as _session
 
     proj = tmp_path / "myproject"
     proj.mkdir()
@@ -27,11 +28,17 @@ def project_dir(tmp_path):
     old_ui = state.ui_ref
     state.current_project = str(proj)
     state.ui_ref = None  # 无 UI，写文件自动放行
+    # _project_cwd 现在优先用【当前会话】锚定的 project（会话级），所以也把当前会话的
+    # project 设成这个临时项目，否则会沿用上一个测试残留的 active.project。
+    _sess = _session.get_active()
+    old_sess_proj = _sess.project
+    _sess.project = str(proj)
 
     yield proj
 
     state.current_project = old_project
     state.ui_ref = old_ui
+    _sess.project = old_sess_proj
 
 
 @pytest.fixture()
