@@ -212,6 +212,15 @@ class TestSessionStateIsolation:
         a.key = "key_a"
         assert b.key is None
 
+    def test_command_whitelist_per_session(self):
+        """命令/编辑白名单会话级：A 会话"允许并记住"的不泄漏到 B。"""
+        a, b = Session(), Session()
+        a.command_prefix_allowlist.add("git")
+        a.edit_path_allowlist.add("/x/foo.py")
+        assert "git" in a.command_prefix_allowlist
+        assert "git" not in b.command_prefix_allowlist
+        assert b.edit_path_allowlist == set()
+
 
 # ════════════════════════════════════════════════════════════════════
 # 4. 线程绑定路由（Step 1 基础）

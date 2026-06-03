@@ -513,6 +513,12 @@ class ConfirmBarsMixin:
         # 把焦点交给 bar 本身，1/2/3/Esc 由 eventFilter 接管
         self.command_confirm_bar.setFocus()
 
+    def _cur_confirm_sess(self):
+        """当前确认对应的会话：worker 发起 confirm 时记下的发起会话；没有则退当前线程会话。
+        让主线程点"记住"时把白名单加到【发起确认的那个会话】（可能是后台会话，非 active）。"""
+        from .. import session as _session
+        return getattr(self, "_active_confirm_session", None) or _session.current_session()
+
     def _resolve_command_confirm(self, allow: bool, remember: bool = False):
         """按钮点击：写结果、（必要时）把 base 命令加进前缀白名单、唤醒 worker、隐藏卡片。
 
@@ -532,7 +538,7 @@ class ConfirmBarsMixin:
         if allow and remember and not self._command_confirm_destructive:
             base = self._extract_base_command(self.command_confirm_text.toPlainText())
             if base:
-                self._session_command_prefix_allowlist.add(base)
+                self._cur_confirm_sess().command_prefix_allowlist.add(base)
                 logger_log = getattr(self, "_logger", None)  # 不强依赖；只是 best-effort
                 if logger_log:
                     try:
@@ -816,7 +822,7 @@ class ConfirmBarsMixin:
         if allow and remember:
             p = self._edit_confirm_path
             if p:
-                self._session_edit_path_allowlist.add(p)
+                self._cur_confirm_sess().edit_path_allowlist.add(p)
         self._edit_confirm_result_holder["allow"] = allow
         self._edit_confirm_result_holder["feedback"] = feedback
         self._edit_confirm_done_event.set()
@@ -886,13 +892,16 @@ class ConfirmBarsMixin:
         返回 (allowed, feedback)：allowed 为是否允许；feedback 是用户附带的
         文字反馈（允许时也可附反馈；拒绝时反馈用于告知 AI 如何调整）。
         """
+        from .. import session as _session
+        _sess = _session.current_session()      # 发起确认的会话（worker 线程绑的）
+        self._active_confirm_session = _sess    # 给主线程 _resolve_* 把"记住"加到这个会话
         # 危险命令必须每次确认，永不被白名单绕过
         is_destructive = self._is_destructive_command(command)
         if not is_destructive:
             base = self._extract_base_command(command)
-            if base and base in self._session_command_prefix_allowlist:
+            if base and base in _sess.command_prefix_allowlist:
                 return True, ""
-            if self._normalize_command(command) in self._session_command_allowlist:
+            if self._normalize_command(command) in _sess.command_allowlist:
                 return True, ""
 
         result = {}
@@ -926,7 +935,7 @@ class ConfirmBarsMixin:
         if result.get("allow") and result.get("remember") and not is_destructive:
             base = self._extract_base_command(command)
             if base:
-                self._session_command_prefix_allowlist.add(base)
+                _sess.command_prefix_allowlist.add(base)
 
         # 清理远程注册表（如果远程那边还没触发）
         if remote_cid:
@@ -950,7 +959,10 @@ class ConfirmBarsMixin:
 
         done.wait() 无限等待，由用户点击按钮或关窗 _release 唤醒。
         """
-        if path and path in self._session_edit_path_allowlist:
+        from .. import session as _session
+        _sess = _session.current_session()      # 发起编辑确认的会话（worker 线程绑的）
+        self._active_confirm_session = _sess
+        if path and path in _sess.edit_path_allowlist:
             return True, ""
 
         result = {}
@@ -985,7 +997,7 @@ class ConfirmBarsMixin:
 
         # 手机端点了"记住同类"——补加文件白名单（PC 路径已在 _resolve_edit_confirm 里加过）
         if result.get("allow") and result.get("remember") and path:
-            self._session_edit_path_allowlist.add(path)
+            _sess.edit_path_allowlist.add(path)
 
         # 清理
         if remote_cid:

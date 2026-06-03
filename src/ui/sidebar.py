@@ -334,6 +334,7 @@ class SidebarMixin:
         _session.set_active(target)
         target.needs_redraw = False  # 切过去查看了 → 清"完成未读"标记（侧栏绿点消失）
         self._sync_header_from_session()  # 顶栏 model/Plan-Act/思考 同步到该会话
+        self._refresh_token_label_from_session()  # 底部 token 刷成该会话的累计用量
 
         # 加载的会话属于另一个项目 → 跟随切项目（同步 current_project + system prompt）
         from .. import projects as _projects
@@ -387,6 +388,7 @@ class SidebarMixin:
         self._show_empty_state()
         self._update_btn_state("enabled" if self._has_input else "disabled")
         self._sync_header_from_session()
+        self._refresh_token_label_from_session()
 
     # ── 项目切换器 ──
 
@@ -464,6 +466,7 @@ class SidebarMixin:
         self._show_empty_state()
         self._update_btn_state("enabled" if self._has_input else "disabled")
         self._sync_header_from_session()
+        self._refresh_token_label_from_session()
 
     def _add_project(self):
         from .. import projects as _projects

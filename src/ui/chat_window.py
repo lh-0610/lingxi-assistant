@@ -137,17 +137,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.setAcceptDrops(True)
         self._search_widget = None         # Ctrl+F search floating window
         self._msg_buffers = {}             # msg_idx -> AI message plain text
-        # 本次会话用户主动放行过的命令（normalize 后的字符串），重启清空
-        # 旧"精确字符串"白名单——还保留是为了向后兼容，主要靠下面的前缀白名单
-        self._session_command_allowlist = set()
-        # 前缀白名单：base command（如 "git" / "python" / "dir"），本次会话内所有以该
-        # base 开头的命令都自动放行。但**危险命令（rm -rf / format / sudo 等）始终要确认**，
-        # 不被前缀白名单跳过
-        self._session_command_prefix_allowlist = set()
-        # edit_file 路径白名单：用户对某个文件选过"信任此文件的所有修改"后，本会话
-        # 内对同一路径的 edit_file 自动放行（不再弹 diff 预览）。这是给 AI 修一个
-        # 文件改多处时的便利项——审了第一次就信任剩下几次
-        self._session_edit_path_allowlist = set()
+        # 命令 / 编辑白名单已迁移到 session.Session（会话级，见 confirm_bars）：用户"允许
+        # 并记住"只影响发起确认的那个会话，不再作为 ChatUI 全局属性跨会话共享/泄漏。
 
         # 语音 STT/TTS（懒加载模型，启动不阻塞）
         if _VOICE_AVAILABLE:
@@ -2507,3 +2498,15 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             text += f"  (本轮 {_fmt(r_total)})"
         self.token_usage_label.setText(text)
         self.token_usage_label.setVisible(True)
+
+    def _refresh_token_label_from_session(self):
+        """切会话后把底部 token 显示刷成【该会话】的累计用量（token 已会话级）。
+        新会话还没用量 → 隐藏 label。"""
+        if not hasattr(self, "token_usage_label"):
+            return
+        from .. import session as _session
+        su = _session.get_active().session_token_usage
+        if su.get("total", 0) > 0:
+            self._update_token_usage(su, {})
+        else:
+            self.token_usage_label.setVisible(False)

@@ -54,6 +54,7 @@ class Session:
 
     __slots__ = tuple(_SESSION_FIELDS) + (
         "is_generating", "thread", "key", "needs_redraw", "project",
+        "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
     )
 
     def __init__(self):
@@ -65,6 +66,10 @@ class Session:
         # 多会话生命周期（P2）
         self.key = None           # 注册表里的键（已存盘=session_id；新会话=临时键 _new_<n>）
         self.needs_redraw = False  # 后台会话跑完置 True，切回时触发重绘
+        # 会话级命令/编辑白名单（用户"允许并记住"只影响本会话，不泄漏到别的会话）
+        self.command_allowlist = set()         # 精确命令字符串（旧版，向后兼容）
+        self.command_prefix_allowlist = set()  # base 命令前缀（"信任所有 git"）
+        self.edit_path_allowlist = set()       # edit_file 路径（"信任此文件所有修改"）
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。
