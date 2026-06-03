@@ -110,6 +110,20 @@ def current_session() -> "Session":
     return s if s is not None else get_active()
 
 
+def current_project():
+    """当前会话锚定的项目根（_UNSET 回退全局 state.current_project；None = 无项目）。
+
+    tools（cwd / generate_image 输出）和 roles（system prompt 的项目上下文 / .lingxirules）
+    统一用这个，保证后台会话的工具落点 + 模型"以为自己在哪个项目"一致——不会因为前台
+    切了项目，让正在后台跑的会话串到别的项目。
+    """
+    p = current_session().project
+    if p is _UNSET:
+        from . import state  # 延迟 import 避免循环（state 顶层 import session）
+        p = state.current_project
+    return p
+
+
 def bind_thread(session: "Session") -> None:
     """把当前线程绑定到某会话（worker 线程进 agent_loop 时调）。"""
     _thread_local.session = session

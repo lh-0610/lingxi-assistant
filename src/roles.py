@@ -198,8 +198,10 @@ def get_system_prompt(include_painting: bool = False):
     # 当前激活项目 → 注入项目上下文，让 AI 知道默认工作目录。
     # 注：必须用 isdir 校验（不能只看非空），否则项目目录被删后还会注入失效的上下文，
     # AI 会按一个不存在的路径推理。tools.py:_project_cwd() 同样有 isdir 兜底。
-    from . import state as _state
-    project_root = getattr(_state, "current_project", None)
+    from . import session as _session
+    from . import state as _state  # 下面 Plan 模式判断等仍用 _state
+    project_root = _session.current_project()  # 会话级：与 tools._project_cwd 同源，
+    # 后台会话生成中、前台切了项目，也不会让该会话的 system prompt 串到别的项目
     if project_root and os.path.isdir(project_root):
         project_ctx = (
             "\n\n# 项目上下文\n"

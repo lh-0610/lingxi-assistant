@@ -391,9 +391,7 @@ def _project_cwd() -> str:
     进程 cwd。None 是合法的"无项目（全局）"。
     """
     from . import session as _session
-    proj = _session.current_session().project
-    if proj is _session._UNSET:
-        proj = getattr(state, "current_project", None)
+    proj = _session.current_project()   # 会话级：_UNSET 回退全局，统一来源
     if proj and os.path.isdir(proj):
         return proj
     return os.getcwd()
@@ -1329,7 +1327,9 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024, model: st
 
     # 优先存到当前项目根的 outputs/，没项目就存到 chat_memory/generated/，
     # 避免硬编码到某个人的本地目录（之前是 D:\games\servicedaily\photos）
-    proj = getattr(state, "current_project", None)
+    # 用会话级 project（_project_cwd 同源）：后台会话生图存到自己项目，不跟前台切项目走
+    from . import session as _session
+    proj = _session.current_project()
     if proj and os.path.isdir(proj):
         save_dir = os.path.join(proj, "outputs")
     else:

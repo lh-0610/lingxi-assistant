@@ -12,6 +12,20 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_active_session():
+    """每个测试前给一个干净的 active session。
+
+    会话级化后 active 是进程级单例，会话级字段（project/model_index/agent_mode/白名单等）
+    会跨测试残留——比如上个测试设了 active.project，下个直接 monkeypatch state.current_project
+    的测试就读不到（current_project() 优先会话级、非 _UNSET 不回退全局）。每测试 fresh active
+    让这些字段回默认（project=_UNSET → 回退全局），测试间互不干扰。
+    """
+    from src import session as _session
+    _session.set_active(_session.Session())
+    yield
+
+
 @pytest.fixture()
 def project_dir(tmp_path):
     """创建临时项目目录，并注入 state.current_project / state.ui_ref。

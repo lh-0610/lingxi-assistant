@@ -71,7 +71,8 @@ def _dispatch(text: str):
     if ui is None:
         return
 
-    if ui.is_generating:
+    from . import session as _session
+    if _session.get_active().is_generating:  # is_generating 已迁到 Session（ui.is_generating 是 fallback）
         from . import telegram_push
         telegram_push.push("info", "灵犀正忙", "当前正在生成中，请稍后再试～")
         logger.info(f"遥控消息被拒（忙）: {text[:50]}")
