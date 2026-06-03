@@ -22,7 +22,7 @@ import threading
 
 from .. import state as _state
 from .. import telegram_push
-from ..config import REMOTE_TELEGRAM_CONFIRM
+from .. import config as _config  # 运行时读 _config.REMOTE_TELEGRAM_CONFIRM（设置里改完即时生效，无需重启）
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -901,7 +901,7 @@ class ConfirmBarsMixin:
         # --- 手机 Telegram 遥控确认（与 PC 卡片竞争，先点先到） ---
         remote_cid = None
         remote_msg_id = None
-        if REMOTE_TELEGRAM_CONFIRM:
+        if _config.REMOTE_TELEGRAM_CONFIRM:
             remote_cid = _new_confirm_id()
             with _pending_lock:
                 _pending_remote_confirms[remote_cid] = {
@@ -959,7 +959,7 @@ class ConfirmBarsMixin:
         # --- 手机 Telegram 遥控确认 ---
         remote_cid = None
         remote_msg_id = None
-        if REMOTE_TELEGRAM_CONFIRM:
+        if _config.REMOTE_TELEGRAM_CONFIRM:
             remote_cid = _new_confirm_id()
             with _pending_lock:
                 _pending_remote_confirms[remote_cid] = {

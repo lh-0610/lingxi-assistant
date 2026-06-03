@@ -878,6 +878,8 @@ class SettingsDialog(QDialog):
         """远程 tab：Telegram 通知（PC→手机）+ 遥控（手机→PC）。"""
         self._add_section(layout, "Telegram 通知（PC→手机）")
         self._add_bool(layout, "notify.enabled", "启用通知")
+        self._add_bool(layout, "remote_control.telegram_confirm",
+                       "命令确认推送到手机（关掉后命令/编辑确认只在 PC 弹）", default=True)
         self._add_text(layout, "notify.telegram_bot_token", "Bot Token",
                        "@BotFather 拿", password=True)
         self._add_text(layout, "notify.telegram_chat_id", "Chat ID",
@@ -937,6 +939,15 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "保存失败", str(e))
             return
+
+        # 让"命令确认推手机"开关即时生效（confirm_bars 运行时读 config 模块属性）——
+        # 否则它是启动时读的模块常量，改完要重启才生效。其余配置仍需重启（已有行为）。
+        try:
+            from .. import config as _cfg
+            _rc = self.config.get("remote_control") or {}
+            _cfg.REMOTE_TELEGRAM_CONFIRM = bool(_rc.get("telegram_confirm", True))
+        except Exception:
+            pass
 
         QMessageBox.information(
             self, "已保存",
