@@ -204,6 +204,26 @@ class HeaderMixin:
         else:
             self._show_toast("⚡ 已切到 Act 模式：AI 可直接执行工具")
 
+    def _sync_header_from_session(self):
+        """切会话后把顶栏（模型下拉 / Plan-Act / 思考）同步到当前会话的状态。
+        model/mode/思考 现在是会话级——切到哪个会话，顶栏就显示那个会话的选择。
+        setCurrentIndex 会触发 _on_model_changed（含 force_stop），切会话时必须 blockSignals 屏蔽。"""
+        from .. import session as _session
+        sess = _session.get_active()
+        if hasattr(self, "model_combo"):
+            self.model_combo.blockSignals(True)
+            self.model_combo.setCurrentIndex(sess.current_model_index)
+            self.model_combo.blockSignals(False)
+            _, _, _, supports_think = agent.MODEL_LIST[sess.current_model_index]
+            if hasattr(self, "think_btn"):
+                self.think_btn.setEnabled(supports_think)
+                self.think_btn.setChecked(bool(sess.reasoning_enabled and supports_think))
+        if hasattr(self, "mode_btn"):
+            self.mode_btn.setChecked(sess.agent_mode == "plan")
+            self._style_mode_btn()
+        if hasattr(self, "_refresh_header_compactness"):
+            self._refresh_header_compactness()
+
     # ── 角色卡 ──
 
     def _restore_role_card_ui(self):

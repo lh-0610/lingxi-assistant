@@ -65,15 +65,26 @@ def __getattr__(name):
 # 模型切换
 # ══════════════════════════════════════
 
-def _activate_llm():
-    """Reuse LLM and tool-bound LLM objects for the active model."""
-    _, mtype, model_id, supports_think = MODEL_LIST[state.current_model_index]
-    effective_reasoning = bool(state.reasoning_enabled and supports_think)
-    key = (state.current_model_index, mtype, model_id, effective_reasoning)
+def resolve_bound_llm(session):
+    """按 session 的 model_index + reasoning 取 / 建 (llm, llm_with_tools)，按 model 缓存。
+
+    多会话并发时各 worker 用各自会话 model 的实例，互不串台——streaming 的并发路径走
+    这个，不读全局 state.llm_with_tools（那是单值，会被别的会话的切换覆盖）。
+    """
+    mi = session.current_model_index
+    _, mtype, model_id, supports_think = MODEL_LIST[mi]
+    effective_reasoning = bool(session.reasoning_enabled and supports_think)
+    key = (mi, mtype, model_id, effective_reasoning)
     if key not in _BOUND_LLM_CACHE:
-        llm = _create_llm()
+        llm = _create_llm(mi, effective_reasoning)
         _BOUND_LLM_CACHE[key] = (llm, llm.bind_tools(build_all_tools()))
-    state.llm, state.llm_with_tools = _BOUND_LLM_CACHE[key]
+    return _BOUND_LLM_CACHE[key]
+
+
+def _activate_llm():
+    """把全局 state.llm / llm_with_tools 设为【当前会话】model 对应实例（主线程 / 调试用）。"""
+    from . import session as _session
+    state.llm, state.llm_with_tools = resolve_bound_llm(_session.current_session())
 
 
 def switch_model(index):

@@ -295,6 +295,8 @@ def _compact_history(
         ]
 
         try:
+            # 压缩用全局 state.llm（当前 active model）。压缩只是生成摘要、不影响回复正确性，
+            # 没必要为它让每个 worker 各按自己 model 创建实例（也便于测试 mock state.llm）。
             resp = state.llm.invoke(compress_msgs)
             # 提取纯文本（兼容 Anthropic content block list 和 OpenAI 字符串）
             raw = getattr(resp, "content", "") or ""
@@ -819,7 +821,10 @@ def _stream_with_tools(ui):
     history_for_send, _debug_rec = _prepare_stream_history(ui)
 
     try:
-        for chunk in _stream_chunks_with_retry(state.llm_with_tools, history_for_send, ui):
+        # 用【本会话】model 的 llm_with_tools（worker 线程绑的会话），不读全局 state.llm_with_tools
+        from . import agent as _agent, session as _session
+        _lwt = _agent.resolve_bound_llm(_session.current_session())[1]
+        for chunk in _stream_chunks_with_retry(_lwt, history_for_send, ui):
             if state.stop_flag:
                 break
             _handle_stream_chunk(st, chunk, ui, heartbeat_stop, heartbeat_phase)

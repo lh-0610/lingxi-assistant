@@ -25,13 +25,8 @@ from . import session as _session
 # 全局共享字段（所有会话共用，普通模块变量）
 # ══════════════════════════════════════
 
-# 当前选中的模型在 MODEL_LIST 里的索引
-current_model_index = 0
-
-# 是否启用思考模式（reasoning）
-reasoning_enabled = True
-
-# 当前 LangChain LLM 实例（启动时由 agent.py 创建）
+# 当前 LangChain LLM 实例：全局缓存的"当前会话 model"对应实例，给主线程 / 调试用。
+# 并发 worker 各用自己会话 model 的 llm（见 agent.resolve_bound_llm），不读这个全局值。
 llm = None
 llm_with_tools = None
 
@@ -44,16 +39,12 @@ current_project = None
 # 此时 run_command 会默认放行，不阻塞。
 ui_ref = None
 
-# Agent 工作模式：
-#   "act"  —— 默认。AI 可以调任何工具直接动手
-#   "plan" —— 计划模式。AI 只能调"只读"工具（read/search/list），
-#             不能 edit/write/append/run_command/generate_image。
-# 由 ChatUI 顶栏的 Plan/Act 切换按钮修改。
-# （后续 Phase 会改成会话级；P1 暂为全局，行为与重构前一致）
-agent_mode = "act"
-
 # Telegram 遥控：回复完成后是否自动发 Telegram 通知（可由命令开关）
 telegram_stop: bool = False
+
+# 注：current_model_index / agent_mode / reasoning_enabled 已改为**会话级**
+# （在 session._SESSION_FIELDS）——切会话时 模型 / Plan-Act / 思考 跟随该会话。
+# 这几个 state.X 的读写经文件末尾的代理落到"当前线程的当前会话"。
 
 
 # ══════════════════════════════════════

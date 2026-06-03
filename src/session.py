@@ -34,6 +34,11 @@ _SESSION_FIELDS = {
     # streaming.py 用 state._last_text_only_image_warning 记"本会话本模型是否已就
     # 文本模型收到图片提示过一次"，也是会话级。
     "_last_text_only_image_warning": lambda: None,
+    # model 选择 / Plan-Act 模式 / 思考开关 —— 会话级（用户决策）。切会话时跟随该会话；
+    # 在某会话改 model 只影响它。默认值会被启动 / 新建会话的"继承当前"覆盖。
+    "current_model_index": lambda: 0,
+    "agent_mode": lambda: "act",
+    "reasoning_enabled": lambda: True,
 }
 
 # 哨兵：Session.project 的"尚未锚定"初值，区别于合法的 None（无项目/全局）。

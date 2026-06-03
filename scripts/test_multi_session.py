@@ -625,3 +625,25 @@ class TestSwitchDoesNotCorruptBackground:
         with open(_os.path.join(str(isolated_memory), f"{sid}.json"), encoding="utf-8") as f:
             data = json.load(f)
         assert data["project"] is None, f"会话被误标成 {data['project']}（应保持无项目）"
+
+    def test_model_mode_per_session(self):
+        """model / Plan-Act / 思考 会话级：两会话各自独立，state 代理跟随 active。"""
+        from src import session as _session
+        a = _session.Session()
+        a.current_model_index = 1
+        a.agent_mode = "plan"
+        a.reasoning_enabled = False
+        b = _session.Session()
+        b.current_model_index = 3
+        b.agent_mode = "act"
+        b.reasoning_enabled = True
+        _session.set_active(a)
+        assert state.current_model_index == 1
+        assert state.agent_mode == "plan"
+        assert state.reasoning_enabled is False
+        _session.set_active(b)
+        assert state.current_model_index == 3
+        assert state.agent_mode == "act"
+        assert state.reasoning_enabled is True
+        # 切来切去互不影响
+        assert a.current_model_index == 1 and b.current_model_index == 3

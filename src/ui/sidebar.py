@@ -316,6 +316,7 @@ class SidebarMixin:
 
     def _load_session(self, session_id):
         from .. import session as _session
+        _prev = _session.get_active()  # 切换前的会话，新建会话继承它的 model/mode
         # 存当前 active（不打断正在后台跑的会话；save 内部会把它 re-key 进注册表）
         agent.save_session()
         # 命中注册表 → 该会话已在内存（可能正在后台跑），直接切 active，绝不重读盘覆盖它
@@ -323,11 +324,16 @@ class SidebarMixin:
         if target is None:
             # 未打开：新建 Session 读盘填充并注册（key = session_id）
             target = _session.Session()
+            # 历史会话不持久化 model → 继承当前会话的 model/mode 作起点（之后随该会话独立）
+            target.current_model_index = _prev.current_model_index
+            target.agent_mode = _prev.agent_mode
+            target.reasoning_enabled = _prev.reasoning_enabled
             if not agent.load_session(session_id, session=target):
                 return
             _session.register(target)
         _session.set_active(target)
         target.needs_redraw = False  # 切过去查看了 → 清"完成未读"标记（侧栏绿点消失）
+        self._sync_header_from_session()  # 顶栏 model/Plan-Act/思考 同步到该会话
 
         # 加载的会话属于另一个项目 → 跟随切项目（同步 current_project + system prompt）
         from .. import projects as _projects
@@ -364,11 +370,15 @@ class SidebarMixin:
     def _new_chat(self):
         from .. import session as _session
         from ..roles import get_system_prompt
+        _prev = _session.get_active()  # 新会话继承当前会话的 model/mode
         # 存当前 active（不打断正在后台跑的会话），再新建一个空会话切过去；
         # 旧会话留在注册表，可从侧栏切回（若在跑则继续后台跑）。
         agent.save_session()
         new_sess = _session.Session()
         new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
+        new_sess.current_model_index = _prev.current_model_index  # 继承 model/mode/思考
+        new_sess.agent_mode = _prev.agent_mode
+        new_sess.reasoning_enabled = _prev.reasoning_enabled
         _session.register(new_sess)   # 临时 key（无 id，存盘后由 save 的 re-key 换成 id）
         _session.set_active(new_sess)
         self.chat_area.clear()
@@ -376,6 +386,7 @@ class SidebarMixin:
         self._refresh_session_list()
         self._show_empty_state()
         self._update_btn_state("enabled" if self._has_input else "disabled")
+        self._sync_header_from_session()
 
     # ── 项目切换器 ──
 
@@ -436,8 +447,12 @@ class SidebarMixin:
         # 3. 新建空会话切过去（它的 project 首次 save 时锚定为新项目）。旧会话留注册表，
         #    若正在后台跑则继续——不再 _force_stop_generation、也不清空它的 chat_history
         #    （那会和正在跑的 worker 抢同一个 list，正是"无项目对话被归到新项目"的来源）。
+        _prev = _session.get_active()  # 继承当前会话的 model/mode（切项目不改这些）
         new_sess = _session.Session()
         new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
+        new_sess.current_model_index = _prev.current_model_index
+        new_sess.agent_mode = _prev.agent_mode
+        new_sess.reasoning_enabled = _prev.reasoning_enabled
         _session.register(new_sess)
         _session.set_active(new_sess)
 
@@ -448,6 +463,7 @@ class SidebarMixin:
         self._refresh_project_indicator()
         self._show_empty_state()
         self._update_btn_state("enabled" if self._has_input else "disabled")
+        self._sync_header_from_session()
 
     def _add_project(self):
         from .. import projects as _projects
