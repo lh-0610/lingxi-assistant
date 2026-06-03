@@ -1155,7 +1155,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def _list_project_dir(self, rel_dir):
         """列出 项目根/rel_dir 的直接子项 [(name, is_dir)]，跳噪声目录，文件夹优先。
         逐层浏览：@ 浮窗每次只列一层，选文件夹进入下一层。"""
-        project_root = getattr(state, 'current_project', None) or os.getcwd()
+        from .. import session as _session
+        project_root = _session.current_project() or os.getcwd()  # 会话级，与工具 cwd 同源
         target = os.path.join(project_root, rel_dir) if rel_dir else project_root
         ignore = {
             ".git", ".hg", ".svn", "node_modules", "bower_components",
@@ -1239,7 +1240,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """扫描 @相对路径，【不注入文件内容】，而是末尾追加强提示，让 AI 自己用
         read_file / list_directory 工具读取（历史干净 + 与工具体系一致）。"""
         import re as _re
-        project_root = getattr(state, 'current_project', None) or os.getcwd()
+        from .. import session as _session
+        project_root = _session.current_project() or os.getcwd()  # 会话级，与工具 cwd 同源
         pattern = _re.compile(r'(?<!\S)@([^\s@]+)')
         refs = []
         for m in pattern.finditer(text):
