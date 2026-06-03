@@ -452,6 +452,13 @@ class ConfirmBarsMixin:
             result_holder["allow"] = False
             done_event.set()
             return
+        # 后台会话（非 active）发起的确认：不弹前台、不取代当前卡——存到该会话，切过去再弹
+        from .. import session as _session
+        _origin = result_holder.get("_session")
+        if _origin is not None and _origin is not _session.get_active():
+            _origin.pending_confirm = ("command", command, result_holder, done_event)
+            self._refresh_session_list()   # 侧栏给该会话标"⚠ 待确认"
+            return
         if self._command_confirm_done_event is not None:
             # 旧请求被新的取代：先 deny 解阻塞旧 worker，再走新流程显示新卡
             try:
@@ -776,6 +783,13 @@ class ConfirmBarsMixin:
             result_holder["allow"] = False
             done_event.set()
             return
+        # 后台会话（非 active）发起的编辑确认：不弹前台，存到该会话，切过去再弹
+        from .. import session as _session
+        _origin = result_holder.get("_session")
+        if _origin is not None and _origin is not _session.get_active():
+            _origin.pending_confirm = ("edit", path, diff_text, result_holder, done_event)
+            self._refresh_session_list()
+            return
         if self._edit_confirm_done_event is not None:
             # 旧请求被新的取代：先 deny 解阻塞旧 worker，再走新流程显示新卡
             try:
@@ -904,7 +918,7 @@ class ConfirmBarsMixin:
             if self._normalize_command(command) in _sess.command_allowlist:
                 return True, ""
 
-        result = {}
+        result = {"_session": _sess}   # 携带发起会话：主线程槽据此判断是否后台、并把"记住"加对会话
         done = threading.Event()
 
         # --- 手机 Telegram 遥控确认（与 PC 卡片竞争，先点先到） ---
@@ -965,7 +979,7 @@ class ConfirmBarsMixin:
         if path and path in _sess.edit_path_allowlist:
             return True, ""
 
-        result = {}
+        result = {"_session": _sess}   # 携带发起会话（同 confirm_command）
         done = threading.Event()
 
         # --- 手机 Telegram 遥控确认 ---

@@ -55,6 +55,7 @@ class Session:
     __slots__ = tuple(_SESSION_FIELDS) + (
         "is_generating", "thread", "key", "needs_redraw", "project",
         "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
+        "pending_confirm",
     )
 
     def __init__(self):
@@ -70,6 +71,9 @@ class Session:
         self.command_allowlist = set()         # 精确命令字符串（旧版，向后兼容）
         self.command_prefix_allowlist = set()  # base 命令前缀（"信任所有 git"）
         self.edit_path_allowlist = set()       # edit_file 路径（"信任此文件所有修改"）
+        # 后台会话（非 active）发起的命令/编辑确认：暂存在这里，不打断前台；切到该会话时
+        # 才弹卡。形如 ("command", command, result, done) 或 ("edit", path, diff, result, done)。
+        self.pending_confirm = None
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。

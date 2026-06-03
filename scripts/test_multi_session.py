@@ -221,6 +221,14 @@ class TestSessionStateIsolation:
         assert "git" not in b.command_prefix_allowlist
         assert b.edit_path_allowlist == set()
 
+    def test_pending_confirm_per_session(self):
+        """后台会话积压的确认存各自的 pending_confirm（默认 None），互不干扰。"""
+        a, b = Session(), Session()
+        assert a.pending_confirm is None and b.pending_confirm is None
+        a.pending_confirm = ("command", "rm x", {}, None)
+        assert a.pending_confirm[0] == "command"
+        assert b.pending_confirm is None  # 不影响别的会话
+
 
 # ════════════════════════════════════════════════════════════════════
 # 4. 线程绑定路由（Step 1 基础）

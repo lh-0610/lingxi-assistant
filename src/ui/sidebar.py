@@ -210,8 +210,10 @@ class SidebarMixin:
             sid = s["id"]
             title = s["title"]
             is_current = (sid == agent.current_session_id)
-            # 运行态：生成中 → loading 转圈；后台完成、尚未查看（needs_redraw）→ 绿点绿字
+            # 运行态：待确认（后台积压的命令/编辑确认）→ ⚠ 前缀；生成中 → loading 转圈；
+            # 后台完成、尚未查看（needs_redraw）→ 绿点绿字
             _so = _session.get(sid)
+            is_pending = bool(_so and getattr(_so, "pending_confirm", None))
             is_gen = bool(_so and _so.is_generating)
             is_done_unseen = bool(_so and not is_gen and getattr(_so, "needs_redraw", False))
 
@@ -222,7 +224,9 @@ class SidebarMixin:
             row_layout.setSpacing(4)
 
             display_title = title if len(title) <= 12 else title[:12] + "..."
-            if is_done_unseen:
+            if is_pending:
+                display_title = "⚠ " + display_title   # 待确认：切过去处理
+            elif is_done_unseen:
                 display_title = "● " + display_title   # 绿点（颜色由 historyItemDone class 给）
             btn = QPushButton(display_title)
             if is_current:
@@ -360,6 +364,16 @@ class SidebarMixin:
             self._update_btn_state("stop")
         else:
             self._update_btn_state("enabled" if self._has_input else "disabled")
+
+        # 该会话在后台跑时积压的确认（命令/编辑）→ 现在切过来了，弹出来让用户处理。
+        # worker 一直阻塞在 done.wait()，弹卡点完才会继续。
+        pc = target.pending_confirm
+        if pc is not None:
+            target.pending_confirm = None
+            if pc[0] == "command":
+                self._on_confirm_request(pc[1], pc[2], pc[3])
+            else:  # "edit"
+                self._on_edit_confirm_request(pc[1], pc[2], pc[3], pc[4])
 
     def _get_session_project(self, session_id):
         """从 index 取指定 session 的 project 字段（不在 index 中返回 None）。"""
