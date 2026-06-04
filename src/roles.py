@@ -195,6 +195,15 @@ def get_system_prompt(include_painting: bool = False):
     else:
         base = SYSTEM_PROMPT
 
+    # 当前日期：模型不知道"今天几号"，不注入它会凭训练印象用过时年份
+    # （如搜"2025 年最新…"）。每轮重渲染，跨天自动更新；同一天内容不变、不影响缓存命中。
+    from datetime import datetime as _dt
+    base = base + (
+        f"\n\n# 当前日期\n今天是 {_dt.now().strftime('%Y年%m月%d日')}。"
+        "凡涉及『最近 / 最新 / 今年 / 现在』等带时间的搜索或推理，都以这个日期为准，"
+        "不要默认用更早的年份。"
+    )
+
     # 当前激活项目 → 注入项目上下文，让 AI 知道默认工作目录。
     # 注：必须用 isdir 校验（不能只看非空），否则项目目录被删后还会注入失效的上下文，
     # AI 会按一个不存在的路径推理。tools.py:_project_cwd() 同样有 isdir 兜底。
