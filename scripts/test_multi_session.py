@@ -696,3 +696,29 @@ class TestSwitchDoesNotCorruptBackground:
         s.project = str(d_sess)                                       # 会话锚定 A
         _session.set_active(s)
         assert _project_cwd() == str(d_sess)                          # 用会话的 A，不是全局 B
+
+
+class TestParallelTools:
+    """并行工具调用：多个只读工具并行 invoke、结果按 tool_calls 原顺序对应。"""
+
+    def test_parallel_invoke_readonly(self, project_dir):
+        from src.streaming import _parallel_invoke
+        (project_dir / "a.txt").write_text("CONTENT_AAA", encoding="utf-8")
+        (project_dir / "b.txt").write_text("CONTENT_BBB", encoding="utf-8")
+        tcs = [
+            {"name": "read_file", "args": {"path": "a.txt"}},
+            {"name": "read_file", "args": {"path": "b.txt"}},
+        ]
+        res = _parallel_invoke(tcs)
+        assert len(res) == 2
+        assert "CONTENT_AAA" in res[0]   # 结果按 index 对应原顺序
+        assert "CONTENT_BBB" in res[1]
+
+    def test_parallel_safe_excludes_write_tools(self):
+        """写类 / 需确认 / 改状态的工具不在并行白名单（避免确认卡冲突与副作用竞争）。"""
+        from src.streaming import PARALLEL_SAFE_TOOLS
+        for unsafe in ("run_command", "edit_file", "write_file", "apply_patch",
+                       "generate_image", "update_plan", "remember"):
+            assert unsafe not in PARALLEL_SAFE_TOOLS
+        for safe in ("read_file", "search_files", "code_map", "git_diff"):
+            assert safe in PARALLEL_SAFE_TOOLS

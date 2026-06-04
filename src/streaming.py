@@ -877,7 +877,41 @@ def _stream_with_tools(ui):
     return st.raw_text, valid_tool_calls, usage, st.gathered
 
 
-def _execute_tool(tc, ui):
+# 纯读、无副作用、无确认卡的工具——同一轮里有多个这种时可并行 invoke 提速 IO
+# （写类 / run_command / 生图 / MCP / 改状态的都不在内，保持串行，避免确认卡冲突与副作用竞争）
+PARALLEL_SAFE_TOOLS = {
+    "read_file", "search_in_file", "search_files", "list_directory", "code_map",
+    "git_diff", "git_log", "check_code", "read_background_output",
+    "list_background_commands", "fetch_url", "web_search",
+}
+
+
+def _parallel_invoke(tool_calls):
+    """并行 invoke 多个只读工具，返回 {index: result}。子线程绑定到 worker 当前的会话，
+    让工具内的 _project_cwd / current_session 仍用对会话（不串到 active）。"""
+    import concurrent.futures as _cf
+    from . import session as _session
+    _worker_sess = _session.current_session()
+    tmap = get_tool_map()
+
+    def _one(tc):
+        _session.bind_thread(_worker_sess)
+        try:
+            return tmap[tc["name"]].invoke(tc.get("args") or {})
+        except Exception as e:
+            return f"工具执行失败: {e}"
+        finally:
+            _session.unbind_thread()
+
+    results = {}
+    with _cf.ThreadPoolExecutor(max_workers=min(len(tool_calls), 6)) as ex:
+        futs = {ex.submit(_one, tc): i for i, tc in enumerate(tool_calls)}
+        for fut in _cf.as_completed(futs):
+            results[futs[fut]] = fut.result()
+    return results
+
+
+def _execute_tool(tc, ui, _preinvoked=None):
     name = tc.get("name", "") if isinstance(tc, dict) else tc["name"]
     args = tc.get("args", {}) if isinstance(tc, dict) else tc["args"]
     call_id = tc.get("id", name) if isinstance(tc, dict) else tc["id"]
@@ -1006,7 +1040,8 @@ def _execute_tool(tc, ui):
                 return
 
     try:
-        result = get_tool_map()[name].invoke(args)
+        # 并行预取过结果就直接用（agent_loop 对多个只读工具并行 invoke 后，按序走这里渲染+append）
+        result = _preinvoked if _preinvoked is not None else get_tool_map()[name].invoke(args)
     except Exception as e:
         result = f"工具执行失败: {e}"
         logger.error(f"工具 {name} 执行失败: {e}")

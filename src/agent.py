@@ -239,10 +239,22 @@ def agent_loop(ui):
                 from . import session as _session
                 _session.seal_render_log()
 
-                for tc in tool_calls:
+                # 同一轮有多个【只读无副作用】工具 → 先并行 invoke 取结果（IO 并行提速），
+                # 再按 tool_calls 原顺序串行渲染 + append（保证不交错、ToolMessage 顺序对）。
+                # 混入写类 / 需确认 / 改状态的工具，或 Plan / 遥控模式，一律走串行（现状）。
+                from .streaming import PARALLEL_SAFE_TOOLS, _parallel_invoke
+                _can_parallel = (
+                    len(tool_calls) > 1
+                    and getattr(state, "agent_mode", "act") != "plan"
+                    and not getattr(state, "remote_session", False)
+                    and all(tc.get("name") in PARALLEL_SAFE_TOOLS and tc.get("args")
+                            for tc in tool_calls)
+                )
+                _pre = _parallel_invoke(tool_calls) if _can_parallel else {}
+                for i, tc in enumerate(tool_calls):
                     if state.stop_flag:
                         break
-                    _execute_tool(tc, ui)
+                    _execute_tool(tc, ui, _preinvoked=_pre.get(i))
                 continue
             else:
                 # 纯文本回复，流式显示完 → 渲染 Markdown
