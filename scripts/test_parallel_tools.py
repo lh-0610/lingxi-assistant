@@ -12,7 +12,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import state
-from src.streaming import _can_parallel, _parallel_invoke
+from src.streaming import (
+    _can_parallel, _parallel_invoke, _execute_tool, NO_ARG_OK_TOOLS,
+)
 
 
 # ── _can_parallel 判定 ──────────────────────────────────
@@ -71,3 +73,40 @@ class TestParallelInvoke:
         assert "失败" in res[0]
         assert any("执行失败" in rec.getMessage() for rec in caplog.records), \
             "并行工具失败必须留 ERROR 日志"
+
+
+# ── 并行预取 → _execute_tool 回放完整路径（Codex review 4 盲区）──
+class TestPreinvokedReplay:
+    """覆盖"并行预取后按序 _execute_tool(_preinvoked=...) 回放"的完整路径。
+    此前只测了 _parallel_invoke，漏掉回放阶段空参保护误拦、丢弃预取结果的 P2：
+    code_map {} 等默认参数工具被并行预取成功，回放时却被空参保护 early-return 拦掉。"""
+
+    def test_no_arg_ok_covers_default_arg_tools(self):
+        """空参合法名单必须覆盖所有默认参数齐全的只读工具，且不含必填参数工具。"""
+        assert {"code_map", "git_diff", "git_log", "list_background_commands"} <= NO_ARG_OK_TOOLS
+        assert "read_file" not in NO_ARG_OK_TOOLS   # 必填 path，空参确实该拦
+
+    def test_preinvoked_empty_arg_tool_uses_result(self, project_dir):
+        """code_map {} 被并行预取后回放：用预取结果，不被空参保护拦成"参数为空"。"""
+        from unittest.mock import MagicMock
+        from langchain_core.messages import ToolMessage
+        ui = MagicMock()
+        ui.confirm_command.return_value = (True, "")
+        state.chat_history = []
+        _execute_tool({"name": "code_map", "args": {}, "id": "c1"}, ui,
+                      _preinvoked="【预取符号地图 alpha】")
+        last = state.chat_history[-1]
+        assert isinstance(last, ToolMessage)
+        assert "预取符号地图 alpha" in last.content      # 用了预取结果
+        assert "参数为空" not in last.content             # 没被空参保护拦
+
+    def test_empty_arg_required_tool_still_blocked(self, project_dir):
+        """read_file {}（缺必填 path）串行调用仍被空参保护拦、给重试指引——别误放行。"""
+        from unittest.mock import MagicMock
+        from langchain_core.messages import ToolMessage
+        ui = MagicMock()
+        state.chat_history = []
+        _execute_tool({"name": "read_file", "args": {}, "id": "c2"}, ui, _preinvoked=None)
+        last = state.chat_history[-1]
+        assert isinstance(last, ToolMessage)
+        assert "参数为空" in last.content or "重新调用" in last.content
