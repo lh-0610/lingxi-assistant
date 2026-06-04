@@ -229,12 +229,22 @@ class TestSessionStateIsolation:
         assert a.pending_confirm[0] == "command"
         assert b.pending_confirm is None  # 不影响别的会话
 
-    def test_suppress_render_per_session(self):
-        """suppress_render 默认 False、会话级（本轮被切走后抑制实时渲染、完成整体重绘）。"""
+    def test_render_log_per_session(self):
+        """render_log 默认空、会话级（本轮渲染事件缓冲，供"切走→切回"重放）。"""
         a, b = Session(), Session()
-        assert a.suppress_render is False and b.suppress_render is False
-        a.suppress_render = True
-        assert b.suppress_render is False
+        assert a.render_log == [] and b.render_log == []
+        a.render_log.append(("msg", "hi", "ai_msg"))
+        assert b.render_log == []  # 不影响别的会话
+
+    def test_seal_render_log_clears_active(self):
+        """seal_render_log 清空当前会话的 render_log（append chat_history 后调）。"""
+        from src import session as _session
+        s = _session.Session()
+        s.render_log.append(("msg", "x", "ai_msg"))
+        _session.set_active(s)
+        _session.seal_render_log()
+        assert s.render_log == []
+        _session.set_active(_session.Session())
 
 
 # ════════════════════════════════════════════════════════════════════

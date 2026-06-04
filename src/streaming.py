@@ -1045,3 +1045,6 @@ def _execute_tool(tc, ui):
     ui.show_message("", "reset_ai_reply")
 
     state.chat_history.append(ToolMessage(content=str(result), tool_call_id=call_id))
+    # 工具结果已固化到 chat_history → 清 render_log（切回靠 _redraw_chat 画 ToolMessage）
+    from . import session as _session
+    _session.seal_render_log()

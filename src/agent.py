@@ -235,6 +235,9 @@ def agent_loop(ui):
                 if clean_text:
                     # 中间轮：只渲染 markdown，不朗读（朗读留给最终回复）
                     ui.render_final_markdown(clean_text, speak=False)
+                # 该轮 AI 已固化到 chat_history → 清 render_log（切回靠 _redraw_chat 画它）
+                from . import session as _session
+                _session.seal_render_log()
 
                 for tc in tool_calls:
                     if state.stop_flag:

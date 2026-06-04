@@ -335,10 +335,6 @@ class SidebarMixin:
             if not agent.load_session(session_id, session=target):
                 return
             _session.register(target)
-        # 切走正在跑的旧会话：本轮起不再实时接续渲染（切回也不），完成时整体重绘——
-        # 避免"切回看到空界面+继续输出"的割裂
-        if _prev is not target and _prev.is_generating:
-            _prev.suppress_render = True
         _session.set_active(target)
         target.needs_redraw = False  # 切过去查看了 → 清"完成未读"标记（侧栏绿点消失）
         self._sync_header_from_session()  # 顶栏 model/Plan-Act/思考 同步到该会话
@@ -359,17 +355,25 @@ class SidebarMixin:
         # 重绘目标会话（state.chat_history 已代理到新 active=target）
         self._reset_render_state()
         self._redraw_chat()
+        # 切到的会话正在后台跑 → 重放它本轮"还没固化到 chat_history"的渲染（当前流式/工具
+        # 显示部分，切走期间被丢弃的）。_redraw_chat 画的是已固化的历史，render_log 是其后
+        # 的当前部分，两者不重叠（每次 append chat_history 都会同步清空 render_log）。
+        if target.is_generating:
+            with target.render_lock:
+                _log = list(target.render_log)
+            for _ev in _log:
+                if _ev[0] == "msg":
+                    self._append_html(_ev[1], _ev[2])
+                elif _ev[0] == "md":
+                    self._render_markdown(_ev[1])
         self._scroll_to_bottom()
         self._refresh_session_list()
         if project_changed:
             self._refresh_project_indicator()
-        # 同步前台按钮态：目标会话正在后台跑 → 停止态；否则按输入框恢复
+        # 同步前台按钮态：目标会话正在后台跑 → 停止态；否则按输入框恢复（之后 worker 的
+        # 后续输出会因为该会话已是 active 而实时渲染、接续上面重放的内容）
         if target.is_generating:
             self._update_btn_state("stop")
-            # 切回正在后台跑的会话：实时输出已被抑制（suppress_render），给个占位提示，
-            # 等它完成时 _on_finished_sess 会整体重绘补全
-            if target.suppress_render:
-                self._append_html("\n⏳ 该会话正在后台生成中，完成后自动刷新…\n", "tool_result")
         else:
             self._update_btn_state("enabled" if self._has_input else "disabled")
 
@@ -397,8 +401,6 @@ class SidebarMixin:
         # 存当前 active（不打断正在后台跑的会话），再新建一个空会话切过去；
         # 旧会话留在注册表，可从侧栏切回（若在跑则继续后台跑）。
         agent.save_session()
-        if _prev.is_generating:        # 切走正在跑的旧会话 → 本轮停止实时渲染，完成时重绘
-            _prev.suppress_render = True
         new_sess = _session.Session()
         new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
         new_sess.current_model_index = _prev.current_model_index  # 继承 model/mode/思考
@@ -474,8 +476,6 @@ class SidebarMixin:
         #    若正在后台跑则继续——不再 _force_stop_generation、也不清空它的 chat_history
         #    （那会和正在跑的 worker 抢同一个 list，正是"无项目对话被归到新项目"的来源）。
         _prev = _session.get_active()  # 继承当前会话的 model/mode（切项目不改这些）
-        if _prev.is_generating:        # 切走正在跑的旧会话 → 本轮停止实时渲染，完成时重绘
-            _prev.suppress_render = True
         new_sess = _session.Session()
         new_sess.chat_history.append(SystemMessage(content=get_system_prompt()))
         new_sess.current_model_index = _prev.current_model_index

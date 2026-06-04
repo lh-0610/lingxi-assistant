@@ -26,10 +26,12 @@ class MarkdownRenderMixin:
         speak=True 时朗读（仅最终回复用）；多轮工具调用的中间轮传 speak=False，
         只渲染不朗读——否则 TTS 会把每轮"我先看下文件"之类的过程话都念出来。
         """
-        # 后台会话 / 本轮被切走过的会话：不实时渲染（标 needs_redraw，完成时整体重绘）
+        # 记本轮渲染事件供"切走→切回"重放；后台会话不实时渲染（切回时统一重放）
         from .. import session as _session
         _sess = _session.current_session()
-        if _sess is not _session.get_active() or _sess.suppress_render:
+        with _sess.render_lock:
+            _sess.render_log.append(("md", md_text))
+        if _sess is not _session.get_active():
             _sess.needs_redraw = True
             return
         self.bridge.render_md.emit(md_text)

@@ -55,7 +55,7 @@ class Session:
     __slots__ = tuple(_SESSION_FIELDS) + (
         "is_generating", "thread", "key", "needs_redraw", "project",
         "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
-        "pending_confirm", "suppress_render",
+        "pending_confirm", "render_log", "render_lock",
     )
 
     def __init__(self):
@@ -74,9 +74,12 @@ class Session:
         # 后台会话（非 active）发起的命令/编辑确认：暂存在这里，不打断前台；切到该会话时
         # 才弹卡。形如 ("command", command, result, done) 或 ("edit", path, diff, result, done)。
         self.pending_confirm = None
-        # 本轮生成期间是否被切走过：一旦切走，本轮就不再实时接续渲染（切回也不），改为
-        # 显示"生成中"占位、完成时整体重绘——避免"切回看到空界面+继续输出"的割裂。
-        self.suppress_render = False
+        # 本轮（一次用户提问到最终回复，含多轮工具）的渲染事件，供"切走→切回"时重放：
+        #   ("msg", text, tag) —— 一次 show_message；("md", md_text) —— render_final_markdown
+        # 前台也记（因为随时可能被切走）；新一轮开始（_run_agent）清空。render_lock 保护并发
+        # append（worker 线程写）与切回时读快照（主线程）。
+        self.render_log = []
+        self.render_lock = threading.Lock()
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。
@@ -125,6 +128,15 @@ def current_project():
         from . import state  # 延迟 import 避免循环（state 顶层 import session）
         p = state.current_project
     return p
+
+
+def seal_render_log() -> None:
+    """清空当前会话本轮的 render_log——在每次往 chat_history append 消息（AIMessage 中间轮 /
+    ToolMessage）之后调。保证 render_log 只剩"还没固化到 chat_history 的当前流式部分"，
+    切回时 _redraw_chat（已固化）+ 重放 render_log（未固化）不会重复渲染同一段。"""
+    s = current_session()
+    with s.render_lock:
+        s.render_log.clear()
 
 
 def bind_thread(session: "Session") -> None:
