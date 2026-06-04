@@ -115,12 +115,13 @@ class TestRunTestsPassthrough:
         assert "find_references" in PARALLEL_SAFE_TOOLS
 
 
-# ── 边角守护：fallback + 未装降级 ───────────────────────────
-class TestFindDefinitionFallback:
-    """符号首次出现在注释/字符串里时，_locate_symbol 定位到的位置 jedi goto 解析不到，
-    必须 fallback 到 Project.search 仍能命中定义——守护这个修复，别再回退。"""
+# ── path 给定时严格限定本文件（不跨文件） + 未装降级 ──────────
+class TestFindDefinitionPathScoped:
+    """path 给定即「找这个文件里的符号」：跳过注释找到同文件的 def；
+    纯注释提到时绝不退到全项目返回别的文件的定义（守护 Codex review 2 抓的越界 bug）。"""
 
-    def test_first_occurrence_in_comment_falls_back(self, project_dir):
+    def test_skips_comment_finds_def_in_same_file(self, project_dir):
+        """符号首处在注释里、真实 def 在同文件 → 遍历到 def 行解析成功。"""
         src = project_dir / "c.py"
         src.write_text(
             "# target_fn 是个工具函数\n"
@@ -132,6 +133,32 @@ class TestFindDefinitionFallback:
 
         result = find_definition.func("target_fn", "c.py")
         assert "c.py:2" in result   # 命中 def 那行（2），不是注释行（1）
+
+    def test_comment_only_does_not_cross_file(self, project_dir):
+        """指定文件里只是注释提到符号、真实定义在【别的文件】→ 绝不返回别的文件的定义。"""
+        (project_dir / "comment_only.py").write_text(
+            "# target_fn mentioned here\nx = 1\n", encoding="utf-8")
+        (project_dir / "real.py").write_text(
+            "def target_fn():\n    return 1\n", encoding="utf-8")
+        from src.tools import find_definition
+
+        result = find_definition.func("target_fn", "comment_only.py")
+        assert "real.py" not in result            # ← 关键：不跨文件误导
+        assert "可解析定义" in result
+
+
+class TestFindReferencesPathScoped:
+    def test_comment_only_does_not_cross_file(self, project_dir):
+        """find_references 同样：注释提到 → 不退到全项目返回和 path 无关的引用。"""
+        (project_dir / "comment_only.py").write_text(
+            "# target_fn mentioned here\nx = 1\n", encoding="utf-8")
+        (project_dir / "real.py").write_text(
+            "def target_fn():\n    return 1\n\nresult = target_fn()\n", encoding="utf-8")
+        from src.tools import find_references
+
+        result = find_references.func("target_fn", "comment_only.py")
+        assert "real.py" not in result            # ← 关键：不跨文件误导
+        assert "可解析引用" in result
 
 
 def test_degrades_without_jedi(project_dir, monkeypatch):

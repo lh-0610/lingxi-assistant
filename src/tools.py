@@ -1572,6 +1572,18 @@ def _locate_symbol(src: str, name: str):
     return line, col
 
 
+def _locate_all_symbols(src: str, name: str):
+    """源码里 name 作为独立标识符出现的所有 (line 1-based, col 0-based)，按出现顺序。
+    用于在指定文件内逐个位置尝试解析——首处可能落在注释/字符串里 jedi 解析不到。"""
+    import re
+    out = []
+    for m in re.finditer(rf"\b{re.escape(name)}\b", src):
+        line = src.count("\n", 0, m.start()) + 1
+        col = m.start() - (src.rfind("\n", 0, m.start()) + 1)
+        out.append((line, col))
+    return out
+
+
 def _fmt_jedi_name(n, root):
     """把 jedi Name 格式化成一行：相对路径:行  [类型]  描述。"""
     mp = str(n.module_path) if n.module_path else "?"
@@ -1602,15 +1614,23 @@ def find_definition(name: str, path: str = "") -> str:
                 src = f.read()
         except Exception as e:
             return f"读取 {path} 失败: {e}"
-        line, col = _locate_symbol(src, name)
-        if line is not None:
-            names = jedi.Script(code=src, path=full, project=proj).goto(line, col, follow_imports=True)
-    # path 没给、或在该文件定位/跟踪不到（如 name 首次出现在注释/字符串里、jedi 解析不到）
-    # → 退回全项目搜该符号定义。Project.search 不依赖位置，最稳。
-    if not names:
+        # 遍历该文件里符号的每处出现，逐个尝试跟踪定义——首处可能落在注释/字符串里
+        # jedi 解析不到，但真实绑定（def/赋值/调用）能解析。限定本文件：path 给定即
+        # 「找这个文件里的符号」，绝不 fallback 到全项目而返回别的文件的定义（那会误导）。
+        script = jedi.Script(code=src, path=full, project=proj)
+        for line, col in _locate_all_symbols(src, name):
+            names = script.goto(line, col, follow_imports=True)
+            if names:
+                break
+        if not names:
+            return (f"在 {path} 里没找到 `{name}` 的可解析定义"
+                    f"（可能只是注释/字符串里提到它，没有真实绑定）；"
+                    f"留空 path 可在整个项目搜该符号定义。")
+    else:
+        # path 没给 → 全项目搜该符号定义。Project.search 不依赖位置，最稳。
         names = list(proj.search(name))
-    if not names:
-        return f"没找到 `{name}` 的定义。"
+        if not names:
+            return f"没找到 `{name}` 的定义。"
     return f"`{name}` 的定义：\n" + "\n".join(_fmt_jedi_name(n, root) for n in names[:10])
 
 
@@ -1633,17 +1653,25 @@ def find_references(name: str, path: str = "") -> str:
                 src = f.read()
         except Exception as e:
             return f"读取 {path} 失败: {e}"
-        line, col = _locate_symbol(src, name)
-        if line is not None:
-            refs = jedi.Script(code=src, path=full, project=proj).get_references(
-                line, col, include_builtins=False)
-    # path 没给、或在该文件定位不到 → 先全项目搜该符号定义，从定义处找引用
-    if not refs:
+        # 遍历该文件里符号的每处出现，逐个尝试找引用；限定本文件，绝不跨到别的文件
+        # （否则注释里提到同名 API 时会退到全项目第一个定义，返回和 path 无关的引用）。
+        script = jedi.Script(code=src, path=full, project=proj)
+        for line, col in _locate_all_symbols(src, name):
+            refs = script.get_references(line, col, include_builtins=False)
+            if refs:
+                break
+        if not refs:
+            return (f"在 {path} 里没找到 `{name}` 的可解析引用"
+                    f"（可能只是注释/字符串里提到它）；"
+                    f"留空 path 可先在全项目定位定义再找引用。")
+    else:
+        # path 没给 → 先全项目搜该符号定义，从定义处找引用
         defs = list(proj.search(name))
-        if defs:
-            d = defs[0]
-            refs = jedi.Script(path=str(d.module_path), project=proj).get_references(
-                d.line, d.column, include_builtins=False)
+        if not defs:
+            return f"项目里没找到符号 `{name}`，无引用可查。"
+        d = defs[0]
+        refs = jedi.Script(path=str(d.module_path), project=proj).get_references(
+            d.line, d.column, include_builtins=False)
     if not refs:
         return f"没找到 `{name}` 的引用。"
     return f"`{name}` 的引用（{len(refs)} 处）：\n" + "\n".join(_fmt_jedi_name(n, root) for n in refs[:50])
