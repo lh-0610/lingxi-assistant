@@ -28,6 +28,14 @@ except Exception:
     _mcp_hiddenimports = []
     _mcp_datas = []
 
+# jedi 代码导航（可选）：PyInstaller 静态分析可能漏掉 jedi 的子模块
+try:
+    _jedi_hiddenimports = collect_submodules('jedi')
+    _jedi_datas = collect_data_files('jedi')
+except Exception:
+    _jedi_hiddenimports = []
+    _jedi_datas = []
+
 
 a = Analysis(
     ['main.py'],
@@ -39,7 +47,7 @@ a = Analysis(
         ('assets', 'assets'),               # 桌宠 GIF + 静态立绘（走 RESOURCE_DIR/_MEIPASS 读）
         ('roles', 'roles'),                 # 默认角色卡目录
         ('config.example.json', '.'),       # 配置模板，首次启动时复制成 config.json
-    ] + _ruff_datas + _mcp_datas,
+    ] + _ruff_datas + _mcp_datas + _jedi_datas,
     hiddenimports=[
         # LangChain 各 provider 包，PyInstaller 静态分析有时识别不到
         'langchain_anthropic',
@@ -61,7 +69,7 @@ a = Analysis(
         'jsonschema_specifications',
         'referencing',
         'rpds',
-    ] + _mcp_hiddenimports,
+    ] + _mcp_hiddenimports + _jedi_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

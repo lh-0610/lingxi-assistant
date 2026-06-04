@@ -1200,7 +1200,14 @@ def search_in_file(path: str, keyword: str, offset: int = 0, limit: int = SEARCH
     try:
         offset = max(0, int(offset or 0))
         limit = max(1, min(SEARCH_IN_FILE_MAX_LIMIT, int(limit or SEARCH_IN_FILE_DEFAULT_LIMIT)))
-        with open(_resolve_path(path), "r", encoding="utf-8") as f:
+        full = _resolve_path(path)
+        # search_in_file 是单文件搜索；传目录会让 open() 在 Windows 上报 Errno 13
+        # Permission denied，给个清晰提示引导用 search_files，而不是抛系统错。
+        if os.path.isdir(full):
+            return f"`{path}` 是目录、不是单个文件。跨目录搜索请用 search_files（正则、自动遍历目录、忽略噪声目录）。"
+        if not os.path.isfile(full):
+            return f"文件不存在: {path}"
+        with open(full, "r", encoding="utf-8") as f:
             lines = f.readlines()
         matches = []
         for i, line in enumerate(lines, 1):
@@ -1552,6 +1559,94 @@ def stop_all_background():
             logger.info(f"退出清理：停止 [{bg_id}] {info['command']}")
         except Exception:
             pass
+
+
+def _locate_symbol(src: str, name: str):
+    """在源码里找符号 name 第一次以独立标识符出现的 (line 1-based, col 0-based)；没有→(None, None)。"""
+    import re
+    m = re.search(rf"\b{re.escape(name)}\b", src)
+    if not m:
+        return None, None
+    line = src.count("\n", 0, m.start()) + 1
+    col = m.start() - (src.rfind("\n", 0, m.start()) + 1)
+    return line, col
+
+
+def _fmt_jedi_name(n, root):
+    """把 jedi Name 格式化成一行：相对路径:行  [类型]  描述。"""
+    mp = str(n.module_path) if n.module_path else "?"
+    try:
+        mp = os.path.relpath(mp, root)
+    except Exception:
+        pass
+    return f"  {mp}:{n.line}  [{n.type}]  {(n.description or '').strip()[:80]}"
+
+
+@tool
+def find_definition(name: str, path: str = "") -> str:
+    """跳到符号（函数/类/变量）的定义位置。比 search_files 正则准——jedi 懂作用域/import/继承。
+    name: 符号名，如 "agent_loop" / "Session"。
+    path: 指定某文件（相对项目根）里该符号的引用点去跟踪定义；留空则在整个项目搜该符号的定义。
+    """
+    try:
+        import jedi
+    except ImportError:
+        return "未安装 jedi（pip install jedi 启用精准代码导航）；可改用 search_files 正则搜定义。"
+    root = _project_cwd()
+    proj = jedi.Project(root)
+    names = []
+    if path:
+        full = _resolve_path(path)
+        try:
+            with open(full, encoding="utf-8") as f:
+                src = f.read()
+        except Exception as e:
+            return f"读取 {path} 失败: {e}"
+        line, col = _locate_symbol(src, name)
+        if line is not None:
+            names = jedi.Script(code=src, path=full, project=proj).goto(line, col, follow_imports=True)
+    # path 没给、或在该文件定位/跟踪不到（如 name 首次出现在注释/字符串里、jedi 解析不到）
+    # → 退回全项目搜该符号定义。Project.search 不依赖位置，最稳。
+    if not names:
+        names = list(proj.search(name))
+    if not names:
+        return f"没找到 `{name}` 的定义。"
+    return f"`{name}` 的定义：\n" + "\n".join(_fmt_jedi_name(n, root) for n in names[:10])
+
+
+@tool
+def find_references(name: str, path: str = "") -> str:
+    """找符号的所有引用/调用处（谁用了它）。比 search_files 准——按真实绑定找、不误匹配同名。
+    name: 符号名。path: 该符号出现的文件（相对项目根）；留空则先在项目里定位其定义再找引用。
+    """
+    try:
+        import jedi
+    except ImportError:
+        return "未安装 jedi（pip install jedi 启用）；可改用 search_files 正则搜引用。"
+    root = _project_cwd()
+    proj = jedi.Project(root)
+    refs = []
+    if path:
+        full = _resolve_path(path)
+        try:
+            with open(full, encoding="utf-8") as f:
+                src = f.read()
+        except Exception as e:
+            return f"读取 {path} 失败: {e}"
+        line, col = _locate_symbol(src, name)
+        if line is not None:
+            refs = jedi.Script(code=src, path=full, project=proj).get_references(
+                line, col, include_builtins=False)
+    # path 没给、或在该文件定位不到 → 先全项目搜该符号定义，从定义处找引用
+    if not refs:
+        defs = list(proj.search(name))
+        if defs:
+            d = defs[0]
+            refs = jedi.Script(path=str(d.module_path), project=proj).get_references(
+                d.line, d.column, include_builtins=False)
+    if not refs:
+        return f"没找到 `{name}` 的引用。"
+    return f"`{name}` 的引用（{len(refs)} 处）：\n" + "\n".join(_fmt_jedi_name(n, root) for n in refs[:50])
 
 
 @tool
@@ -2568,6 +2663,7 @@ ALL_TOOLS = [
     read_file, write_file, append_file, edit_file,
     list_directory, run_command,
     search_in_file, search_files,
+    find_definition, find_references,
     generate_image,
     remember, forget,
     update_plan,
@@ -2619,6 +2715,8 @@ TOOL_DISPLAY_NAMES = {
     "run_command": "⚡ 执行命令",
     "search_in_file": "🔍 单文件搜索",
     "search_files": "🌐 跨文件搜索",
+    "find_definition": "🔎 跳转定义",
+    "find_references": "🔗 查找引用",
     "generate_image": "🎨 生成图片",
     "generate_video": "🎬 生成视频",
     "remember": "🧠 记住事实",

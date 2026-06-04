@@ -72,6 +72,7 @@ PLAN_MODE_READONLY_TOOLS = {
     "check_code",  # 静态检查只读分析（lint/语法），不改文件
     "fetch_url",  # 抓取网页只读
     "web_search",  # 网络搜索只读
+    "find_definition", "find_references",  # jedi 代码导航，只读分析
 }
 
 
@@ -881,6 +882,7 @@ def _stream_with_tools(ui):
 # （写类 / run_command / 生图 / MCP / 改状态的都不在内，保持串行，避免确认卡冲突与副作用竞争）
 PARALLEL_SAFE_TOOLS = {
     "read_file", "search_in_file", "search_files", "list_directory", "code_map",
+    "find_definition", "find_references",  # jedi 代码导航，纯读无副作用
     "git_diff", "git_log", "check_code", "read_background_output",
     "list_background_commands", "fetch_url", "web_search",
 }

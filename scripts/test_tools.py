@@ -45,6 +45,13 @@ class TestSearchInFile:
         result = search_in_file.func(str(project_dir / "nope.txt"), "x")
         assert "失败" in result or "不存在" in result
 
+    def test_directory_path_hints_search_files(self, project_dir):
+        """传目录（而非文件）→ 友好提示改用 search_files，不抛 Errno 13。"""
+        from src.tools import search_in_file
+
+        result = search_in_file.func(str(project_dir), "x")
+        assert "目录" in result and "search_files" in result
+
     def test_pagination(self, project_dir):
         f = project_dir / "lines.txt"
         f.write_text("\n".join(f"line {i}" for i in range(50)) + "\n", encoding="utf-8")
