@@ -888,6 +888,20 @@ PARALLEL_SAFE_TOOLS = {
 }
 
 
+def _can_parallel(tool_calls):
+    """同一轮的多个工具能否并行执行：>1 个、全是只读白名单工具、且非 Plan / 遥控模式。
+    混入写类/需确认/改状态的工具，或 Plan / 遥控模式，一律退回串行。
+    **不要求 args 非空**——list_directory / code_map / git_diff / git_log /
+    list_background_commands 等带默认参数的只读工具，模型常用 {} 调，空参也合法、应能并行
+    （_parallel_invoke 内部用 `args or {}` 兜底）。"""
+    return (
+        len(tool_calls) > 1
+        and getattr(state, "agent_mode", "act") != "plan"
+        and not getattr(state, "remote_session", False)
+        and all(tc.get("name") in PARALLEL_SAFE_TOOLS for tc in tool_calls)
+    )
+
+
 def _parallel_invoke(tool_calls):
     """并行 invoke 多个只读工具，返回 {index: result}。子线程绑定到 worker 当前的会话，
     让工具内的 _project_cwd / current_session 仍用对会话（不串到 active）。"""
@@ -901,6 +915,9 @@ def _parallel_invoke(tool_calls):
         try:
             return tmap[tc["name"]].invoke(tc.get("args") or {})
         except Exception as e:
+            # 对齐串行 _execute_tool 的失败日志（line ~1049）；并行子线程里不碰 notify/UI
+            # （线程安全），但必须留日志，否则并行工具失败时无从排查。exc_info 给出 traceback。
+            logger.error(f"工具 {tc.get('name')} 执行失败（并行）: {e}", exc_info=True)
             return f"工具执行失败: {e}"
         finally:
             _session.unbind_thread()
