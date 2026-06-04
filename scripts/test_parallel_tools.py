@@ -40,7 +40,8 @@ class TestCanParallel:
         assert _can_parallel(tcs) is False
 
     def test_plan_mode_blocks_parallel(self):
-        tcs = [{"name": "read_file", "args": {}}, {"name": "list_directory", "args": {}}]
+        # 用本来可并行的组合（都空参合法），确保 False 只因 plan 模式、不被别的条件干扰
+        tcs = [{"name": "list_directory", "args": {}}, {"name": "code_map", "args": {}}]
         state.agent_mode = "plan"
         try:
             assert _can_parallel(tcs) is False
@@ -48,12 +49,20 @@ class TestCanParallel:
             state.agent_mode = "act"
 
     def test_remote_session_blocks_parallel(self):
-        tcs = [{"name": "read_file", "args": {}}, {"name": "list_directory", "args": {}}]
+        tcs = [{"name": "list_directory", "args": {}}, {"name": "code_map", "args": {}}]
         state.remote_session = True
         try:
             assert _can_parallel(tcs) is False
         finally:
             state.remote_session = False
+
+    def test_required_arg_tool_empty_blocks_parallel(self):
+        """P3 守护：缺必填参数的空参调用（read_file {}）混入 → 退串行，不做无意义并行预取。
+        read_file 不在 NO_ARG_OK_TOOLS，空参进并行只会预取必失败、产生噪声日志，
+        回放阶段还要再被空参保护拦一次；让它走串行、直接拿到清晰的重试指引。"""
+        tcs = [{"name": "read_file", "args": {}},        # 缺必填 path
+               {"name": "list_directory", "args": {}}]    # 空参合法
+        assert _can_parallel(tcs) is False
 
 
 # ── _parallel_invoke 执行 + 失败日志 ────────────────────

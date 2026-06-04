@@ -900,14 +900,19 @@ NO_ARG_OK_TOOLS = {
 def _can_parallel(tool_calls):
     """同一轮的多个工具能否并行执行：>1 个、全是只读白名单工具、且非 Plan / 遥控模式。
     混入写类/需确认/改状态的工具，或 Plan / 遥控模式，一律退回串行。
-    **不要求 args 非空**——list_directory / code_map / git_diff / git_log /
-    list_background_commands 等带默认参数的只读工具，模型常用 {} 调，空参也合法、应能并行
-    （_parallel_invoke 内部用 `args or {}` 兜底）。"""
+    每个工具还要么带参数、要么是 NO_ARG_OK_TOOLS（默认参数齐全、空参合法）——
+    这层和 _execute_tool 的空参保护用同一判据：read_file/search_files 等必填参数工具
+    用 {} 调是错误调用，不该进并行预取（否则预取必失败、白白产生失败日志，回放阶段还要
+    再被空参保护拦一次），让它走串行被拦下、拿到清晰的重试指引。"""
     return (
         len(tool_calls) > 1
         and getattr(state, "agent_mode", "act") != "plan"
         and not getattr(state, "remote_session", False)
-        and all(tc.get("name") in PARALLEL_SAFE_TOOLS for tc in tool_calls)
+        and all(
+            tc.get("name") in PARALLEL_SAFE_TOOLS
+            and (bool(tc.get("args")) or tc.get("name") in NO_ARG_OK_TOOLS)
+            for tc in tool_calls
+        )
     )
 
 
