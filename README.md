@@ -35,7 +35,7 @@
 - 📊 **Token 用量统计**：实时显示每轮和会话累计用量
 - ⚡ **prompt caching + system prompt 拆分**：画图详细规范按需注入，Anthropic/MiMo 走 `cache_control` 省 token
 
-### 编码能力（对标 Cline）
+### 编码能力
 - 🪄 **`edit_file` 智能容错替换**：改大文件局部，比全量覆盖安全省 token；**写盘前弹蓝色 diff 预览卡**让你审改动。**分层匹配 L1-L4**(精确 → 行尾空白 → 缩进重对齐 → difflib 模糊),模型缩进风格不一致、tab/空格混用都能自动修正;实在匹配不上时**返回最接近片段+行号让模型自纠重试**——弱模型也能稳定改文件
 - 🌐 **`search_files` 跨文件正则搜索**（ripgrep 风格，忽略噪声目录）+ `read_file` 行号分页
 - 📋 **任务计划面板**：≥3 步的任务，AI 先用 `update_plan` 列出完整步骤，**聊天区右上角浮层实时显示进度**（待办空心圆 / 进行中 loading / 完成勾选），长任务不漏步（对标 Codex / Claude Code）
