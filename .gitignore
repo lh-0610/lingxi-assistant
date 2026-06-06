@@ -1,10 +1,14 @@
 # ─── Python ───
 __pycache__/
+.venv/
 *.py[cod]
 *$py.class
 *.egg-info/
 .eggs/
 *.egg
+.pytest_cache/
+.pytest_tmp/
+.codex_tmp_pytest*/
 
 # ─── 打包产物 ───
 dist/

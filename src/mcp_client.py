@@ -66,6 +66,19 @@ def _merge_env(user_env: dict) -> dict:
     return merged
 
 
+def _resolve_stdio_command(command: str) -> str:
+    """Resolve path-like stdio commands relative to config.json."""
+    raw = os.path.expandvars(os.path.expanduser(str(command)))
+    if os.path.isabs(raw):
+        return raw
+
+    seps = [sep for sep in (os.sep, os.altsep) if sep]
+    if raw.startswith(".") or any(sep in raw for sep in seps):
+        return os.path.abspath(os.path.join(os.path.dirname(CONFIG_PATH), raw))
+
+    return raw
+
+
 # ═══════════════════════════════════════════════════════
 # 配置读取
 # ═══════════════════════════════════════════════════════
@@ -202,6 +215,7 @@ async def _server_loop(name: str, cfg: dict):
         _server_ready_events.get(name) and _server_ready_events[name].set()
         return
 
+    command = _resolve_stdio_command(command)
     args = cfg.get("args", [])
     env = cfg.get("env", {})
 
