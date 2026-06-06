@@ -30,6 +30,7 @@
 - 🖼️ **多模态**：支持图片输入（自动切到视觉模型 / 多模态模型）
 - 🔧 **工具调用**：文件读写、命令执行、图片生成等。**run_command 执行前在输入框上方弹内联确认卡**（含命令预览 + 1/2/3 数字快捷键 + Esc 取消），危险命令（`rm -rf` / `format` / `sudo` / `drop table` 等）不给"记住"选项。**确认卡无超时**（睡一觉回来还在等你）；**拒绝时可附一句文字反馈**（如"换 async 写法"），AI 据此调整重做，留空则直接停止后续重试
 - 💬 **会话历史**：自动保存、侧边栏切换、智能生成标题
+- 🗂️ **多会话并发**：多个对话能**同时在后台跑**，切走不中断、切回自动重放本轮输出；每个会话的模型 / Plan-Act 模式 / 命令白名单各自独立互不干扰
 - 🧠 **思考过程显示**：折叠/展开模型的 reasoning 内容
 - 📊 **Token 用量统计**：实时显示每轮和会话累计用量
 - ⚡ **prompt caching + system prompt 拆分**：画图详细规范按需注入，Anthropic/MiMo 走 `cache_control` 省 token
@@ -37,6 +38,11 @@
 ### 编码能力（对标 Cline）
 - 🪄 **`edit_file` 智能容错替换**：改大文件局部，比全量覆盖安全省 token；**写盘前弹蓝色 diff 预览卡**让你审改动。**分层匹配 L1-L4**(精确 → 行尾空白 → 缩进重对齐 → difflib 模糊),模型缩进风格不一致、tab/空格混用都能自动修正;实在匹配不上时**返回最接近片段+行号让模型自纠重试**——弱模型也能稳定改文件
 - 🌐 **`search_files` 跨文件正则搜索**（ripgrep 风格，忽略噪声目录）+ `read_file` 行号分页
+- 📋 **任务计划面板**：≥3 步的任务，AI 先用 `update_plan` 列出完整步骤，**聊天区右上角浮层实时显示进度**（待办空心圆 / 进行中 loading / 完成勾选），长任务不漏步（对标 Codex / Claude Code）
+- ⚡ **并行工具调用**：同一轮里多个只读工具（读文件 / 搜索 / 导航）并行执行，多文件场景明显提速
+- 🧭 **jedi 代码导航**：`find_definition` 跳转定义、`find_references` 找全部引用，比纯文本搜索准
+- ✅ **自我校验闭环**：`edit_file` / `write_file` 成功后自动跑 ruff / 语法检查，把发现的问题**追加进同一条工具返回**，模型当轮就去修（不用你提醒）
+- 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`（只读看改动与历史）/ `fetch_url`·`web_search`（联网查资料）
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
 - ↶ **Checkpoint / 撤销**：edit/write/append 写盘前自动 git stash 快照，顶栏一键撤销 AI 上一轮改动（路径级恢复）
 - 📄 **`.lingxirules` 项目级指令**：项目根放一个文件写项目约定，自动注入、优先级最高
@@ -104,7 +110,7 @@
 | 名称 | 类型 | 模型 ID | 支持图片 |
 |------|------|---------|---------|
 | MiMo V2.5 Pro | mimo | mimo-v2.5-pro | ❌ |
-| MiMo V2.5 | mimo | mimo-v2.5 | ❌ |
+| MiMo V2.5 | mimo | mimo-v2.5 | ✅ |
 | MiMo V2 Pro | mimo | mimo-v2-pro | ❌ |
 | MiMo V2 Omni | mimo | mimo-v2-omni | ✅ |
 | Claude Code | claude-code | claude (本地 CLI) | ❌ |
@@ -418,8 +424,18 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 | `read_background_output` / `list_background_commands` / `stop_background_command` | 管理后台命令：读输出 / 列出 / 停止（read·list 只读，Plan 模式放行；退出时自动清理防端口残留） |
 | `search_in_file` | 单文件关键词搜索（offset/limit 分页） |
 | `search_files` | 跨文件正则搜索（ripgrep 风格） |
+| `find_definition` / `find_references` | jedi 代码导航：跳转符号定义 / 找全部引用 |
+| `code_map` | 代码库符号地图（提取函数 / 类） |
+| `apply_patch` | 多文件原子补丁（Codex 风格 `*** Begin Patch`）：一次建/改/删多文件，全校验通过才落盘 |
+| `run_tests` | 跑 pytest（精炼失败定位 + 总耗时） |
+| `check_code` | 静态检查单文件（Python 用 ruff，其它走 config 的 `check_command`） |
+| `git_diff` / `git_log` | 只读看 git 改动 / 历史（**绝不碰 commit/push**） |
+| `update_plan` | 维护任务计划清单（右上角浮层实时显示进度） |
+| `fetch_url` / `web_search` | 抓网页正文 / Tavily 联网搜索 |
 | `generate_image` | 调 ComfyUI / Pollinations 生成图片 |
+| `generate_video` | Agnes 文生 / 图生视频（异步任务轮询下载） |
 | `remember` / `forget` | 长期记忆存取（本地安全操作，不弹确认） |
+| `notify_user` | 推送通知到 Telegram（分级 / 节流，可选） |
 
 > 另外接外部 MCP server 后，远程工具以 `mcp_{server}_{tool}` 形式自动加入（调用前弹确认卡）。
 
