@@ -13,12 +13,12 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel,
     QSizePolicy, QFileDialog, QMenu, QMessageBox,
-    QDialog,
+    QDialog, QFrame, QProgressBar,
 )
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import (
     QFont, QIcon, QTextCursor, QColor, QTextCharFormat, QPixmap, QImage,
-    QPainter, QAction,
+    QPainter, QAction, QTextDocument,
 )
 from langchain_core.messages import HumanMessage
 
@@ -120,6 +120,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.bridge.edit_confirm_request.connect(self._on_edit_confirm_request)
         self.bridge.remote_submit.connect(self._on_remote_submit)
         self.bridge.dismiss_confirm.connect(self._on_dismiss_confirm)
+        self.bridge.show_plan.connect(self._render_plan_panel)
 
         # 让 tools.py 在 worker 线程里能找到主窗口（弹确认框用）
         state.ui_ref = self
@@ -267,6 +268,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._style_img_btn()
         if hasattr(self, "scroll_bottom_btn"):
             self._style_scroll_bottom_btn()
+        if hasattr(self, "plan_panel"):
+            self._style_plan_panel()
         # 新一轮历史项（删除按钮）会用新色
         if hasattr(self, "history_layout"):
             self._refresh_session_list()
@@ -324,6 +327,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
         self._build_header(right_layout)
         self._build_chat_area(right_layout)
+        self._build_plan_panel(right_layout)
         self._build_input_area(right_layout)
         self._build_project_indicator(right_layout)
         self._build_footer(right_layout)
@@ -351,6 +355,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self.chat_area.document().clear()
         if hasattr(self, 'token_usage_label'):
             self.token_usage_label.setText('Token: -')
+        # 计划面板跟着当前会话刷新。_reset_render_state 是新建/切换/切项目三条路径的
+        # 共同漏斗，且都在 set_active(新会话) 之后才调——current_plan 已是新会话的计划。
+        # （hasattr 守卫：本方法可能在 build_ui 建好 plan_panel 之前被调到）
+        if hasattr(self, "plan_panel"):
+            self._render_plan_panel(getattr(state, "current_plan", None) or [])
 
     def _is_hidden_bridge_message(self, msg):
         """内部图片识别桥接消息只给模型看，历史界面不当作用户聊天展示。"""
@@ -479,6 +488,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                             self._insert_image_path(img_path)
         if not rendered_any:
             self._show_empty_state()
+        # 计划面板的刷新已统一到 _reset_render_state（新建/切换/切项目三路共用漏斗），
+        # 且 _load_session 调 _redraw_chat 前必先调 _reset_render_state，这里无需重复渲染。
 
     def _show_empty_state(self):
         """聊天为空时显示欢迎态。"""
@@ -620,6 +631,106 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         sb = self.chat_area.verticalScrollBar()
         sb.valueChanged.connect(self._on_scroll_changed)
         sb.rangeChanged.connect(self._on_scroll_changed)
+
+    def _build_plan_panel(self, parent_layout=None):
+        # 浮层：挂主窗口、定位到 chat_area 右上角（不进垂直布局流，避免占输入框上方整行）。
+        # parent_layout 保留参数兼容旧调用，但不再 addWidget——跟 scroll_bottom_btn 同套路。
+        self.plan_panel = QFrame(self)
+        self.plan_panel.setObjectName("planPanel")
+        self.plan_panel.setVisible(False)            # 无计划不占位
+        self.plan_panel.setFixedWidth(292)           # 浮层保持紧凑，少遮挡正文
+        self.plan_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
+        lay = QVBoxLayout(self.plan_panel)
+        lay.setContentsMargins(14, 11, 14, 12)
+        lay.setSpacing(0)
+
+        title_row = QWidget(self.plan_panel)
+        title_row.setStyleSheet("background:transparent;")
+        title_row.setFixedHeight(26)
+        title_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        title_layout = QHBoxLayout(title_row)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(6)
+        self.plan_title_icon = QLabel(title_row)
+        self.plan_title_icon.setFixedSize(17, 17)
+        self.plan_title = QLabel("任务计划", title_row)
+        self.plan_title.setTextFormat(Qt.RichText)
+        self.plan_count = QLabel(title_row)
+        self.plan_count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        title_layout.addWidget(self.plan_title_icon, 0, Qt.AlignVCenter)
+        title_layout.addWidget(self.plan_title, 0, Qt.AlignVCenter)
+        title_layout.addStretch(1)
+        title_layout.addWidget(self.plan_count, 0, Qt.AlignVCenter)
+        lay.addWidget(title_row)
+        lay.addSpacing(7)
+
+        self.plan_progress = QProgressBar(self.plan_panel)
+        self.plan_progress.setRange(0, 100)
+        self.plan_progress.setTextVisible(False)
+        self.plan_progress.setFixedHeight(5)
+        lay.addWidget(self.plan_progress)
+        lay.addSpacing(9)
+
+        self._plan_items = []
+        self._plan_spinner_angle = 0
+        self._plan_spinner_timer = QTimer(self)
+        self._plan_spinner_timer.timeout.connect(self._tick_plan_spinner)
+
+        self.plan_body = QLabel()
+        self.plan_body.setStyleSheet("background:transparent;")
+        self.plan_body.setTextFormat(Qt.RichText)
+        self.plan_body.setWordWrap(True)
+        self.plan_body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lay.addWidget(self.plan_body)
+        self._style_plan_panel()                     # 卡片底色/边框（浮层压在正文上必须有背景）
+
+    def _style_plan_panel(self):
+        # 复用 scroll 按钮的主题 token（明暗都有），objectName 选择器不波及子 QLabel。
+        self.plan_panel.setStyleSheet(
+            f"QFrame#planPanel {{"
+            f"  background: {self._t('scroll_btn_bg')};"
+            f"  border: 1px solid {self._t('scroll_btn_border')};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
+        title_color = self._t("thinking")
+        muted_color = self._t("thinking_msg")
+        self.plan_title.setStyleSheet(
+            "background:transparent; font-size:14px; font-weight:600;"
+        )
+        self.plan_count.setStyleSheet(
+            f"background:{self._t('thinking_msg_bg')};"
+            f"color:{muted_color};"
+            f"border:1px solid {self._t('scroll_btn_border')};"
+            "border-radius:9px;"
+            "padding:2px 7px;"
+            "font-size:12px;"
+        )
+        self.plan_title_icon.setPixmap(
+            self._svg_icon("clipboard-list.svg", title_color).pixmap(15, 15)
+        )
+        self.plan_progress.setStyleSheet(
+            "QProgressBar {"
+            f"  background: {self._t('thinking_msg_bg')};"
+            "  border: none;"
+            "  border-radius: 2px;"
+            "}"
+            "QProgressBar::chunk {"
+            f"  background: {title_color};"
+            "  border-radius: 2px;"
+            "}"
+        )
+
+    def _position_plan_panel(self):
+        """将计划浮层定位到 chat_area 右上角（先按内容 adjustSize 再贴角）。"""
+        if not hasattr(self, "plan_panel"):
+            return
+        panel = self.plan_panel
+        panel.adjustSize()
+        pos = self.chat_area.mapTo(self, self.chat_area.rect().topRight())
+        scrollbar_width = self.chat_area.verticalScrollBar().width()
+        right_clearance = scrollbar_width + 28
+        panel.move(pos.x() - panel.width() - right_clearance, pos.y() + 16)
 
     def _build_empty_state(self):
         self.empty_state = QWidget(self.chat_area.viewport())
@@ -1380,6 +1491,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._position_empty_state()
         if hasattr(self, 'scroll_bottom_btn'):
             self._position_scroll_btn()
+        if hasattr(self, 'plan_panel') and self.plan_panel.isVisible():
+            self._position_plan_panel()
         self._refresh_header_compactness()
 
 
@@ -2332,6 +2445,99 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             if pet is not None:
                 pet.set_thinking(True)
         self.bridge.append_signal.emit(text, tag)
+
+    def show_plan(self, items):
+        """线程安全：从 agent 线程推送任务计划到 UI 主线程"""
+        self.bridge.show_plan.emit(list(items or []))
+
+    def _tick_plan_spinner(self):
+        self._plan_spinner_angle = (self._plan_spinner_angle + 30) % 360
+        if getattr(self, "_plan_items", None):
+            self._render_plan_rows(self._plan_items)
+
+    def _plan_spinner_svg(self, color, size=16):
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
+            f'viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="3" '
+            f'stroke-linecap="round" stroke-linejoin="round">'
+            f'<g transform="rotate({self._plan_spinner_angle} 12 12)">'
+            f'<path d="M21 12a9 9 0 1 1-3.2-6.9"/></g></svg>'
+        )
+        data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        return (
+            f'<img src="data:image/svg+xml;base64,{data}" width="{size}" height="{size}" '
+            f'style="vertical-align:middle;" />'
+        )
+
+    def _render_plan_rows(self, items):
+        title_color = self._t("thinking")
+        muted_color = self._t("thinking_msg")
+        rows = []
+        for it in items:
+            txt = (it.get("text") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            status = it.get("status")
+            if status == "done":
+                icon = self._inline_svg_img("circle-check.svg", muted_color, 16)
+                text_style = f"color:{muted_color};text-decoration:line-through;"
+            elif status == "in_progress":
+                icon = self._plan_spinner_svg(title_color, 16)
+                text_style = f"color:{title_color};font-weight:600;"
+            else:
+                icon = self._inline_svg_img("circle_lucide.svg", muted_color, 16)
+                text_style = ""
+            rows.append(
+                '<tr>'
+                '<td width="22" style="padding-top:2px;vertical-align:top;">'
+                f'{icon}</td>'
+                f'<td style="{text_style} padding-bottom:5px; line-height:1.35;">{txt}</td>'
+                '</tr>'
+            )
+        html = (
+            '<table cellspacing="0" cellpadding="0" width="100%">'
+            + "".join(rows)
+            + "</table>"
+        )
+        self.plan_body.setText(html)
+        self._fit_plan_body_height(html)
+
+    def _fit_plan_body_height(self, html):
+        margins = self.plan_panel.layout().contentsMargins()
+        body_width = self.plan_panel.width() - margins.left() - margins.right()
+        self.plan_body.setFixedWidth(body_width)
+
+        doc = QTextDocument()
+        doc.setDefaultFont(self.plan_body.font())
+        doc.setTextWidth(body_width)
+        doc.setHtml(html)
+        # QLabel 的 RichText sizeHint 对 table + word wrap 会低估高度；QTextDocument
+        # 按实际文本宽度计算，再多给 6px 防止最后一行 descender 被裁。
+        self.plan_body.setFixedHeight(int(doc.size().height()) + 6)
+
+    def _render_plan_panel(self, items):
+        """主线程 slot：渲染任务计划面板"""
+        self._plan_items = list(items or [])
+        if not items:
+            self._plan_spinner_timer.stop()
+            self.plan_body.clear()
+            self.plan_panel.setVisible(False)
+            return
+        done = sum(1 for it in items if it.get("status") == "done")
+        self.plan_count.setText(f"{done}/{len(items)} 完成")
+        self.plan_progress.setValue(round(done / len(items) * 100))
+        self._render_plan_rows(items)
+        if any(it.get("status") == "in_progress" for it in items):
+            if not self._plan_spinner_timer.isActive():
+                self._plan_spinner_timer.start(80)
+        else:
+            self._plan_spinner_timer.stop()
+        self.plan_panel.layout().invalidate()
+        self.plan_panel.layout().activate()
+        self.plan_panel.setVisible(True)
+        self.plan_panel.raise_()          # 浮在聊天区之上
+        self.plan_panel.setMinimumHeight(0)
+        self.plan_panel.setMaximumHeight(16777215)
+        self.plan_panel.adjustSize()
+        self._position_plan_panel()       # 贴右上角（adjustSize 后定位）
 
     def show_retry(self, error_msg):
         """线程安全：显示错误信息和重试按钮"""

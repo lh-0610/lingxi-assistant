@@ -34,6 +34,7 @@ class SignalBridge(QObject):
     remote_submit = Signal(str)        # Telegram 遥控消息注入（跨线程 → 主线程）
     # 手机端点完确认后，让主线程隐藏可能还挂着的 PC 确认卡（仅 UI，result/done 已由远程写好）
     dismiss_confirm = Signal()
+    show_plan = Signal(object)         # 传 list[{text,status}]：update_plan → 主线程
 
 
 class DragDropTextBrowser(QTextBrowser):
