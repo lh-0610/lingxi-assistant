@@ -9,7 +9,7 @@
 """
 import re
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from . import state as _state
 from . import state  # 公开给 ui.py 直接用：ui 里所有"写入"改成 src.state.X = ...
@@ -45,6 +45,7 @@ from .memory import (
 from .tools import ALL_TOOLS, build_all_tools
 from .streaming import _stream_with_tools, _execute_tool
 from .claude_code import claude_code_loop as _claude_code_loop
+from . import session as _session_mod
 
 _BOUND_LLM_CACHE = {}
 
@@ -163,6 +164,10 @@ if isinstance(state.chat_history[0], SystemMessage):
 
 def agent_loop(ui):
     try:
+        from .verification import reset_verification as _v_reset
+        try: _v_reset(_session_mod.current_session().verification)
+        except Exception: pass
+
         mtype = MODEL_LIST[state.current_model_index][1]
         model_name = MODEL_LIST[state.current_model_index][0]
 
@@ -181,7 +186,10 @@ def agent_loop(ui):
         round_i = -1
         # 角色卡存在时用角色名替代模型名
         display_name = get_current_role_name() or model_name
-        while True:
+
+        # 完成闸门：外层循环（验证间隙时重跑一轮）
+        _gate_active = True
+        while _gate_active:
             round_i += 1
 
             if state.stop_flag:
@@ -250,9 +258,44 @@ def agent_loop(ui):
                     if state.stop_flag:
                         break
                     _execute_tool(tc, ui, _preinvoked=_pre.get(i))
+
+                # ── 自动修复循环：工具失败后注入诊断 + 重试提示 ──
+                # 当 run_tests / check_code 等返回失败时，自动注入一条 HumanMessage
+                # 提示模型诊断原因并重新调用工具，最多修复 _MAX_REPAIR_ROUNDS 轮。
+                if not state.stop_flag and state.agent_mode != "plan":
+                    try:
+                        from .verification import check_repair_allowed, inject_repair_prompt
+                        _verification = _session_mod.current_session().verification
+                        for tc in reversed(tool_calls):
+                            tool_name = tc.get("name", "")
+                            tool_id = tc.get("id", "")
+                            # 从 chat_history 找刚执行的 ToolMessage
+                            tool_output = ""
+                            for msg in reversed(state.chat_history):
+                                if (hasattr(msg, "tool_call_id")
+                                        and msg.tool_call_id == tool_id):
+                                    tool_output = msg.content or ""
+                                    break
+                            allowed, _reason = check_repair_allowed(
+                                _verification, tool_name, tool_output,
+                            )
+                            if allowed:
+                                prompt = inject_repair_prompt(_verification)
+                                state.chat_history.append(HumanMessage(content=prompt))
+                                try:
+                                    ui.show_message(
+                                        "\n⚠️ 验证失败，正在自动诊断并尝试修复…\n",
+                                        "tool_result",
+                                    )
+                                except Exception:
+                                    pass
+                                break  # 每轮最多注入一条修复提示
+                    except Exception as _re_err:
+                        logger.debug(f"修复循环检查异常（已忽略）: {_re_err}")
+
                 continue
             else:
-                # 纯文本回复，流式显示完 → 渲染 Markdown
+                # 纯文本回复，先过完成闸门，再渲染 Markdown 并结束。
                 if not clean_text and not raw_text:
                     # 流静默结束：服务端 / 代理在思考中切断了连接，没有任何 chunk 到达
                     ui.show_message(
@@ -265,6 +308,35 @@ def agent_loop(ui):
                         f"疑似服务端 idle timeout 中断"
                     )
                     break
+                try:
+                    from .verification import get_verification_gaps as _v_gaps
+                    _cur_sess = _session_mod.current_session()
+                    _verification = getattr(_cur_sess, "verification", None)
+                    _gaps = _v_gaps(_verification) if _verification is not None else []
+                    if _gaps and not state.stop_flag and getattr(state, "agent_mode", "act") != "plan":
+                        if not _verification.get("gate_prompted"):
+                            _verification["gate_prompted"] = True
+                            _gap_msg = (
+                                "[内部验证要求]\n"
+                                "你刚才试图结束任务，但本轮改动尚未完成验证：\n"
+                                + "\n".join(f"- {g}" for g in _gaps)
+                                + "\n\n请继续调用合适的工具验证。若验证不可用或失败，"
+                                  "允许最终结束，但必须明确说明原因和风险。"
+                            )
+                            ui.show_message("\n⚠️ 检测到改动尚未完成验证，正在继续检查…\n", "tool_result")
+                            # Anthropic 只允许 SystemMessage 连续出现在历史开头。
+                            # 这是对当前任务的内部续作指令，按 HumanMessage 注入最稳妥。
+                            state.chat_history.append(HumanMessage(content=_gap_msg))
+                            continue
+                        clean_text = (
+                            "⚠️ 验证仍未完整完成：\n"
+                            + "\n".join(f"- {g}" for g in _gaps)
+                            + "\n\n"
+                            + (clean_text or "")
+                        )
+                except Exception as _ge:
+                    logger.debug(f"验证闸门检查异常（已忽略）: {_ge}")
+
                 state.chat_history.append(_build_ai_message(gathered, clean_text, []))
                 if clean_text:
                     ui.render_final_markdown(clean_text)

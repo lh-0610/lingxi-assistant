@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel,
     QSizePolicy, QFileDialog, QMenu, QMessageBox,
-    QDialog, QFrame, QProgressBar,
+    QDialog, QFrame, QProgressBar, QScrollArea,
 )
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import (
@@ -667,7 +667,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.plan_progress = QProgressBar(self.plan_panel)
         self.plan_progress.setRange(0, 100)
         self.plan_progress.setTextVisible(False)
-        self.plan_progress.setFixedHeight(5)
+        self.plan_progress.setFixedHeight(6)
         lay.addWidget(self.plan_progress)
         lay.addSpacing(9)
 
@@ -676,12 +676,37 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._plan_spinner_timer = QTimer(self)
         self._plan_spinner_timer.timeout.connect(self._tick_plan_spinner)
 
+        self.plan_scroll = QScrollArea(self.plan_panel)
+        self.plan_scroll.setFrameShape(QFrame.NoFrame)
+        self.plan_scroll.setWidgetResizable(False)
+        self.plan_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.plan_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.plan_scroll.setStyleSheet(
+            "QScrollArea { background:transparent; border:none; }"
+            "QScrollBar:vertical {"
+            "  background:transparent; width:6px; margin:2px 0 2px 0;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            f"  background:{self._t('scroll_btn_border')};"
+            "  border-radius:3px; min-height:28px;"
+            "}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "  height:0; border:none; background:transparent;"
+            "}"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+            "  background:transparent;"
+            "}"
+        )
+        self.plan_scroll.viewport().setStyleSheet("background:transparent;")
+
         self.plan_body = QLabel()
         self.plan_body.setStyleSheet("background:transparent;")
         self.plan_body.setTextFormat(Qt.RichText)
         self.plan_body.setWordWrap(True)
+        self.plan_body.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.plan_body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        lay.addWidget(self.plan_body)
+        self.plan_scroll.setWidget(self.plan_body)
+        lay.addWidget(self.plan_scroll)
         self._style_plan_panel()                     # 卡片底色/边框（浮层压在正文上必须有背景）
 
     def _style_plan_panel(self):
@@ -713,24 +738,65 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             "QProgressBar {"
             f"  background: {self._t('thinking_msg_bg')};"
             "  border: none;"
-            "  border-radius: 2px;"
+            "  border-radius: 3px;"
+            "  padding: 0;"
             "}"
             "QProgressBar::chunk {"
             f"  background: {title_color};"
-            "  border-radius: 2px;"
+            "  border-radius: 3px;"
             "}"
         )
+        if hasattr(self, "plan_scroll"):
+            self.plan_scroll.setStyleSheet(
+                "QScrollArea { background:transparent; border:none; }"
+                "QScrollBar:vertical {"
+                "  background:transparent; width:6px; margin:2px 0 2px 0;"
+                "}"
+                "QScrollBar::handle:vertical {"
+                f"  background:{self._t('scroll_btn_border')};"
+                "  border-radius:3px; min-height:28px;"
+                "}"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+                "  height:0; border:none; background:transparent;"
+                "}"
+                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+                "  background:transparent;"
+                "}"
+            )
 
     def _position_plan_panel(self):
         """将计划浮层定位到 chat_area 右上角（先按内容 adjustSize 再贴角）。"""
         if not hasattr(self, "plan_panel"):
             return
         panel = self.plan_panel
-        panel.adjustSize()
+        if panel.isVisible() and getattr(self, "_plan_items", None):
+            self._fit_plan_body_height(self.plan_body.text())
+            panel.setFixedHeight(self._plan_panel_target_height())
+        else:
+            panel.adjustSize()
         pos = self.chat_area.mapTo(self, self.chat_area.rect().topRight())
         scrollbar_width = self.chat_area.verticalScrollBar().width()
         right_clearance = scrollbar_width + 28
         panel.move(pos.x() - panel.width() - right_clearance, pos.y() + 16)
+
+    def _schedule_plan_panel_reflow(self):
+        """父布局高度变化后分阶段重算；Qt 的布局恢复不是同步完成的。"""
+        if not hasattr(self, "plan_panel") or not self.plan_panel.isVisible():
+            return
+        for delay in (0, 30, 120):
+            QTimer.singleShot(delay, self._position_plan_panel)
+
+    def _plan_panel_target_height(self):
+        """按当前正文精确计算浮层高度，避免父布局变化后保留旧高度。"""
+        margins = self.plan_panel.layout().contentsMargins()
+        chrome = (
+            margins.top() + margins.bottom()
+            + 26  # 标题行
+            + 7   # 标题与进度条
+            + self.plan_progress.height()
+            + 9   # 进度条与正文
+        )
+        return chrome + self.plan_scroll.height()
 
     def _build_empty_state(self):
         self.empty_state = QWidget(self.chat_area.viewport())
@@ -2504,6 +2570,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         margins = self.plan_panel.layout().contentsMargins()
         body_width = self.plan_panel.width() - margins.left() - margins.right()
         self.plan_body.setFixedWidth(body_width)
+        self.plan_scroll.setFixedWidth(body_width)
 
         doc = QTextDocument()
         doc.setDefaultFont(self.plan_body.font())
@@ -2511,7 +2578,19 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         doc.setHtml(html)
         # QLabel 的 RichText sizeHint 对 table + word wrap 会低估高度；QTextDocument
         # 按实际文本宽度计算，再多给 6px 防止最后一行 descender 被裁。
-        self.plan_body.setFixedHeight(int(doc.size().height()) + 6)
+        body_height = int(doc.size().height()) + 6
+        self.plan_body.setFixedHeight(body_height)
+        self.plan_scroll.setFixedHeight(min(body_height, self._plan_body_max_height()))
+
+    def _plan_body_max_height(self):
+        """计划正文最大高度：限制浮层不把聊天区撑满，内容超出时滚动。"""
+        if hasattr(self, "chat_area"):
+            # 留出上下空隙和标题/进度条高度。确认卡出现时 chat_area 会变矮，
+            # 这里必须跟着缩，不能用旧的 160px 下限把浮层挤到确认卡上。
+            available = max(80, self.chat_area.height() - 105)
+        else:
+            available = 360
+        return min(420, available)
 
     def _render_plan_panel(self, items):
         """主线程 slot：渲染任务计划面板"""
@@ -2519,6 +2598,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if not items:
             self._plan_spinner_timer.stop()
             self.plan_body.clear()
+            self.plan_scroll.setFixedHeight(0)
             self.plan_panel.setVisible(False)
             return
         done = sum(1 for it in items if it.get("status") == "done")
@@ -2534,9 +2614,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.plan_panel.layout().activate()
         self.plan_panel.setVisible(True)
         self.plan_panel.raise_()          # 浮在聊天区之上
-        self.plan_panel.setMinimumHeight(0)
-        self.plan_panel.setMaximumHeight(16777215)
-        self.plan_panel.adjustSize()
+        self.plan_panel.setFixedHeight(self._plan_panel_target_height())
         self._position_plan_panel()       # 贴右上角（adjustSize 后定位）
 
     def show_retry(self, error_msg):

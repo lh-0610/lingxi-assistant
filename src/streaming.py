@@ -15,7 +15,7 @@ from . import state
 from . import debug_log
 from .paths import logger
 from .models import MODEL_LIST, current_model_supports_vision
-from .tools import TOOL_DISPLAY_NAMES, get_tool_map
+from .tools import TOOL_DISPLAY_NAMES, build_git_write_confirmation, get_tool_map
 from .limits import (
     COMPACTION_SUMMARY_MAX_CHARS,
     HISTORY_KEEP_RECENT,
@@ -68,11 +68,13 @@ PLAN_MODE_READONLY_TOOLS = {
     "notify_user",  # 通知用户不该被 Plan 拦
     "read_background_output", "list_background_commands",  # 读后台输出也算只读
     "code_map",  # 代码地图只读扫描
-    "git_diff", "git_log",  # 只读 git：只看 diff/log，绝不碰 commit/add/push
+    "git_diff", "git_log", "git_status",  # 只读 git：只看 diff/log/status，绝不碰 commit/add/push
     "check_code",  # 静态检查只读分析（lint/语法），不改文件
     "fetch_url",  # 抓取网页只读
     "web_search",  # 网络搜索只读
     "find_definition", "find_references",  # jedi 代码导航，只读分析
+    "find_tests", "related_files",  # 测试发现 / 关联文件，只读分析
+    "get_project_instructions",  # 读取项目规则文件，只读
 }
 
 
@@ -113,6 +115,29 @@ def _history_has_image_blocks(messages) -> bool:
             if isinstance(blk, dict) and blk.get("type") in ("image", "image_url"):
                 return True
     return False
+
+
+def _normalize_nonleading_system_messages(messages):
+    """把历史中段的 SystemMessage 转成内部 HumanMessage。
+
+    Anthropic 允许开头有连续 system 消息，但拒绝 human/assistant/tool 消息之后
+    再出现 system。旧会话可能已经保存过这种消息；这里只清洗发送副本，不修改
+    state.chat_history。
+    """
+    normalized = []
+    seen_non_system = False
+    for msg in messages or []:
+        if isinstance(msg, SystemMessage):
+            if seen_non_system:
+                normalized.append(HumanMessage(
+                    content=f"[内部系统指令]\n{msg.content or ''}"
+                ))
+            else:
+                normalized.append(msg)
+            continue
+        seen_non_system = True
+        normalized.append(msg)
+    return normalized
 
 
 def _stream_chunks_with_retry(llm_with_tools, messages, ui=None):
@@ -467,6 +492,7 @@ def _prepare_stream_history(ui):
     返回 (history_for_send, debug_rec)。
     """
     history_for_send = _normalize_image_blocks_for_current_model(state.chat_history)
+    history_for_send = _normalize_nonleading_system_messages(history_for_send)
     text_only_image_warning = (
         not current_model_supports_vision()
         and _history_has_image_blocks(history_for_send)
@@ -883,8 +909,10 @@ def _stream_with_tools(ui):
 PARALLEL_SAFE_TOOLS = {
     "read_file", "search_in_file", "search_files", "list_directory", "code_map",
     "find_definition", "find_references",  # jedi 代码导航，纯读无副作用
-    "git_diff", "git_log", "check_code", "read_background_output",
+    "find_tests", "related_files",  # 测试发现 / 关联文件，纯读无副作用
+    "git_diff", "git_log", "git_status", "check_code", "read_background_output",
     "list_background_commands", "fetch_url", "web_search",
+    "get_project_instructions",  # 读取项目规则文件，只读
 }
 
 
@@ -893,7 +921,9 @@ PARALLEL_SAFE_TOOLS = {
 # 回放阶段若被拦，预取结果会被丢弃（Codex review 4 的 P2）。read_file/search_files 等有必填
 # 参数的工具不在此列：它们空参确实是错误调用，该拦下并请模型重新完整调用。
 NO_ARG_OK_TOOLS = {
-    "list_directory", "code_map", "git_diff", "git_log", "list_background_commands",
+    "list_directory", "code_map", "git_diff", "git_log", "git_status", "list_background_commands",
+    "get_project_instructions",  # 所有参数均可选，空参合法（默认读当前项目）
+    "find_tests",  # 所有参数均可选，空参合法（默认项目根）
 }
 
 
@@ -1051,21 +1081,32 @@ def _execute_tool(tc, ui, _preinvoked=None):
     ui.show_message(f"  {detail}\n", "tool_detail")
     logger.info(f"执行工具: {name}({detail})")
 
-    # ── MCP 工具执行前确认（方案阶段 3.1）──
-    if name.startswith("mcp_"):
-        _ui = getattr(state, "ui_ref", None)
+    # ── MCP / Git 写操作执行前确认 ──
+    _git_write_tools = {"git_stage", "git_unstage", "git_commit"}
+    if name.startswith("mcp_") or name in _git_write_tools:
+        _ui = ui if hasattr(ui, "confirm_command") else getattr(state, "ui_ref", None)
+        if _ui is None and name in _git_write_tools:
+            state.chat_history.append(ToolMessage(
+                content=f"已拒绝执行 `{name}`：当前没有可用的用户确认界面。",
+                tool_call_id=call_id,
+            ))
+            logger.warning(f"无确认界面，拒绝 Git 写工具: {name}")
+            return
         if _ui is not None:
-            _display = TOOL_DISPLAY_NAMES.get(name, name)
-            _msg = (
-                f"将调用 MCP 工具 {_display}，参数:\n"
-                + _pretty_args(args)
-            )
+            if name in _git_write_tools:
+                _msg = build_git_write_confirmation(name, args)
+            else:
+                _display = TOOL_DISPLAY_NAMES.get(name, name)
+                _msg = (
+                    f"将调用 MCP 工具 {_display}，参数:\n"
+                    + _pretty_args(args)
+                )
             allowed, user_feedback = _ui.confirm_command(_msg)
             if not allowed:
-                _reject_msg = "已拒绝：用户不允许执行此 MCP 工具。"
+                _reject_msg = f"已拒绝：用户不允许执行工具 `{name}`。"
                 if user_feedback:
                     _reject_msg += f"\n用户补充说明：{user_feedback}"
-                logger.info(f"用户拒绝执行 MCP 工具: {name}")
+                logger.info(f"用户拒绝执行工具: {name}")
                 state.chat_history.append(ToolMessage(
                     content=_reject_msg,
                     tool_call_id=call_id,

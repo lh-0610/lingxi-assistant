@@ -39,6 +39,9 @@ _SESSION_FIELDS = {
     "current_model_index": lambda: 0,
     "agent_mode": lambda: "act",
     "reasoning_enabled": lambda: True,
+    # 验证状态（会话级）：编码任务完成闸门——确保 AI 在声称"已完成"前先验证。
+    # 延迟 import 避免循环依赖（verification.py 不 import session）。
+    "verification": lambda: __import__("src.verification", fromlist=["new_verification"]).new_verification(),
 }
 
 # 哨兵：Session.project 的"尚未锚定"初值，区别于合法的 None（无项目/全局）。
@@ -114,6 +117,11 @@ def current_session() -> "Session":
     """当前线程的当前会话：worker 线程 → 它 bind 的会话；否则 → active。"""
     s = getattr(_thread_local, "session", None)
     return s if s is not None else get_active()
+
+
+def get_verification() -> dict:
+    """当前会话的验证状态。给 tools.py 记录写入/测试/diff 使用。"""
+    return current_session().verification
 
 
 def current_project():

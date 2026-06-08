@@ -476,10 +476,17 @@ class ConfirmBarsMixin:
 
         self._command_confirm_result_holder = result_holder
         self._command_confirm_done_event = done_event
-        self._command_confirm_destructive = self._is_destructive_command(command)
+        self._command_confirm_destructive = (
+            command.startswith("将执行 Git 写操作")
+            or self._is_destructive_command(command)
+        )
 
         # 检测是不是 MCP / JSON dump 类的消息，用 <pre> 纯文本渲染，不走 shell 高亮
-        if command.startswith("将调用 MCP") or command.startswith("将调用 mcp_"):
+        if (
+            command.startswith("将调用 MCP")
+            or command.startswith("将调用 mcp_")
+            or command.startswith("将执行 Git 写操作")
+        ):
             import html as _html
             body_html = (
                 '<pre style="font-family: Consolas, monospace; '
@@ -513,6 +520,8 @@ class ConfirmBarsMixin:
             self._cmd_confirm_hint.setText("1 / 2 / 3 选择 · Esc 取消")
 
         self.command_confirm_bar.setVisible(True)
+        if hasattr(self, "_schedule_plan_panel_reflow"):
+            self._schedule_plan_panel_reflow()
         # 清空反馈输入框
         self.command_confirm_feedback.clear()
         # 注：手机确认推送由 confirm_command 的 push_confirm 接管（完整命令 + inline 按钮），
@@ -561,6 +570,8 @@ class ConfirmBarsMixin:
         self.command_confirm_bar.setVisible(False)
         self.command_confirm_text.clear()
         self._command_confirm_destructive = False
+        if hasattr(self, "_schedule_plan_panel_reflow"):
+            self._schedule_plan_panel_reflow()
 
     def _release_pending_confirm(self):
         """关窗 / 退出时唤醒任何挂在 confirm_command 上的 worker，避免无限挂起。
@@ -818,6 +829,8 @@ class ConfirmBarsMixin:
         # diff 渲染：加号绿色 / 减号红色 / 头部信息灰色
         self.edit_confirm_diff.setHtml(self._format_diff_html(diff_text))
         self.edit_confirm_bar.setVisible(True)
+        if hasattr(self, "_schedule_plan_panel_reflow"):
+            self._schedule_plan_panel_reflow()
         self.edit_confirm_bar.setFocus()
         # 清空反馈输入框
         self.edit_confirm_feedback.clear()
@@ -846,6 +859,8 @@ class ConfirmBarsMixin:
         self.edit_confirm_bar.setVisible(False)
         self.edit_confirm_diff.clear()
         self.edit_confirm_path.setText("")
+        if hasattr(self, "_schedule_plan_panel_reflow"):
+            self._schedule_plan_panel_reflow()
 
     def _release_pending_edit(self):
         """关窗 / 退出时唤醒挂着的 edit confirm 请求，避免 worker 无限挂起。"""
@@ -910,7 +925,10 @@ class ConfirmBarsMixin:
         _sess = _session.current_session()      # 发起确认的会话（worker 线程绑的）
         self._active_confirm_session = _sess    # 给主线程 _resolve_* 把"记住"加到这个会话
         # 危险命令必须每次确认，永不被白名单绕过
-        is_destructive = self._is_destructive_command(command)
+        is_destructive = (
+            command.startswith("将执行 Git 写操作")
+            or self._is_destructive_command(command)
+        )
         if not is_destructive:
             base = self._extract_base_command(command)
             if base and base in _sess.command_prefix_allowlist:

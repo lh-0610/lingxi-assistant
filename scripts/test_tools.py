@@ -17,6 +17,36 @@ from src.tools import (
 )
 
 
+class TestProjectInstructions:
+    def test_loads_root_to_target_and_excludes_sibling(self, project_dir):
+        (project_dir / "AGENTS.md").write_text("root-rule", encoding="utf-8")
+        frontend = project_dir / "frontend"
+        backend = project_dir / "backend"
+        frontend.mkdir()
+        backend.mkdir()
+        (frontend / "CLAUDE.md").write_text("frontend-rule", encoding="utf-8")
+        (backend / "CLAUDE.md").write_text("backend-rule", encoding="utf-8")
+        target = frontend / "page.py"
+        target.write_text("", encoding="utf-8")
+
+        from src.tools import get_project_instructions
+        result = get_project_instructions.func("frontend/page.py")
+
+        assert "root-rule" in result
+        assert "frontend-rule" in result
+        assert "backend-rule" not in result
+        assert "frontend/CLAUDE.md" in result
+
+    def test_rejects_path_outside_current_project(self, project_dir, tmp_path):
+        outside = tmp_path / "outside.py"
+        outside.write_text("", encoding="utf-8")
+
+        from src.tools import get_project_instructions
+        result = get_project_instructions.func(str(outside))
+
+        assert "不在当前项目根目录" in result
+
+
 # ── search_in_file ──────────────────────────────────────
 class TestSearchInFile:
     """纯文件操作，不依赖 state。"""

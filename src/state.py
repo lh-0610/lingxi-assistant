@@ -80,8 +80,8 @@ def parse_plan(plan_text: str) -> list:
     """把多行 checklist 文本解析成 [{'text','status'}, ...]。行首标记决定状态。
 
     容错：允许行首带 markdown 列表前缀（- / * / 1.）、checkbox 内多/少空格、
-    大小写（[X]）、及常见完成/进行中字符（✓ / ~ 等）。没有 checkbox 的行按
-    pending 处理、整行作为文本。
+    大小写（[X]）、及常见完成/进行中字符（✓ / ~ 等）。非 checklist 行忽略，
+    避免历史摘要、工具 JSON 或模型分析污染计划面板。
     """
     items = []
     for raw in (plan_text or "").splitlines():
@@ -89,11 +89,10 @@ def parse_plan(plan_text: str) -> list:
         if not line:
             continue
         m = _PLAN_LINE_RE.match(line)
-        if m:
-            status = _PLAN_CHAR_STATUS.get(m.group(1).lower(), "pending")
-            text = m.group(2).strip()
-        else:
-            status, text = "pending", line
+        if not m:
+            continue
+        status = _PLAN_CHAR_STATUS.get(m.group(1).lower(), "pending")
+        text = m.group(2).strip()
         if text:
             items.append({"text": text, "status": status})
     return items

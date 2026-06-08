@@ -42,7 +42,7 @@
 - ⚡ **并行工具调用**：同一轮里多个只读工具（读文件 / 搜索 / 导航）并行执行，多文件场景明显提速
 - 🧭 **jedi 代码导航**：`find_definition` 跳转定义、`find_references` 找全部引用，比纯文本搜索准
 - ✅ **自我校验闭环**：`edit_file` / `write_file` 成功后自动跑 ruff / 语法检查，把发现的问题**追加进同一条工具返回**，模型当轮就去修（不用你提醒）
-- 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`（只读看改动与历史）/ `fetch_url`·`web_search`（联网查资料）
+- 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`·`git_status`（只读）+ `git_stage`·`git_commit`（git 写，**执行前强制弹确认卡、无 push**）/ `fetch_url`·`web_search`（联网查资料）
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
 - ↶ **Checkpoint / 撤销**：edit/write/append 写盘前自动 git stash 快照，顶栏一键撤销 AI 上一轮改动（路径级恢复）
 - 📄 **`.lingxirules` 项目级指令**：项目根放一个文件写项目约定，自动注入、优先级最高
@@ -429,7 +429,8 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 | `apply_patch` | 多文件原子补丁（Codex 风格 `*** Begin Patch`）：一次建/改/删多文件，全校验通过才落盘 |
 | `run_tests` | 跑 pytest（精炼失败定位 + 总耗时） |
 | `check_code` | 静态检查单文件（Python 用 ruff，其它走 config 的 `check_command`） |
-| `git_diff` / `git_log` | 只读看 git 改动 / 历史（**绝不碰 commit/push**） |
+| `git_diff` / `git_log` / `git_status` | 只读看 git 改动 / 历史 / 状态 |
+| `git_stage` / `git_unstage` / `git_commit` | git 写操作（暂存 / 取消暂存 / 本地提交，**无 push**）；**执行前强制弹确认卡**，路径白名单防注入 |
 | `update_plan` | 维护任务计划清单（右上角浮层实时显示进度） |
 | `fetch_url` / `web_search` | 抓网页正文 / Tavily 联网搜索 |
 | `generate_image` | 调 ComfyUI / Pollinations 生成图片 |

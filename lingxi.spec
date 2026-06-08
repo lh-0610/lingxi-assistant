@@ -36,6 +36,18 @@ except Exception:
     _jedi_hiddenimports = []
     _jedi_datas = []
 
+# tree-sitter 多语言代码分析（可选）：PyInstaller 静态分析抓不到懒导入的语言模块；
+# tree-sitter-javascript / tree-sitter-typescript 等带 .so / .dll 二进制 + 数据文件。
+# 没装时 collect_* 返回空，不影响打包。
+try:
+    _ts_hiddenimports = collect_submodules('tree_sitter')
+    _ts_datas = (collect_data_files('tree_sitter_python')
+                 + collect_data_files('tree_sitter_javascript')
+                 + collect_data_files('tree_sitter_typescript'))
+except Exception:
+    _ts_hiddenimports = []
+    _ts_datas = []
+
 
 a = Analysis(
     ['main.py'],
@@ -47,7 +59,7 @@ a = Analysis(
         ('assets', 'assets'),               # 桌宠 GIF + 静态立绘（走 RESOURCE_DIR/_MEIPASS 读）
         ('roles', 'roles'),                 # 默认角色卡目录
         ('config.example.json', '.'),       # 配置模板，首次启动时复制成 config.json
-    ] + _ruff_datas + _mcp_datas + _jedi_datas,
+    ] + _ruff_datas + _mcp_datas + _jedi_datas + _ts_datas,
     hiddenimports=[
         # LangChain 各 provider 包，PyInstaller 静态分析有时识别不到
         'langchain_anthropic',
@@ -69,7 +81,7 @@ a = Analysis(
         'jsonschema_specifications',
         'referencing',
         'rpds',
-    ] + _mcp_hiddenimports + _jedi_hiddenimports,
+    ] + _mcp_hiddenimports + _jedi_hiddenimports + _ts_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

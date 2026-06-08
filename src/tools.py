@@ -14,7 +14,9 @@ from collections import deque
 from langchain_core.tools import tool
 
 from . import state
+from . import session as _session
 from . import checkpoint as _checkpoint
+from .verification import mark_dirty as _v_mark_dirty, mark_check as _v_mark_check, mark_tests as _v_mark_tests, mark_diff_reviewed as _v_mark_diff_reviewed
 from .paths import _app_data_dir, logger
 from .limits import (
     READ_FILE_DEFAULT_LIMIT,
@@ -406,6 +408,36 @@ def _resolve_path(path: str) -> str:
     return os.path.normpath(os.path.join(_project_cwd(), path))
 
 
+def _norm_vpath(path: str) -> str:
+    """规范化路径用于验证状态追踪：转成相对项目根的正斜杠路径。"""
+    abs_path = _resolve_path(path)
+    cwd = _project_cwd()
+    abs_real = os.path.realpath(abs_path)
+    cwd_real = os.path.realpath(cwd) if cwd else ""
+    try:
+        inside = cwd_real and os.path.normcase(os.path.commonpath([abs_real, cwd_real])) == os.path.normcase(cwd_real)
+    except ValueError:
+        inside = False
+    if inside:
+        rel = os.path.relpath(abs_real, cwd_real)
+        return rel.replace("\\", "/")
+    return os.path.normpath(abs_path).replace("\\", "/")
+
+
+def _mark_current_dirty(full_path: str) -> None:
+    try:
+        _v_mark_dirty(_session.get_verification(), _norm_vpath(full_path))
+    except Exception as e:
+        logger.debug(f"验证状态标记 dirty 失败: {e}")
+
+
+def _mark_current_check(full_path: str, passed, checker: str = "") -> None:
+    try:
+        _v_mark_check(_session.get_verification(), _norm_vpath(full_path), passed, checker or "")
+    except Exception as e:
+        logger.debug(f"验证状态标记 check 失败: {e}")
+
+
 def _shell_cwd() -> str:
     """run_command 实际用的 cwd：shell_cwd（存在且是目录）否则退回项目根。"""
     base = getattr(state, "shell_cwd", None)
@@ -560,6 +592,7 @@ def write_file(path: str, content: str) -> str:
             logger.warning(f"checkpoint 失败（不影响写入）: {e}")
         with open(full, "w", encoding="utf-8") as f:
             f.write(content)
+        _mark_current_dirty(full)
         return f"成功写入文件: {full}" + _auto_check_suffix(full)
     except Exception as e:
         return f"写入失败: {e}"
@@ -588,6 +621,7 @@ def append_file(path: str, content: str) -> str:
             logger.warning(f"checkpoint 失败（不影响追加）: {e}")
         with open(full, "a", encoding="utf-8") as f:
             f.write(content)
+        _mark_current_dirty(full)
         return f"成功追加到文件: {full}" + _auto_check_suffix(full)
     except Exception as e:
         return f"追加失败: {e}"
@@ -886,6 +920,8 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
             f.write(new_content)
     except Exception as e:
         return f"写入失败: {e}"
+
+    _mark_current_dirty(full)
 
     # 成功信息
     count = len(spans)
@@ -1442,6 +1478,25 @@ def forget(query: str) -> str:
 
 
 @tool
+def get_project_instructions(path: str = ".") -> str:
+    """读取目标路径适用的 AI 编码规则（CLAUDE.md / AGENTS.md / .lingxirules）。
+
+    path 可指向当前项目内的文件或目录；返回项目根到目标目录的完整规则链。
+    不传参数时只读取当前项目根规则。
+    """
+    from .roles import load_project_rules
+    root = _project_cwd()
+    target = _resolve_path(path or ".")
+    result = load_project_rules(root, target)
+    if not result:
+        return (
+            f"路径 `{path or '.'}` 没有适用的项目规则，"
+            "或该路径不在当前项目根目录内。"
+        )
+    return result
+
+
+@tool
 def notify_user(title: str, message: str, level: str = "info") -> str:
     """主动向用户手机推送 Telegram 通知。
 
@@ -1470,7 +1525,19 @@ def update_plan(plan: str) -> str:
       update_plan("[x] 读 config.py 看结构\n[~] 在 state.py 加状态\n[ ] 加 update_plan 工具")
     """
     from . import state
-    items = state.parse_plan(plan)
+    # 历史压缩摘要曾被模型续接进 plan 参数；摘要不是计划的一部分，硬截断防止
+    # 它被宽松解析后撑成几十条假步骤。
+    clean_plan = re.split(
+        r"\s*\[(?:历史摘要|之前已有摘要|新增对话)\]\s*:?",
+        plan or "",
+        maxsplit=1,
+    )[0]
+    items = state.parse_plan(clean_plan)
+    if plan and not items:
+        return "计划未更新：没有检测到合法 checklist 行，请使用 [ ] / [~] / [x] 标记。"
+    guard = _validate_plan_update(getattr(state, "current_plan", None) or [], items, clean_plan)
+    if guard:
+        return guard
     state.current_plan = items
     # 预留 UI 钩子：当前阶段 UI 没实现 show_plan，hasattr 判空安全跳过
     _ui = getattr(state, "ui_ref", None)
@@ -1483,6 +1550,67 @@ def update_plan(plan: str) -> str:
         return "计划已清空。"
     done = sum(1 for it in items if it["status"] == "done")
     return f"计划已更新（{done}/{len(items)} 完成）：\n" + state.render_plan(items)
+
+
+_PLAN_CHANGE_REASON_RE = re.compile(
+    r"(调整说明|变更说明|合并说明|删除说明|结构调整|计划调整|合并原因|删除原因)"
+)
+_PLAN_VALIDATION_RE = re.compile(
+    r"(测试|全量|pytest|run_tests|git\s*diff|diff|验收|复核|检查改动)",
+    re.IGNORECASE,
+)
+
+
+def _plan_text_key(text: str) -> str:
+    """计划项稳定匹配 key：忽略空白和常见编号差异。"""
+    s = (text or "").strip()
+    s = re.sub(r"^\d+[.)、]\s*", "", s)
+    s = re.sub(r"\s+", "", s)
+    return s.lower()
+
+
+def _validate_plan_update(old_items: list, new_items: list, raw_plan: str) -> str:
+    """防止模型执行中静默删除未完成计划项。
+
+    update_plan 是全量覆盖工具；没有这层保护时，模型会把 9 项计划随手改成 8 项，
+    让测试 / diff 等验收步骤悄悄消失。允许新增和状态更新；删除未完成项需有明确
+    调整说明，未完成的验收项始终不允许删除。
+    """
+    if not old_items or not new_items:
+        return ""
+
+    new_keys = {_plan_text_key(it.get("text", "")) for it in new_items}
+    missing = []
+    missing_validation = []
+    for item in old_items:
+        text = item.get("text", "")
+        if item.get("status") == "done":
+            continue
+        if _plan_text_key(text) not in new_keys:
+            missing.append(text)
+            if _PLAN_VALIDATION_RE.search(text or ""):
+                missing_validation.append(text)
+
+    if not missing:
+        return ""
+
+    if missing_validation:
+        return (
+            "计划未更新：不能删除尚未完成的验收步骤。\n"
+            "被删除的验收项：\n"
+            + "\n".join(f"- {x}" for x in missing_validation)
+            + "\n\n请保留测试 / 全量测试 / git diff 等验收步骤，只更新状态。"
+        )
+
+    if not _PLAN_CHANGE_REASON_RE.search(raw_plan or ""):
+        return (
+            "计划未更新：新计划删除了尚未完成的步骤，但没有说明是合并、拆分还是取消。\n"
+            "被删除的未完成项：\n"
+            + "\n".join(f"- {x}" for x in missing)
+            + "\n\n默认请只更新 [ ]/[~]/[x] 状态；如确需调整结构，请在计划文本中加入“调整说明：...”。"
+        )
+
+    return ""
 
 
 # ══════════════════════════════════════
@@ -1696,7 +1824,16 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
     if not os.path.isdir(base):
         return f"失败：目录不存在 {base}"
 
-    # ── 按扩展名定义正则 ──
+    # ── 优先用 tree-sitter（多语言、更准确）；不可用/失败时静默回退 regex ──
+    try:
+        from .codeintel import code_map_ts
+        ts_result = code_map_ts(base, max_chars)
+        if ts_result is not None:
+            return ts_result
+    except Exception:
+        pass  # codeintel 模块不可用，回退 regex
+
+    # ── 回退：按扩展名定义正则 ──
     _py_re = _re.compile(r'^(?P<indent>\s*)(?P<kw>async\s+def|def|class)\s+(?P<name>\w+)')
     _js_re = _re.compile(r'^(?P<indent>\s*)(?:export\s+)?(?:async\s+)?(?P<kw>function|class)\s+(?P<name>\w+)')
     _EXT_MAP = {
@@ -1765,12 +1902,486 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
 
 
 # ══════════════════════════════════════
+# find_tests / related_files 辅助函数
+# ══════════════════════════════════════
+
+import ast as _ast
+
+
+def _is_noise_dir(name: str) -> bool:
+    """判断目录名是否为应跳过的噪声目录（.git/venv/node_modules 等）。"""
+    return name in _SEARCH_IGNORE_DIRS or name.startswith(".")
+
+
+def _iter_project_files(root: str, extensions: tuple = (".py",), max_file_size: int = 0):
+    """遍历项目根下的文件，跳过噪声目录，返回 (absolute_path, relative_path) 元组。
+    max_file_size <= 0 时用默认 _SEARCH_MAX_FILE_SIZE。"""
+    _max = max_file_size if max_file_size > 0 else _SEARCH_MAX_FILE_SIZE
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _is_noise_dir(d)]
+        for fname in filenames:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in extensions:
+                continue
+            abs_path = os.path.join(dirpath, fname)
+            try:
+                if os.path.getsize(abs_path) > _max:
+                    continue
+            except OSError:
+                continue
+            rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
+            yield abs_path, rel
+
+
+def _relpath(path: str, root: str) -> str:
+    """将绝对路径转为相对项目根的正斜杠路径。"""
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
+def _module_name_for_py(abs_path: str, root: str) -> str:
+    """将 Python 文件绝对路径转为模块名（src/tools.py → src.tools）。
+    __init__.py 返回包名（src/__init__.py → src）。"""
+    rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
+    if rel.endswith(".py"):
+        rel = rel[:-3]
+    rel = rel.replace("/", ".")
+    if rel.endswith(".__init__"):
+        rel = rel[:-9]
+    return rel
+
+
+def _module_to_path(module: str, root: str) -> str | None:
+    """将模块名（如 src.tools）映射回项目内的文件路径。返回绝对路径或 None。
+    支持 src.tools → src/tools.py 和 src.ui.header → src/ui/header.py。
+    也尝试包目录 src/__init__.py。"""
+    parts = module.split(".")
+    # 先试文件
+    fpath = os.path.join(root, *parts) + ".py"
+    if os.path.isfile(fpath):
+        return fpath
+    # 再试包目录
+    pkg_init = os.path.join(root, *parts, "__init__.py")
+    if os.path.isfile(pkg_init):
+        return pkg_init
+    return None
+
+
+def _extract_imports_py(abs_path: str, file_module: str = "") -> list[str]:
+    """用 ast 从 Python 文件提取 import 的模块名列表。
+    file_module: 文件自身的模块名（如 "src.tools"），用于解析相对导入。
+    解析失败时退回正则匹配 import/from 语句。"""
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        tree = _ast.parse(source, filename=abs_path)
+    except Exception:
+        # 退回到正则
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                source = f.read()
+        except Exception:
+            return []
+        modules = []
+        for m in re.finditer(r'^\s*(?:import|from)\s+([\w.]+)', source, re.MULTILINE):
+            modules.append(m.group(1))
+        return modules
+
+    modules = []
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                modules.append(alias.name)
+        elif isinstance(node, _ast.ImportFrom):
+            if node.level == 0 and node.module:
+                # 同时保留容器模块和导入成员。后者若是项目子模块，
+                # `from src import state` 才能精确识别为 src.state。
+                modules.append(node.module)
+                modules.extend(f"{node.module}.{alias.name}" for alias in node.names)
+            elif node.level > 0 and file_module:
+                # 相对导入基于当前 package，而非当前文件模块。
+                is_package = os.path.basename(abs_path) == "__init__.py"
+                package = file_module if is_package else file_module.rpartition(".")[0]
+                base_parts = package.split(".") if package else []
+                up = node.level - 1
+                base = ".".join(base_parts[:len(base_parts) - up]) if up <= len(base_parts) else ""
+                if node.module:
+                    mod = f"{base}.{node.module}" if base else node.module
+                    modules.append(mod)
+                    modules.extend(f"{mod}.{alias.name}" for alias in node.names)
+                elif base:
+                    for alias in node.names:
+                        modules.append(f"{base}.{alias.name}")
+            elif node.module:
+                modules.append(node.module)
+    return list(dict.fromkeys(modules))
+
+
+def _imports_target(imports: list[str], target_module: str) -> bool:
+    """是否确实导入目标模块；父包 import 不等于导入其任意子模块。"""
+    if not target_module:
+        return False
+    return any(
+        imp == target_module or imp.startswith(target_module + ".")
+        for imp in imports
+    )
+
+
+def _extract_imports_generic(abs_path: str) -> list[str]:
+    """用 codeintel 从非 Python 文件提取导入路径/模块名。
+    返回的字符串是原始 import specifier（如 './utils'、'lodash'、'./api'）。
+    codeintel 不可用或解析失败时返回空列表。"""
+    try:
+        from .codeintel import extract_imports_from_content
+    except Exception:
+        return []
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return []
+    return extract_imports_from_content(content, path=abs_path)
+
+
+def _resolve_import_to_file(specifier: str, source_dir: str, project_root: str) -> str | None:
+    """把 import specifier（如 './utils'、'../services/api'、'./helpers.ts'）解析为
+    项目内的绝对文件路径。返回 None 表示解析不到。
+    只匹配项目根范围内的文件，第三方库跳过。"""
+    # 只处理相对路径（以 ./ 或 ../ 开头）；绝对路径和裸模块名（如 'react'）跳过
+    if not specifier.startswith("."):
+        return None
+
+    base_dir = os.path.normpath(os.path.join(source_dir, specifier))
+    # 尝试后缀列表（按常见度排序）
+    extensions = [".ts", ".tsx", ".js", ".jsx", ".py", ""]
+    # 先试自身带扩展名的情况
+    candidates = [base_dir] + [base_dir + ext for ext in extensions]
+    # 也试 index 文件
+    candidates += [os.path.join(base_dir, "index" + ext) for ext in extensions]
+
+    real_root = os.path.realpath(project_root)
+    for cand in candidates:
+        if os.path.isfile(cand):
+            real_cand = os.path.realpath(cand)
+            if os.path.commonpath([real_cand, real_root]) == real_root:
+                return real_cand
+    return None
+
+
+def _find_test_files(root: str) -> list[tuple[str, str]]:
+    """在项目根下查找所有测试文件，返回 [(abs_path, rel_path), ...]。
+    rel_path 始终相对于项目根。搜索范围：tests/, test/, scripts/ 目录 + 根下所有 test_*.py / *_test.py。"""
+    test_files = []
+    seen = set()
+
+    # 已知测试目录。即便在 scripts/ 下，也只把 pytest 命名文件当测试，
+    # 避免 conftest.py、构建脚本和一次性工具被推荐给 run_tests。
+    for d in ("tests", "test", "scripts"):
+        dpath = os.path.join(root, d)
+        if os.path.isdir(dpath):
+            for abs_path, _ in _iter_project_files(dpath, (".py",)):
+                basename = os.path.basename(abs_path)
+                if not (basename.startswith("test_") or basename.endswith("_test.py")):
+                    continue
+                if abs_path not in seen:
+                    seen.add(abs_path)
+                    rel = _relpath(abs_path, root)
+                    test_files.append((abs_path, rel))
+
+    # 项目根下直接匹配 test_*.py / *_test.py
+    for abs_path, rel in _iter_project_files(root, (".py",)):
+        basename = os.path.basename(abs_path)
+        if (basename.startswith("test_") or basename.endswith("_test.py")) and abs_path not in seen:
+            seen.add(abs_path)
+            test_files.append((abs_path, rel))
+
+    return test_files
+
+
+def _score_test_candidate(
+    test_abs: str, test_rel: str,
+    target_stem: str, target_module: str,
+    symbol: str, root: str,
+) -> tuple[int, list[str]]:
+    """为一个测试文件打分，返回 (score, reasons)。
+    target_stem: 目标文件的无后缀名（如 tools）
+    target_module: 目标文件的模块名（如 src.tools）
+    symbol: 可选符号名。"""
+    score = 0
+    reasons = []
+    test_stem = os.path.splitext(os.path.basename(test_abs))[0]
+
+    # 1. 文件名强匹配 +50
+    if test_stem in (f"test_{target_stem}", f"{target_stem}_test"):
+        score += 50
+        reasons.append("文件名匹配")
+    elif target_stem in test_stem and test_stem.startswith("test_"):
+        score += 30
+        reasons.append("文件名部分匹配")
+
+    # 2. import 目标模块 +40
+    try:
+        test_module = _module_name_for_py(test_abs, root)
+        imports = _extract_imports_py(test_abs, test_module)
+        if _imports_target(imports, target_module):
+            score += 40
+            reasons.append("import 匹配")
+    except Exception:
+        pass
+
+    # 3. 符号相关
+    if symbol:
+        try:
+            with open(test_abs, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            # 测试函数名包含 symbol +35
+            for m in re.finditer(r'def\s+(test_\w*' + re.escape(symbol) + r'\w*)\s*\(', content):
+                score += 35
+                reasons.append(f"测试函数 {m.group(1)}")
+                break
+            else:
+                # 文件内容包含 symbol +25
+                if symbol in content:
+                    score += 25
+                    reasons.append(f"内容包含 {symbol}")
+        except Exception:
+            pass
+
+    # 4. 同目录 / 常见测试目录弱匹配 +10
+    top_dir = test_rel.replace("\\", "/").split("/", 1)[0]
+    if top_dir in ("tests", "test", "scripts"):
+        score += 10
+        reasons.append("测试目录")
+
+    return score, reasons
+
+
+# ══════════════════════════════════════
+# find_tests / related_files 工具
+# ══════════════════════════════════════
+
+
+@tool
+def find_tests(path: str = "", symbol: str = "", max_results: int = 20) -> str:
+    """根据源码文件路径和可选符号名，返回最可能相关的测试文件 / 测试用例候选。
+    path: 源码文件或目录，相对项目根或绝对路径。留空 = 项目根。
+    symbol: 可选函数 / 类 / 方法名。
+    max_results: 最多返回条数，范围 1-50。
+    返回匹配的测试文件、命中原因和推荐 run_tests 命令。"""
+    max_results = max(1, min(50, max_results))
+    root = _project_cwd()
+
+    # 路径解析和安全校验
+    if path:
+        full = _resolve_path(path)
+        try:
+            if os.path.commonpath([os.path.realpath(full), os.path.realpath(root)]) != os.path.realpath(root):
+                return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+        except ValueError:
+            return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+        if not os.path.exists(full):
+            return f"失败：路径不存在 {path}"
+    else:
+        full = root
+
+    # 确定目标文件名和模块名
+    if os.path.isfile(full):
+        target_stem = os.path.splitext(os.path.basename(full))[0]
+        target_module = _module_name_for_py(full, root) if full.endswith(".py") else ""
+    elif os.path.isdir(full):
+        target_stem = os.path.basename(full.rstrip("/\\")) or ""
+        target_module = ""
+    else:
+        return f"失败：路径不存在 {path}"
+
+    # 搜索测试文件
+    test_files = _find_test_files(root)
+    if not test_files:
+        return "未找到任何测试文件（搜索了 tests/ test/ scripts/ 和 test_*.py / *_test.py 模式）。"
+
+    # 评分
+    scored = []
+    for test_abs, test_rel in test_files:
+        sc, reasons = _score_test_candidate(test_abs, test_rel, target_stem, target_module, symbol, root)
+        # 指定目标时，单凭“位于测试目录”的 10 分不算相关；否则所有测试都会入榜。
+        # 无 path 时视为“列出项目测试”，允许测试目录弱候选。
+        if sc > (0 if not path else 10):
+            scored.append((sc, test_rel, reasons))
+    scored.sort(key=lambda x: (-x[0], x[1].lower()))
+
+    if not scored:
+        return (f"未找到与 `{path or '项目根'}` 相关的测试文件。\n"
+                "建议：检查项目是否有 tests/ 或 scripts/ 目录，或手动运行 run_tests() 跑全量测试。")
+
+    # 输出
+    lines = [f"为 `{path or '项目根'}` 找到的测试候选（共 {len(scored)} 个，显示前 {max_results}）："]
+    if symbol:
+        lines.append(f"符号过滤: `{symbol}`")
+    lines.append("")
+
+    for sc, rel, reasons in scored[:max_results]:
+        reason_str = ", ".join(reasons)
+        lines.append(f"- {rel}  (分数 {sc}: {reason_str})")
+
+    # 推荐运行命令
+    lines.append("")
+    lines.append("建议运行：")
+    top_score = scored[0][0]
+    top_files = [rel for score, rel, _ in scored if score == top_score][:3]
+    if symbol:
+        for top_file in top_files:
+            try:
+                with open(os.path.join(root, top_file), "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                has_test_fn = bool(re.search(r'def\s+test_\w*' + re.escape(symbol), content))
+            except Exception:
+                has_test_fn = False
+            if has_test_fn:
+                lines.append(f'run_tests("{top_file}", k="{symbol}")')
+            else:
+                lines.append(f'run_tests("{top_file}")')
+    else:
+        for top_file in top_files:
+            lines.append(f'run_tests("{top_file}")')
+    if len(top_files) > 1:
+        lines.append("（以上候选同分；可提供 symbol 进一步缩小范围。）")
+
+    return "\n".join(lines)
+
+
+@tool
+def related_files(path: str, max_results: int = 30) -> str:
+    """给定一个源码文件，返回修改它前应关注的相关文件。
+    path: 源码文件路径（相对项目根或绝对路径）。
+    max_results: 最多返回条数，范围 1-100。
+    输出分组：目标文件、它导入的项目内文件、导入它的项目内文件、相关测试候选、建议下一步。"""
+    max_results = max(1, min(100, max_results))
+    root = _project_cwd()
+
+    # 路径解析和安全校验
+    full = _resolve_path(path)
+    try:
+        if os.path.commonpath([os.path.realpath(full), os.path.realpath(root)]) != os.path.realpath(root):
+            return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+    except ValueError:
+        return "失败：路径超出项目范围，不允许（不能用 .. 逃出项目根）"
+    if not os.path.isfile(full):
+        return f"失败：文件不存在: {path}"
+
+    rel_target = _relpath(full, root)
+    is_py = full.endswith(".py")
+    source_dir = os.path.dirname(full)
+    target_stem = os.path.splitext(os.path.basename(full))[0]
+
+    # 1. 解析目标文件的 imports
+    if is_py:
+        target_module = _module_name_for_py(full, root)
+        imports = _extract_imports_py(full, target_module)
+        imported_files = []
+        for mod in imports:
+            p = _module_to_path(mod, root)
+            if p and os.path.isfile(p):
+                imported_files.append(_relpath(p, root))
+    else:
+        target_module = ""
+        imports = _extract_imports_generic(full)
+        imported_files = []
+        for spec in imports:
+            p = _resolve_import_to_file(spec, source_dir, root)
+            if p:
+                imported_files.append(_relpath(p, root))
+
+    # 去重保持顺序
+    seen = set()
+    imported_files = [f for f in imported_files if f not in seen and not seen.add(f)]
+
+    # 2. 反向导入：扫描项目源文件，找谁 import 了 target
+    reverse_importers = []
+    if is_py:
+        all_files = list(_iter_project_files(root, (".py",)))
+    else:
+        exts = (".ts", ".tsx", ".js", ".jsx", ".py")
+        all_files = list(_iter_project_files(root, exts))
+
+    for abs_path, rel in all_files:
+        if abs_path == full:
+            continue
+        try:
+            if abs_path.endswith(".py") and is_py:
+                file_module = _module_name_for_py(abs_path, root)
+                file_imports = _extract_imports_py(abs_path, file_module)
+                if _imports_target(file_imports, target_module):
+                    reverse_importers.append(rel)
+            else:
+                # 非 Python（或目标非 Python）：用 codeintel 匹配导入路径
+                file_imports = _extract_imports_generic(abs_path)
+                file_dir = os.path.dirname(abs_path)
+                for spec in file_imports:
+                    resolved = _resolve_import_to_file(spec, file_dir, root)
+                    if resolved and os.path.normcase(resolved) == os.path.normcase(full):
+                        reverse_importers.append(rel)
+                        break
+        except Exception:
+            pass
+
+    # 3. 测试候选（复用 find_tests 逻辑）
+    test_files = _find_test_files(root)
+    test_candidates = []
+    for test_abs, test_rel in test_files:
+        sc, reasons = _score_test_candidate(test_abs, test_rel, target_stem, target_module, "", root)
+        if sc > 10:
+            test_candidates.append((sc, test_rel, reasons))
+    test_candidates.sort(key=lambda x: (-x[0], x[1].lower()))
+
+    # 构建输出
+    lines = [f"目标文件: {rel_target}", ""]
+
+    # 它导入的项目内文件
+    if imported_files:
+        lines.append("它导入的项目内文件:")
+        for f in imported_files[:max_results]:
+            lines.append(f"- {f}")
+        lines.append("")
+
+    # 导入它的项目内文件
+    if reverse_importers:
+        lines.append("导入它的项目内文件:")
+        for f in reverse_importers[:max_results]:
+            lines.append(f"- {f}")
+        lines.append("")
+
+    # 相关测试候选
+    if test_candidates:
+        lines.append("相关测试候选:")
+        for sc, rel, reasons in test_candidates[:10]:
+            reason_str = ", ".join(reasons)
+            lines.append(f"- {rel}  ({reason_str})")
+        lines.append("")
+
+    # 建议下一步
+    lines.append("建议下一步:")
+    lines.append(f'- read_file("{rel_target}", ...)')
+    if imported_files:
+        lines.append(f'- read_file("{imported_files[0]}", ...)')
+    if reverse_importers:
+        lines.append(f'- read_file("{reverse_importers[0]}", ...)')
+    if test_candidates:
+        top_test = test_candidates[0][1]
+        lines.append(f'- run_tests("{top_test}")')
+    else:
+        lines.append("- run_tests()  # 全量测试")
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════
 # 测试运行工具
 # ══════════════════════════════════════
 
 
 def _parse_pytest_output(stdout: str, elapsed: float = 0.0) -> str:
-    """解析 pytest stdout，提取计数 + 失败用例摘要；解析不到则退回末尾 ~2000 字。"""
+    """解析 pytest stdout，提取计数 + 失败用例摘要 + 错误详情；
+    解析不到则退回末尾 ~2000 字。
+    失败时在末尾追加 [REPAIR_INFO] 结构化块，供自动修复循环使用。"""
     lines = stdout.strip().splitlines()
 
     # ── 计数：从末尾 summary 行抓 passed / failed / error ──
@@ -1797,6 +2408,45 @@ def _parse_pytest_output(stdout: str, elapsed: float = 0.0) -> str:
             # 遇到非 FAILED 行就停（FAILED 块通常是连续的）
             break
 
+    # ── 提取每个失败用例的短 traceback（--tb=short 输出段） ──
+    # pytest --tb=short 格式：
+    #   FAILED tests/test_foo.py::test_bar - AssertionError: ...
+    #   ====== short test summary =======
+    #   或在 stdout 中间有 "____ test_bar ____" 分隔段 + traceback
+    error_details: dict[str, str] = {}  # test_id -> 最后几行错误信息
+    _tb_section_re = re.compile(r'^_{2,}\s+(.+?)\s+_{2,}$')  # ______ test_bar ______
+    _file_line_re = re.compile(r'^\s+(.+\.py):(\d+):\s+in\s+')  # 文件:行号: in func
+    _assertion_re = re.compile(r'^[Ee]\s+(.+)$')  # E   AssertionError: ...
+
+    i = 0
+    while i < len(lines):
+        # 匹配 traceback 段的标题行 "____ test_name ____"
+        m = _tb_section_re.match(lines[i])
+        if m:
+            test_name = m.group(1)
+            # 往后扫描几行，找文件:行号 和 E 行
+            tb_lines: list[str] = []
+            j = i + 1
+            while j < len(lines) and j < i + 30:  # 限制扫描范围
+                line = lines[j]
+                # 遇到下一个段标题或短 summary 行停止
+                if _tb_section_re.match(line) and j > i + 1:
+                    break
+                if line.strip().startswith("FAILED ") or line.strip().startswith("===="):
+                    break
+                fm = _file_line_re.match(line)
+                if fm:
+                    tb_lines.append(f"  File {fm.group(1)}:{fm.group(2)}")
+                am = _assertion_re.match(line)
+                if am:
+                    tb_lines.append(f"  {am.group(1)}")
+                j += 1
+            if tb_lines:
+                error_details[test_name] = "\n".join(tb_lines[-4:])  # 最多 4 行
+            i = j
+            continue
+        i += 1
+
     # ── 无法解析：退回 stdout 末尾 ~2000 字 ──
     if not has_counts and not failed_lines:
         tail = stdout[-2000:] if len(stdout) > 2000 else stdout
@@ -1814,12 +2464,30 @@ def _parse_pytest_output(stdout: str, elapsed: float = 0.0) -> str:
         parts.append("失败用例：")
         for fl in failed_lines[:20]:  # 最多列 20 条
             # "FAILED path::test — ErrorType: msg" 原样展示
-            parts.append(f"  - {fl[len('FAILED '):]}")
+            test_info = fl[len("FAILED "):]
+            parts.append(f"  - {test_info}")
+            # 尝试匹配 traceback 详情
+            # test_info 格式："path::test_name — ErrorType: msg"
+            test_id = test_info.split(" — ")[0].strip() if " — " in test_info else test_info.strip()
+            # 按 test_id 或 test_id 的最后部分（::test_name）匹配
+            for key, detail in error_details.items():
+                if key == test_id or test_id.endswith(f"::{key}") or key in test_id:
+                    parts.append(detail)
+                    break
         if len(failed_lines) > 20:
             parts.append(f"  ...（共 {len(failed_lines)} 个失败用例，仅列前 20）")
 
+    # ── [REPAIR_INFO] 结构化块（供自动修复循环解析） ──
     if failed or errors:
-        parts.append("（用 read_file 打开对应文件定位修复）")
+        repair_info: list[str] = []
+        repair_info.append(f"status=failed|tests={failed + errors}|passed={passed}|errors={errors}")
+        for fl in failed_lines[:5]:  # 最多报 5 个
+            test_info = fl[len("FAILED "):]
+            repair_info.append(f"test: {test_info}")
+        parts.append("\n[REPAIR_INFO]")
+        parts.append("\n".join(repair_info))
+        parts.append("[/REPAIR_INFO]")
+        parts.append("\n（用 read_file 打开对应文件定位修复）")
 
     return "\n".join(parts)
 
@@ -1873,10 +2541,16 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
         )
         elapsed = time.time() - t0
     except FileNotFoundError:
+        try: _v_mark_tests(_session.get_verification(), None, "pytest 未安装或找不到")
+        except Exception: pass
         return "pytest 未安装或找不到，请先运行 `pip install pytest` 安装。"
     except subprocess.TimeoutExpired:
+        try: _v_mark_tests(_session.get_verification(), None, f"测试超时（>{timeout}s）")
+        except Exception: pass
         return f"测试超时（>{timeout}s），可能有用例卡住，请检查或增大 timeout。"
     except Exception as e:
+        try: _v_mark_tests(_session.get_verification(), None, f"运行 pytest 失败: {e}")
+        except Exception: pass
         return f"运行 pytest 失败: {e}"
 
     # ── 解析输出 ──
@@ -1885,6 +2559,8 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
 
     # pytest 没装时 stderr 里会有 "No module named pytest"
     if stderr and "No module named pytest" in stderr:
+        try: _v_mark_tests(_session.get_verification(), None, "pytest 未安装")
+        except Exception: pass
         return "pytest 未安装，请先运行 `pip install pytest` 安装。"
 
     summary = _parse_pytest_output(stdout, elapsed)
@@ -1900,6 +2576,10 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     # ── 输出截断防爆 ──
     if len(summary) > 6000:
         summary = summary[:6000] + "\n... [输出已截断，超过 6000 字]"
+
+    # ── 标记验证状态：测试已执行 ──
+    try: _v_mark_tests(_session.get_verification(), result.returncode == 0)
+    except Exception: pass
 
     return summary
 
@@ -2007,6 +2687,14 @@ def _auto_check_suffix(full_path: str) -> str:
         issues, checker = _run_code_check(full_path)
     except Exception:
         return ""
+    if checker:
+        _mark_current_check(full_path, not bool(issues), checker)
+    elif os.path.splitext(full_path)[1].lower() in {
+        ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs",
+        ".c", ".h", ".cpp", ".hpp", ".cs", ".rb", ".php", ".swift",
+        ".kt", ".kts", ".vue", ".svelte",
+    }:
+        _mark_current_check(full_path, None, "")
     if not checker or not issues:
         return ""
     return f"\n\n⚠️ 自动校验（{checker}）发现问题，请修复后再继续：\n{issues}"
@@ -2269,9 +2957,16 @@ def apply_patch(patch: str) -> str:
             deleted_files += 1
 
         if action in ("add", "update"):
+            _mark_current_dirty(resolved)
             issues, checker = _run_code_check(resolved)
+            if checker:
+                _mark_current_check(resolved, not bool(issues), checker)
+            else:
+                _mark_current_check(resolved, None, "")
             if checker and issues:
                 check_warnings.append(f"{path}:\n{issues}")
+        elif action == "delete":
+            _mark_current_dirty(resolved)
 
     # ── 组装结果 ──
     parts = [f"Patch 已应用: {added_files} 个新增, {modified_files} 个修改, {deleted_files} 个删除"]
@@ -2299,10 +2994,22 @@ def check_code(path: str) -> str:
     issues, checker = _run_code_check(resolved)
     if checker is None:
         ext = os.path.splitext(resolved)[1] or "（无扩展名）"
+        _mark_current_check(resolved, None, "")
         return f"没有可用的检查器处理 {ext} 文件。可在 config.json 配 check_command（用 {{file}} 占位）。"
-    if not issues:
+    passed = not issues
+    _mark_current_check(resolved, passed, checker)
+    if passed:
         return f"✓ {checker} 检查通过，无问题。"
-    return f"{checker} 检查发现问题：\n{issues}"
+    # 提取问题的文件:行号供自动修复循环使用
+    issue_lines = issues.strip().splitlines()
+    repair_entries: list[str] = [f"status=failed|checker={checker}"]
+    for il in issue_lines[:10]:
+        repair_entries.append(f"issue: {il.strip()}")
+    parts = [f"{checker} 检查发现问题：\n{issues}"]
+    parts.append("\n[REPAIR_INFO]")
+    parts.append("\n".join(repair_entries))
+    parts.append("[/REPAIR_INFO]")
+    return "\n".join(parts)
 
 
 # ══════════════════════════════════════
@@ -2356,6 +3063,12 @@ def git_diff(path: str = "", staged: bool = False, max_chars: int = 8000) -> str
                 + f"\n\n... [输出已截断（共 {len(output)} 字符），"
                 f"可用 path 参数缩小到具体文件/目录查看]"
             )
+        # 标记 diff 已审查（验证状态）
+        try:
+            from . import session as _session
+            _v_mark_diff_reviewed(_session.get_verification())
+        except Exception:
+            pass
         return output
 
     except FileNotFoundError:
@@ -2421,6 +3134,371 @@ def git_log(path: str = "", limit: int = 15) -> str:
         return "git log 执行超时（10s）。"
     except Exception as e:
         return f"git log 执行异常: {e}"
+
+
+def _is_inside_git_repo(cwd: str) -> bool:
+    """检测 cwd 是否在 git 仓库内。"""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _git_available() -> bool:
+    """git 是否可用。"""
+    import shutil as _shutil
+    return _shutil.which("git") is not None
+
+
+def build_git_write_confirmation(name: str, args: dict | None = None) -> str:
+    """构造 Git 写操作确认文案；只读，不改变索引或工作区。"""
+    args = args or {}
+    if name == "git_commit":
+        message = str(args.get("message", "") or "").strip()
+        cwd = _project_cwd()
+        staged = ""
+        if _git_available() and _is_inside_git_repo(cwd):
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--cached", "--name-status"],
+                    cwd=cwd, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=10,
+                )
+                staged = (result.stdout or "").strip()
+            except Exception:
+                staged = ""
+        staged_text = staged or "（暂存区为空，工具会拒绝提交）"
+        return (
+            "将执行 Git 写操作：创建本地提交\n\n"
+            f"提交信息：{message or '（空）'}\n\n"
+            "将提交当前暂存区的全部内容：\n"
+            f"{staged_text}\n\n"
+            "不会自动暂存其它文件，也不会 push。是否允许？"
+        )
+
+    paths = args.get("paths") or []
+    if isinstance(paths, list):
+        path_text = "\n".join(f"- {p}" for p in paths) or "（未提供路径）"
+    else:
+        path_text = str(paths)
+    action = "暂存指定路径" if name == "git_stage" else "取消暂存指定路径"
+    effect = (
+        "会修改 Git 暂存区，不会创建提交，也不会 push。"
+        if name == "git_stage"
+        else "只修改 Git 暂存区，工作区文件内容保持不变。"
+    )
+    return (
+        f"将执行 Git 写操作：{action}\n\n"
+        f"目标路径：\n{path_text}\n\n"
+        f"{effect}\n是否允许？"
+    )
+
+
+def _validate_git_paths(paths, root: str) -> tuple[list[str] | None, str]:
+    """校验路径列表：非空、无通配符、无越界、存在性。
+
+    返回 (rel_paths, error_msg)。成功时 error_msg 为空串。
+    """
+    if not paths:
+        return None, "失败：路径列表不能为空，请指定具体文件或目录。"
+    if not isinstance(paths, list):
+        return None, "失败：paths 参数必须是字符串列表。"
+
+    root_real = os.path.realpath(root)
+    rel_paths = []
+    for p in paths:
+        if not isinstance(p, str) or not p.strip():
+            return None, f"失败：路径无效（非空字符串）：{p!r}"
+        p_clean = p.strip()
+        # 拒绝通配符 / shell 危险字符
+        if p_clean in (".", "*", "./"):
+            return None, f"失败：不允许暂存 '{p_clean}'（只允许具体路径）。"
+        if any(c in p_clean for c in ("&", "|", ";", "$", "`", "\n", "\r")):
+            return None, f"失败：路径包含非法字符：{p_clean!r}"
+        # 解析并检查越界
+        resolved = _resolve_path(p_clean)
+        abs_real = os.path.realpath(resolved)
+        try:
+            if os.path.commonpath([abs_real, root_real]) != root_real:
+                return None, f"失败：路径超出项目范围：{p_clean}"
+        except ValueError:
+            return None, f"失败：路径超出项目范围：{p_clean}"
+        # 转成相对路径传给 git
+        rel = os.path.relpath(abs_real, root_real).replace("\\", "/")
+        rel_paths.append(rel)
+    return rel_paths, ""
+
+
+@tool
+def git_status(max_chars: int = 12000) -> str:
+    """查看当前仓库状态，包含分支、ahead/behind、暂存/未暂存/未跟踪文件。只读。"""
+    try:
+        if not _git_available():
+            return "git 未安装或不在 PATH 中。"
+        cwd = _project_cwd()
+        if not _is_inside_git_repo(cwd):
+            return "当前项目不是 git 仓库。"
+
+        result = subprocess.run(
+            ["git", "status", "--short", "--branch"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            return f"git status 执行出错: {stderr or '未知错误'}"
+
+        output = result.stdout or ""
+        if not output.strip():
+            output = "(仓库干净，无任何改动)\n"
+
+        # 截断提示
+        truncated = ""
+        if len(output) > max_chars:
+            truncated = f"\n\n... [输出已截断（共 {len(output)} 字符），可用 path 参数缩小范围]"
+            output = output[:max_chars]
+
+        # 解析分支行
+        lines = output.strip().splitlines()
+        branch_line = lines[0] if lines else ""
+        # 统计文件状态
+        staged = sum(1 for l in lines[1:] if l and l[0] in "MADRC")
+        unstaged = sum(1 for l in lines[1:] if len(l) > 1 and l[1] in "MD")
+        untracked = sum(1 for l in lines[1:] if l.startswith("??"))
+
+        summary_parts = []
+        if staged:
+            summary_parts.append(f"已暂存: {staged}")
+        if unstaged:
+            summary_parts.append(f"未暂存: {unstaged}")
+        if untracked:
+            summary_parts.append(f"未跟踪: {untracked}")
+
+        result_text = output.rstrip() + truncated
+        result_text += "\n\n--- 摘要 ---"
+        if branch_line:
+            result_text += f"\n{branch_line}"
+        if summary_parts:
+            result_text += "\n" + " | ".join(summary_parts)
+        else:
+            result_text += "\n工作区干净。"
+        result_text += "\n\n💡 提交前建议先运行 git_diff(staged=True) 查看暂存区内容。"
+        return result_text
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中。"
+    except subprocess.TimeoutExpired:
+        return "git status 执行超时（10s）。"
+    except Exception as e:
+        return f"git status 执行异常: {e}"
+
+
+@tool
+def git_stage(paths: list[str]) -> str:
+    """暂存指定路径。只接受明确路径列表，不接受空列表、通配符或 '.'。"""
+    try:
+        if not _git_available():
+            return "git 未安装或不在 PATH 中。"
+        cwd = _project_cwd()
+        if not _is_inside_git_repo(cwd):
+            return "当前项目不是 git 仓库。"
+
+        rel_paths, err = _validate_git_paths(paths, cwd)
+        if err:
+            return err
+
+        cmd = ["git", "add", "--"] + rel_paths
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            return f"git add 执行出错: {stderr or '未知错误'}"
+
+        # 获取暂存区摘要
+        cached = subprocess.run(
+            ["git", "diff", "--cached", "--name-status"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        cached_output = (cached.stdout or "").strip()
+
+        output = f"✅ 已暂存以下路径:\n" + "\n".join(f"  · {p}" for p in rel_paths)
+        if cached_output:
+            output += f"\n\n--- 当前暂存区 ---\n{cached_output}"
+        output += "\n\n💡 建议继续用 git_diff(staged=True) 审查暂存内容，确认无误后再提交。"
+        return output
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中。"
+    except subprocess.TimeoutExpired:
+        return "git add 执行超时（30s）。"
+    except Exception as e:
+        return f"git stage 执行异常: {e}"
+
+
+@tool
+def git_unstage(paths: list[str]) -> str:
+    """取消暂存指定路径，不修改工作区内容。"""
+    try:
+        if not _git_available():
+            return "git 未安装或不在 PATH 中。"
+        cwd = _project_cwd()
+        if not _is_inside_git_repo(cwd):
+            return "当前项目不是 git 仓库。"
+
+        rel_paths, err = _validate_git_paths(paths, cwd)
+        if err:
+            return err
+
+        # 优先用 git restore --staged（Git 2.23+），不支持则降级到 git reset --
+        cmd = ["git", "restore", "--staged", "--"] + rel_paths
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        if result.returncode != 0:
+            # 降级
+            cmd = ["git", "reset", "--"] + rel_paths
+            result = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=30,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                return f"git unstage 执行出错: {stderr or '未知错误'}"
+
+        # 获取暂存区摘要
+        cached = subprocess.run(
+            ["git", "diff", "--cached", "--name-status"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        cached_output = (cached.stdout or "").strip()
+
+        output = f"✅ 已取消暂存:\n" + "\n".join(f"  · {p}" for p in rel_paths)
+        if cached_output:
+            output += f"\n\n--- 当前暂存区 ---\n{cached_output}"
+        else:
+            output += "\n\n--- 当前暂存区为空 ---"
+        output += "\n\nℹ️ 工作区文件内容未被修改。"
+        return output
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中。"
+    except subprocess.TimeoutExpired:
+        return "git unstage 执行超时（30s）。"
+    except Exception as e:
+        return f"git unstage 执行异常: {e}"
+
+
+@tool
+def git_commit(message: str) -> str:
+    """基于当前暂存区创建本地提交。不会自动暂存文件，不会 push。"""
+    try:
+        if not _git_available():
+            return "git 未安装或不在 PATH 中。"
+        cwd = _project_cwd()
+        if not _is_inside_git_repo(cwd):
+            return "当前项目不是 git 仓库。"
+
+        # 校验 message
+        if not message or len(message.strip()) < 3:
+            return "失败：提交信息不能为空，且去掉空白后长度需 >= 3 个字符。"
+
+        # 检查暂存区是否为空
+        diff_cached = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        if diff_cached.returncode == 0:
+            # returncode=0 表示暂存区和 HEAD 一样 → 没有暂存内容
+            return "失败：暂存区为空，没有可提交的内容。请先用 git_stage 暂存文件。"
+
+        # 检查工作区未暂存改动 / 未跟踪文件（仅提示，不阻止）
+        warnings = []
+        status_result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        if status_result.returncode == 0:
+            status_lines = (status_result.stdout or "").strip().splitlines()
+            unstaged_files = []
+            untracked_files = []
+            for line in status_lines:
+                if not line or len(line) < 2:
+                    continue
+                # 第二列是工作区状态（暂存区由 commit 处理）
+                if line[0] == "?" and line[1] == "?":
+                    untracked_files.append(line[3:].strip() if len(line) > 3 else "")
+                elif line[1] in "MD":
+                    unstaged_files.append(line[3:].strip() if len(line) > 3 else "")
+            if unstaged_files:
+                warnings.append(f"⚠️ 以下文件有未暂存改动，不会进入本次提交:\n" +
+                                "\n".join(f"  · {f}" for f in unstaged_files[:20]))
+            if untracked_files:
+                warnings.append(f"⚠️ 以下未跟踪文件不会进入本次提交:\n" +
+                                "\n".join(f"  · {f}" for f in untracked_files[:20]))
+
+        # 获取暂存文件列表（给提交后的摘要用）
+        staged_names = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        staged_files = [f for f in (staged_names.stdout or "").strip().splitlines() if f.strip()]
+
+        # 执行提交
+        cmd = ["git", "commit", "-m", message.strip()]
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            # 常见失败：user.name/email 未配置 / pre-commit hook
+            msg = stderr or stdout or "未知错误"
+            if "user.name" in msg or "user.email" in msg or "Author identity" in msg:
+                return f"提交失败：Git 用户信息未配置。请先运行:\n  git config user.name \"你的名字\"\n  git config user.email \"你的邮箱\"\n\n详细: {msg}"
+            if "pre-commit" in msg.lower() or "hook" in msg.lower():
+                return f"提交失败：pre-commit hook 拦截。请修复后重试。\n\n详细: {msg}"
+            return f"提交失败: {msg}"
+
+        # 解析 commit hash
+        hash_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5,
+        )
+        commit_hash = (hash_result.stdout or "").strip() or "unknown"
+
+        output = f"✅ 提交成功: {commit_hash}\n"
+        output += f"   信息: {message.strip()}\n"
+        if staged_files:
+            output += f"   包含 {len(staged_files)} 个文件:\n"
+            output += "\n".join(f"     · {f}" for f in staged_files[:30])
+            if len(staged_files) > 30:
+                output += f"\n     ... 等共 {len(staged_files)} 个文件"
+        if warnings:
+            output += "\n\n" + "\n\n".join(warnings)
+        output += "\n\nℹ️ 仅创建本地提交，未执行 push。"
+        return output
+
+    except FileNotFoundError:
+        return "git 未安装或不在 PATH 中。"
+    except subprocess.TimeoutExpired:
+        return "git commit 执行超时（30s）。"
+    except Exception as e:
+        return f"git commit 执行异常: {e}"
 
 
 # ══════════════════════════════════════
@@ -2692,13 +3770,16 @@ ALL_TOOLS = [
     list_directory, run_command,
     search_in_file, search_files,
     find_definition, find_references,
+    find_tests, related_files,
     generate_image,
     remember, forget,
     update_plan,
+    get_project_instructions,
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
     code_map,
     git_diff, git_log,
+    git_status, git_stage, git_unstage, git_commit,
     run_tests, check_code,
     apply_patch,
     fetch_url, web_search,
@@ -2745,6 +3826,8 @@ TOOL_DISPLAY_NAMES = {
     "search_files": "🌐 跨文件搜索",
     "find_definition": "🔎 跳转定义",
     "find_references": "🔗 查找引用",
+    "find_tests": "🧪 查找测试",
+    "related_files": "📁 关联文件",
     "generate_image": "🎨 生成图片",
     "generate_video": "🎬 生成视频",
     "remember": "🧠 记住事实",
@@ -2756,11 +3839,16 @@ TOOL_DISPLAY_NAMES = {
     "code_map": "🗺 代码地图",
     "git_diff": "🔀 查看改动",
     "git_log": "📜 提交历史",
+    "git_status": "📌 Git 状态",
+    "git_stage": "➕ 暂存文件",
+    "git_unstage": "➖ 取消暂存",
+    "git_commit": "✅ 创建提交",
     "run_tests": "🧪 跑测试",
     "check_code": "🔎 代码检查",
     "apply_patch": "📦 批量补丁",
     "fetch_url": "🌐 抓取网页",
     "web_search": "🔍 网络搜索",
+    "get_project_instructions": "📜 项目规则",
 }
 
 

@@ -53,6 +53,37 @@ class TestHistorySizing:
         assert trimmed[-2:] == history[-2:]
 
 
+class TestSystemMessageNormalization:
+    def test_keeps_consecutive_leading_system_messages(self):
+        history = [
+            SystemMessage(content="system 1"),
+            SystemMessage(content="system 2"),
+            HumanMessage(content="hello"),
+        ]
+
+        normalized = streaming._normalize_nonleading_system_messages(history)
+
+        assert normalized[:2] == history[:2]
+        assert normalized[2] is history[2]
+
+    def test_converts_nonleading_system_without_mutating_history(self):
+        late_system = SystemMessage(content="continue verification")
+        history = [
+            SystemMessage(content="system"),
+            HumanMessage(content="hello"),
+            AIMessage(content="done"),
+            late_system,
+        ]
+
+        normalized = streaming._normalize_nonleading_system_messages(history)
+
+        assert isinstance(normalized[-1], HumanMessage)
+        assert "内部系统指令" in normalized[-1].content
+        assert "continue verification" in normalized[-1].content
+        assert history[-1] is late_system
+        assert isinstance(history[-1], SystemMessage)
+
+
 class TestSystemPromptCache:
     def test_anthropic_wraps_system_prompt_with_cache_control(self):
         original = [SystemMessage(content="old"), HumanMessage(content="hello")]

@@ -2,7 +2,17 @@
 
 code_map 用 state.current_project 作项目根（project_dir fixture 已设），用 .func 直调。
 """
+import pytest
+
 from src.tools import code_map
+from src import codeintel
+
+# TS/TSX 用例需要 tree-sitter 的 JS/TS 语法；没装这些可选包时正则回退抓不到
+# 箭头函数 / interface / type，应跳过而非误报失败。
+requires_ts = pytest.mark.skipif(
+    codeintel.get_language_for_path("x.ts") is None,
+    reason="tree-sitter typescript 未安装（可选依赖）",
+)
 
 
 class TestCodeMap:
@@ -18,14 +28,16 @@ class TestCodeMap:
         )
         out = code_map.func("")
         assert "foo.py" in out
-        assert "class Bar" in out
-        assert "def baz" in out          # 类内方法也提取
-        assert "def top" in out
+        assert "Bar" in out
+        assert "baz" in out              # 类内方法也提取
+        assert "top" in out
 
     def test_has_line_numbers(self, project_dir):
         (project_dir / "f.py").write_text("def alpha():\n    pass\n", encoding="utf-8")
         out = code_map.func("")
-        assert "L1" in out and "alpha" in out
+        assert "alpha" in out
+        # tree-sitter 输出格式为 "L   1: ..."（宽域对齐），正则回退格式为 "L1: ..."
+        assert "L" in out and "1" in out
 
     def test_skips_noise_dirs(self, project_dir):
         (project_dir / ".git").mkdir()
@@ -43,9 +55,38 @@ class TestCodeMap:
             encoding="utf-8",
         )
         out = code_map.func("")
-        assert "class Foo" in out
-        assert "function bar" in out
-        assert "function baz" in out
+        assert "Foo" in out
+        assert "bar" in out
+        assert "baz" in out
+        # tree-sitter 格式 "L   1: class Foo"；正则回退格式 "L1: class Foo"
+        assert "L" in out
+        assert "1" in out  # Foo 在 L1
+        assert "2" in out  # bar 在 L2
+        assert "3" in out  # baz 在 L3
+
+    @requires_ts
+    def test_ts_interfaces_and_types(self, project_dir):
+        """TypeScript interface 和 type 提取。"""
+        (project_dir / "types.ts").write_text(
+            "interface Config { port: number }\n"
+            "type Result = { ok: boolean }\n"
+            "export enum Status { Active, Inactive }\n",
+            encoding="utf-8",
+        )
+        out = code_map.func("")
+        assert "Config" in out
+        assert "Result" in out
+        assert "Status" in out
+
+    @requires_ts
+    def test_ts_arrow_export(self, project_dir):
+        """导出的 const 箭头函数应提取。"""
+        (project_dir / "utils.ts").write_text(
+            "export const helper = () => 42\n",
+            encoding="utf-8",
+        )
+        out = code_map.func("")
+        assert "helper" in out
 
     def test_nonexistent_path(self, project_dir):
         assert "不存在" in code_map.func("nope_dir")
