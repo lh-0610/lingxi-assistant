@@ -78,6 +78,15 @@ class HeaderMixin:
         self._style_undo_btn()
         layout.addWidget(self.undo_btn)
 
+        # 隔离模式按钮（Git worktree 保护主目录）
+        self.isolation_btn = QPushButton("🔒 隔离")
+        self.isolation_btn.setCursor(Qt.PointingHandCursor)
+        self.isolation_btn.setToolTip("隔离模式：AI 在独立 worktree 目录操作，不影响主项目\n需项目已启用版本控制")
+        self.isolation_btn.clicked.connect(self._toggle_isolation)
+        self._style_isolation_btn(active=False)
+        self.isolation_btn.setVisible(False)  # 无项目时隐藏
+        layout.addWidget(self.isolation_btn)
+
         # Plan / Act 模式切换按钮（Act 默认，Plan 时 AI 只调研不动手）
         self.mode_btn = QPushButton("Act")
         self.mode_btn.setCursor(Qt.PointingHandCursor)
@@ -148,6 +157,14 @@ class HeaderMixin:
                 self.undo_btn.setText("↶")
             else:
                 self.undo_btn.setText("↶")
+        # isolation_btn
+        if hasattr(self, "isolation_btn") and self.isolation_btn.isVisible():
+            from .. import session as _sess
+            active = _sess.get_active()
+            if active.worktree:
+                self.isolation_btn.setText("" if level == 2 else "🔓 恢复")
+            else:
+                self.isolation_btn.setText("" if level == 2 else "🔒 隔离")
         # role_btn 保留角色名（信息密度高，比按钮文字本身重要）
         if hasattr(self, "role_btn"):
             # 紧凑模式下截短到 4 个字
@@ -206,10 +223,11 @@ class HeaderMixin:
             self._show_toast("⚡ 已切到 Act 模式：AI 可直接执行工具")
 
     def _sync_header_from_session(self):
-        """切会话后把顶栏（模型下拉 / Plan-Act / 思考）同步到当前会话的状态。
+        """切会话后把顶栏（模型下拉 / Plan-Act / 思考 / 隔离）同步到当前会话的状态。
         model/mode/思考 现在是会话级——切到哪个会话，顶栏就显示那个会话的选择。
         setCurrentIndex 会触发 _on_model_changed（含 force_stop），切会话时必须 blockSignals 屏蔽。"""
         from .. import session as _session
+        from .. import state as _state
         sess = _session.get_active()
         if hasattr(self, "model_combo"):
             self.model_combo.blockSignals(True)
@@ -222,6 +240,11 @@ class HeaderMixin:
         if hasattr(self, "mode_btn"):
             self.mode_btn.setChecked(sess.agent_mode == "plan")
             self._style_mode_btn()
+        # 隔离按钮：有项目时可见，根据会话 worktree 状态高亮
+        if hasattr(self, "isolation_btn"):
+            has_project = bool(_state.current_project)
+            self.isolation_btn.setVisible(has_project)
+            self._style_isolation_btn(active=bool(sess.worktree))
         if hasattr(self, "_refresh_header_compactness"):
             self._refresh_header_compactness()
 
@@ -387,6 +410,77 @@ class HeaderMixin:
                 f"}}"
             )
             self.undo_btn.setToolTip("还没有可撤销的 AI 改动")
+
+    def _style_isolation_btn(self, active: bool):
+        """隔离按钮配色：active=True 时高亮表示正在隔离。"""
+        if active:
+            self.isolation_btn.setText("🔓 恢复")
+            self.isolation_btn.setToolTip(
+                "隔离模式已开启：AI 在独立 worktree 目录操作\n"
+                "点击「恢复」：把隔离区改动应用回主项目 + 清理 worktree"
+            )
+            self.isolation_btn.setStyleSheet(
+                f"QPushButton {{ background: {self._t('ai_label')}22;"
+                f"  border: 1px solid {self._t('ai_label')};"
+                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  color: {self._t('ai_label')}; font-weight: 600;"
+                f"}}"
+                f"QPushButton:hover {{ background: {self._t('ai_label')}33;"
+                f"  border-color: {self._t('ai_label')}; }}"
+            )
+        else:
+            self.isolation_btn.setText("🔒 隔离")
+            self.isolation_btn.setToolTip(
+                "隔离模式：AI 在独立 worktree 目录操作，不影响主项目\n需项目已启用版本控制"
+            )
+            self.isolation_btn.setStyleSheet(
+                f"QPushButton {{ background: {self._t('think_off_bg')};"
+                f"  border: 1px solid {self._t('think_off_border')};"
+                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  color: {self._t('text')};"
+                f"}}"
+                f"QPushButton:hover {{ background: {self._t('history_hover_bg')};"
+                f"  border-color: {self._t('ai_label')}; }}"
+            )
+
+    def _toggle_isolation(self):
+        """切换隔离模式。"""
+        from .. import worktree as _wt
+        from .. import session as _sess
+        from .. import state as _state
+        active = _sess.get_active()
+        project_dir = _state.current_project
+        if not project_dir:
+            return
+        if active.is_generating:
+            self._show_toast("⚠ 生成中不能切换隔离模式")
+            return
+
+        if active.worktree:
+            # 恢复：先把 worktree 改动应用回主项目，再清理 worktree
+            ok, msg = _wt.finish(active, apply_changes=True)
+            if ok:
+                self._style_isolation_btn(active=False)
+                self._refresh_project_indicator()
+                self._show_toast("✓ 隔离区改动已恢复到主项目")
+            else:
+                self._show_toast(f"⚠ {msg}", duration=7000)
+        else:
+            # 启动隔离
+            if _wt.has_uncommitted_changes(project_dir):
+                self._show_toast(
+                    "⚠ 主工作区有未提交改动，隔离区只会基于 HEAD，"
+                    "不会自动带入这些改动",
+                    duration=7000,
+                )
+            session_id = active.current_session_id or active.key or str(id(active))
+            wt_path = _wt.create(active, project_dir, session_id=session_id)
+            if wt_path:
+                self._style_isolation_btn(active=True)
+                self._refresh_project_indicator()
+                self._show_toast(f"🔒 隔离模式已开启，worktree: {wt_path}")
+            else:
+                self._show_toast("⚠ 无法创建隔离环境（非 git 仓库？）", duration=5000)
 
     def _style_mode_btn(self):
         """Plan / Act 切换按钮配色：Act = 想到就动手，Plan = 先想后动。

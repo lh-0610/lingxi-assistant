@@ -82,6 +82,12 @@ if __name__ == "__main__":
             _tg_poll_shutdown()
         except Exception:
             pass
+        # 回收所有 worktree 隔离环境
+        try:
+            from src.worktree import cleanup_all
+            cleanup_all()
+        except Exception:
+            pass
     app.aboutToQuit.connect(_cleanup_on_exit)
 
     sys.exit(app.exec())

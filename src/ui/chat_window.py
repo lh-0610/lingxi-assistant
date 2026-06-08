@@ -1112,17 +1112,29 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _refresh_project_indicator(self):
         """根据当前项目刷新指示条的文本、图标、tooltip。
-        在以下时机调用：__init__、_switch_project、_remove_current_project、_apply_theme。
+        在以下时机调用：__init__、_switch_project、_remove_current_project、_apply_theme、
+        切换隔离模式。
         """
         if not hasattr(self, "project_btn"):
             return
         from .. import projects as _projects
+        from .. import session as _sess
         current = _projects.get_current()
+        # 会话级隔离状态
+        active = _sess.get_active()
+        is_isolated = bool(getattr(active, "worktree", None))
         if current:
             display = self._abbreviate_path(current, max_chars=60)
-            self.project_btn.setText(f"  {display}  ▾")
+            if is_isolated:
+                self.project_btn.setText(f"  🔒 {display}  ▾")
+                self.project_btn.setToolTip(
+                    f"🔒 隔离模式 · worktree: {active.worktree}\n"
+                    f"项目：{current}\n（点击切换 / 添加 / 移除项目）"
+                )
+            else:
+                self.project_btn.setText(f"  {display}  ▾")
+                self.project_btn.setToolTip(f"当前项目：{current}\n（点击切换 / 添加 / 移除项目）")
             self.project_btn.setIcon(self._svg_icon("folder_lucide.svg", self._t("text_dim")))
-            self.project_btn.setToolTip(f"当前项目：{current}\n（点击切换 / 添加 / 移除项目）")
         else:
             self.project_btn.setText("  无项目 · 全局工作区  ▾")
             self.project_btn.setIcon(self._svg_icon("circle_lucide.svg", self._t("text_subtle")))

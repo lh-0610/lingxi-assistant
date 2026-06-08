@@ -391,8 +391,15 @@ def _project_cwd() -> str:
     不会因为用户在前台切了项目就把 A 会话的 read_file/run_command 落到 B。会话还没锚定
     （_UNSET，如刚新建没存盘）→ 回退全局 state.current_project；都没有 / 路径不存在 →
     进程 cwd。None 是合法的"无项目（全局）"。
+
+    隔离模式：当前会话有 worktree 路径时，优先返回 worktree 目录。
     """
     from . import session as _session
+    current = _session.current_session()
+    if current:
+        wt = current.worktree
+        if wt and os.path.isdir(wt):
+            return wt
     proj = _session.current_project()   # 会话级：_UNSET 回退全局，统一来源
     if proj and os.path.isdir(proj):
         return proj
@@ -3853,3 +3860,5 @@ TOOL_DISPLAY_NAMES = {
 
 
 TOOL_MAP = get_tool_map()
+
+

@@ -363,6 +363,7 @@ def load_session(session_id, *, session=None):
         state.compaction["covered_upto"] = 0
         # 锚定会话所属项目为磁盘记录值（而非当前全局），切项目后再 save 不会改它
         _session_mod.current_session().project = data.get("project")
+        _session_mod.current_session().worktree = None
     else:
         # 直接写目标 Session（可能是后台会话，不能经过 state 代理）
         session.session_token_usage = {"input": 0, "output": 0, "total": 0}
@@ -374,6 +375,7 @@ def load_session(session_id, *, session=None):
         session.current_plan = []
         session.compaction = {"summary": "", "covered_upto": 0}
         session.project = data.get("project")  # 锚定为磁盘记录的项目归属
+        session.worktree = None
 
     logger.info(f"会话已加载: {session_id}")
     return True

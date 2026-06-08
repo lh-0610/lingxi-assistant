@@ -69,3 +69,6 @@ output/
 outputs/
 tmp/
 *.tmp
+
+# Git worktree isolation workspaces
+.lingxi-worktrees/

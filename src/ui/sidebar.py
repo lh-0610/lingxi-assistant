@@ -307,6 +307,15 @@ class SidebarMixin:
     def _delete_session(self, session_id):
         if agent.current_session_id == session_id:
             self._force_stop_generation()
+        # 删除会话前回收其 worktree
+        try:
+            from .. import session as _session
+            from ..worktree import finish
+            _sess = _session.get(session_id)
+            if _sess and getattr(_sess, "worktree", None):
+                finish(_sess, apply_changes=False)
+        except Exception:
+            pass
         agent.delete_session(session_id)
         if agent.current_session_id == session_id:
             from ..roles import get_system_prompt
@@ -368,8 +377,8 @@ class SidebarMixin:
                     self._render_markdown(_ev[1])
         self._scroll_to_bottom()
         self._refresh_session_list()
-        if project_changed:
-            self._refresh_project_indicator()
+        # 始终刷新指示条（项目可能没变，但会话的隔离状态可能不同）
+        self._refresh_project_indicator()
         # 同步前台按钮态：目标会话正在后台跑 → 停止态；否则按输入框恢复（之后 worker 的
         # 后续输出会因为该会话已是 active 而实时渲染、接续上面重放的内容）
         if target.is_generating:
