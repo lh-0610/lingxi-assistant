@@ -1586,7 +1586,13 @@ def update_plan(plan: str) -> str:
     items = state.parse_plan(clean_plan)
     if plan and not items:
         return "计划未更新：没有检测到合法 checklist 行，请使用 [ ] / [~] / [x] 标记。"
-    guard = _validate_plan_update(getattr(state, "current_plan", None) or [], items, clean_plan)
+    old_plan = getattr(state, "current_plan", None) or []
+    # 合并而非全量覆盖：已有步骤按模糊匹配认领新行，保留旧文字、只取新状态；新步骤追加。
+    # 这样模型每轮重传整份计划、"改写措辞/重排"时，面板文字不漂移（churn），只有状态推进。
+    # 真正被删掉的未完成步（认领不到）仍交给 _validate_plan_update 按规则拦（验证步永远保护）。
+    if old_plan and items:
+        items = _merge_plan_update(old_plan, items)
+    guard = _validate_plan_update(old_plan, items, clean_plan)
     if guard:
         return guard
     state.current_plan = items
@@ -1618,6 +1624,42 @@ def _plan_text_key(text: str) -> str:
     s = re.sub(r"^\d+[.)、]\s*", "", s)
     s = re.sub(r"\s+", "", s)
     return s.lower()
+
+
+def _merge_plan_update(old_items: list, new_items: list) -> list:
+    """把新计划合并进旧计划，返回合并后的列表。
+
+    旧步骤按模糊匹配认领一条新行 → **保留旧文字、只取新状态**；认领不到的旧步骤不进结果
+    （视为删除，由 _validate_plan_update 决定拦/放）；没被任何旧步骤认领的新行追加为新步骤。
+
+    目的：模型每轮重传整份计划时，"措辞改写 / 微调 / 重排"不再让面板文字漂移——只要还能
+    模糊对上（ratio≥0.6），就冻结原文字、只更新状态。真正的结构调整请带"调整说明"。"""
+    import difflib
+    THRESHOLD = 0.6
+    used = set()
+    merged = []
+    for old in old_items:
+        old_key = _plan_text_key(old.get("text", ""))
+        best_i, best_r = -1, 0.0
+        for i, nw in enumerate(new_items):
+            if i in used:
+                continue
+            nk = _plan_text_key(nw.get("text", ""))
+            if nk == old_key:               # 精确同 key 直接认领
+                best_i, best_r = i, 1.0
+                break
+            r = difflib.SequenceMatcher(None, old_key, nk).ratio()
+            if r > best_r:
+                best_i, best_r = i, r
+        if best_i >= 0 and best_r >= THRESHOLD:
+            used.add(best_i)
+            # 冻结旧文字，只取新状态
+            merged.append({"text": old["text"], "status": new_items[best_i].get("status", "pending")})
+        # else：旧步骤没被认领 → 不进 merged（视为删除，_validate_plan_update 按规则处理）
+    for i, nw in enumerate(new_items):       # 没被认领的新行 = 新增步骤，追加
+        if i not in used:
+            merged.append({"text": nw["text"], "status": nw.get("status", "pending")})
+    return merged
 
 
 def _validate_plan_update(old_items: list, new_items: list, raw_plan: str) -> str:

@@ -99,6 +99,27 @@ def test_update_plan_allows_structural_change_with_reason_for_non_validation_ste
     assert [it["text"] for it in state.current_plan] == ["修改代码", "跑测试"]
 
 
+def test_reword_freezes_existing_text():
+    """模型改写已有步骤措辞时，冻结原文字、只更新状态 —— 不 churn、不拒绝。"""
+    update_plan.func("[~] 实现登录功能\n[ ] 写测试")
+    out = update_plan.func("[x] 实现登录\n[~] 写测试")   # 第一步措辞被改短
+    assert "计划已更新" in out
+    assert state.current_plan == [
+        {"text": "实现登录功能", "status": "done"},      # 文字冻结为原始，状态更新
+        {"text": "写测试", "status": "in_progress"},
+    ]
+
+
+def test_append_new_step_keeps_existing():
+    """7→8：新增一步时已有步骤原样保留（文字冻结）、新步骤追加。"""
+    update_plan.func("[x] A\n[~] B")
+    out = update_plan.func("[x] A\n[x] B\n[ ] C")
+    assert "计划已更新" in out
+    assert [it["text"] for it in state.current_plan] == ["A", "B", "C"]
+    assert state.current_plan[1]["status"] == "done"        # B 状态推进
+    assert state.current_plan[2] == {"text": "C", "status": "pending"}
+
+
 def test_update_plan_rejects_silent_removal_of_validation_steps_even_with_reason():
     update_plan.func("[x] 修改代码\n[ ] 运行全量测试\n[ ] git diff 检查改动")
 

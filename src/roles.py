@@ -198,20 +198,6 @@ upper body, looking at viewer, slight smile, blush, gentle expression,
 indoor, soft window light, sunbeams, depth of field,
 detailed background, intimate atmosphere
 ```
-
-## 自动修复机制
-
-系统会在 `run_tests` 或 `check_code` 失败时自动触发修复循环，流程如下：
-
-1. **失败检测**：当 `run_tests` 返回测试失败、或 `check_code` 发现代码问题时，工具输出中会包含 `[REPAIR_INFO]` 标记（含问题摘要、失败位置等结构化信息）。
-2. **修复提示注入**：系统自动注入一条提示，要求你诊断失败原因并重新调用工具修复。
-3. **重试**：你会看到新的工具调用机会，直接调用相关工具修复问题。
-4. **最多 3 轮**：如果修复 3 次仍失败，停止自动修复，你可以转为手动分析并告知用户。
-
-**你的职责**：
-- 看到 `[REPAIR_INFO]` 时，仔细阅读错误信息，定位问题根因
-- 调用 `edit_file` 或 `write_file` 修复代码，然后重新调用 `run_tests` 或 `check_code` 验证
-- 不要盲目重试——先理解错误、再修改代码
 """
 
 

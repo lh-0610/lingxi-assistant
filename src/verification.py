@@ -167,9 +167,11 @@ _REPAIR_TOOLS = {"run_tests", "check_code"}
 def _is_failure_result(content: str, tool_name: str) -> bool:
     """根据工具返回内容判断是否为失败结果（纯函数，不读全局状态）。"""
     if tool_name == "run_tests":
-        # 有失败或错误的测试，或解析失败
+        # 可靠失败标记：pytest 的 FAILED/ERROR(段)、解析器的 ❌/失败。
+        # 不用裸 "error"/"Error" 子串——通过的运行里 warning 文本或名字含 error 的用例
+        # 会被误判成失败，白触发一轮修复。
         return any(marker in content for marker in (
-            "❌", "FAILED", "失败", "Error", "error",
+            "❌", "FAILED", "ERROR", "失败",
         ))
     if tool_name == "check_code":
         # 有检查问题（不是"✅"开头，也不是"未知"降级）
