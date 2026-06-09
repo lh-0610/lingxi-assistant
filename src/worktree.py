@@ -96,16 +96,19 @@ def _branch_for_worktree(project_path: str, wt_path: str) -> str | None:
 
 
 def is_git_repo(path) -> bool:
-    """判断路径是否在 git 仓库内。"""
+    """判断路径是否是 git 工作树顶层目录。"""
     path = str(path)
     if not os.path.isdir(path):
         return False
     try:
         r = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=path, capture_output=True, text=True, timeout=10,
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
         )
-        return r.stdout.strip() == "true"
+        if r.returncode != 0:
+            return False
+        return os.path.realpath(r.stdout.strip()) == os.path.realpath(path)
     except Exception:
         return False
 
@@ -315,6 +318,14 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         if add.returncode != 0:
             return False, f"暂存隔离区改动失败：{(add.stderr or '').strip() or '未知错误'}"
 
+        changed = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "HEAD"],
+            cwd=wt_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        changed_files = [line.strip() for line in (changed.stdout or "").splitlines() if line.strip()]
+        snapshots = _snapshot_project_files(project_path, changed_files)
+
         diff = subprocess.run(
             ["git", "diff", "--cached", "--binary", "HEAD"],
             cwd=wt_path, capture_output=True,
@@ -326,12 +337,26 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         if not diff.stdout:
             return True, "隔离区没有需要恢复的改动。"
 
+        check = subprocess.run(
+            ["git", "apply", "--check", "--3way", "--binary"],
+            cwd=project_path, input=diff.stdout, capture_output=True,
+            timeout=30,
+        )
+        if check.returncode != 0:
+            _restore_project_files(project_path, snapshots)
+            stderr = check.stderr.decode("utf-8", errors="replace") if check.stderr else ""
+            return False, (
+                "恢复隔离区改动失败，已保留 worktree。"
+                f"\n{stderr.strip() or '请检查主项目是否有冲突或未提交改动。'}"
+            )
+
         apply = subprocess.run(
             ["git", "apply", "--3way", "--binary"],
             cwd=project_path, input=diff.stdout, capture_output=True,
             timeout=30,
         )
         if apply.returncode != 0:
+            _restore_project_files(project_path, snapshots)
             stderr = apply.stderr.decode("utf-8", errors="replace") if apply.stderr else ""
             return False, (
                 "恢复隔离区改动失败，已保留 worktree。"
@@ -342,3 +367,42 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         return False, "恢复隔离区改动超时，已保留 worktree。"
     except Exception as e:
         return False, f"恢复隔离区改动异常，已保留 worktree：{e}"
+
+
+def _snapshot_project_files(project_path: str, rel_paths: list[str]) -> dict[str, bytes | None]:
+    snapshots: dict[str, bytes | None] = {}
+    root = os.path.realpath(project_path)
+    for rel in rel_paths:
+        full = os.path.realpath(os.path.join(project_path, rel))
+        try:
+            if os.path.commonpath([root, full]) != root:
+                continue
+        except ValueError:
+            continue
+        if os.path.exists(full) and os.path.isfile(full):
+            with open(full, "rb") as f:
+                snapshots[rel] = f.read()
+        else:
+            snapshots[rel] = None
+    return snapshots
+
+
+def _restore_project_files(project_path: str, snapshots: dict[str, bytes | None]) -> None:
+    root = os.path.realpath(project_path)
+    for rel, data in snapshots.items():
+        full = os.path.realpath(os.path.join(project_path, rel))
+        try:
+            if os.path.commonpath([root, full]) != root:
+                continue
+        except ValueError:
+            continue
+        if data is None:
+            try:
+                if os.path.isfile(full):
+                    os.remove(full)
+            except OSError:
+                pass
+        else:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as f:
+                f.write(data)

@@ -118,6 +118,10 @@ def save_session(*, session=None):
     # 要保存的会话对象：None 模式经代理拿当前线程的会话（主线程=active / worker=它的会话）
     sess = _session_mod.current_session() if session is None else session
 
+    # 子 Agent 是临时会话：不落盘、不进侧栏历史（其改动经 worktree 合并回主项目即可）
+    if getattr(sess, "is_subagent", False):
+        return
+
     if session is None:
         chat_history = state.chat_history
         current_session_id = state.current_session_id

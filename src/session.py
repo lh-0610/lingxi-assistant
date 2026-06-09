@@ -60,7 +60,7 @@ class Session:
     __slots__ = tuple(_SESSION_FIELDS) + (
         "is_generating", "thread", "key", "needs_redraw", "project",
         "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
-        "pending_confirm", "render_log", "render_lock",
+        "pending_confirm", "render_log", "render_lock", "is_subagent",
     )
 
     def __init__(self):
@@ -85,6 +85,7 @@ class Session:
         # append（worker 线程写）与切回时读快照（主线程）。
         self.render_log = []
         self.render_lock = threading.Lock()
+        self.is_subagent = False
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。

@@ -545,6 +545,12 @@ def _confirm_file_write(full: str, old_content: str, new_content: str):
     返回 (allowed, reject_message)：allowed=True 时 reject_message 为 None；
     allowed=False 时 reject_message 是给 AI 的拒绝文案。
     """
+    try:
+        from . import session as _session
+        if getattr(_session.current_session(), "is_subagent", False):
+            return True, None
+    except Exception:
+        pass
     ui = getattr(state, "ui_ref", None)
     if ui is None:
         return True, None
@@ -1064,7 +1070,14 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
         return f"目录不存在: {cd_target}"
 
     # ── 用户确认（同原逻辑）──
-    ui = getattr(state, "ui_ref", None)
+    try:
+        from . import session as _session
+        if getattr(_session.current_session(), "is_subagent", False):
+            ui = None
+        else:
+            ui = getattr(state, "ui_ref", None)
+    except Exception:
+        ui = getattr(state, "ui_ref", None)
     if ui is not None:
         try:
             allowed, user_feedback = ui.confirm_command(command)
@@ -1515,6 +1528,37 @@ def notify_user(title: str, message: str, level: str = "info") -> str:
     if ok:
         return f"已推送 Telegram 通知: {title}"
     return "通知未发送（Telegram 未配置或被节流）"
+
+
+@tool
+def spawn_agents(tasks: list[str]) -> str:
+    """把多个【相互独立】的子任务派给并行子 Agent，各自在隔离 worktree 改代码，跑完自动
+    合并回主项目并汇总。仅用于真正独立、可并行的多任务（分别改不相干模块）；有依赖/会改
+    同一文件的别用（那是 update_plan 顺序做的事）。"""
+    from . import session as _session
+    cur = _session.current_session()
+    if getattr(cur, "is_subagent", False):
+        return "子 Agent 不能再派生子 Agent。"
+    if not isinstance(tasks, list) or not [t for t in tasks if str(t).strip()]:
+        return "请提供非空 tasks 列表，每项是一个独立子任务。"
+
+    project_root = _session.current_project() or getattr(state, "current_project", None)
+    if not project_root or not os.path.isdir(project_root):
+        return "无法确定主项目根目录，不能派生并行子 Agent。"
+
+    from . import subagent
+    results = subagent.spawn(tasks, project_root, getattr(state, "ui_ref", None))
+    lines = ["并行子 Agent 汇总："]
+    for idx, r in enumerate(results, 1):
+        files = ", ".join(r.get("files_changed") or []) or "无"
+        lines.append(
+            f"\n[{idx}] merge={r.get('merge', '?')}\n"
+            f"任务：{r.get('task', '')}\n"
+            f"文件：{files}\n"
+            f"摘要：{r.get('summary', '') or '（无）'}\n"
+            f"详情：{r.get('detail', '') or '（无）'}"
+        )
+    return "\n".join(lines)
 
 
 @tool
@@ -3780,6 +3824,7 @@ ALL_TOOLS = [
     find_tests, related_files,
     generate_image,
     remember, forget,
+    spawn_agents,
     update_plan,
     get_project_instructions,
     notify_user,
@@ -3839,6 +3884,7 @@ TOOL_DISPLAY_NAMES = {
     "generate_video": "🎬 生成视频",
     "remember": "🧠 记住事实",
     "forget": "🗑️ 遗忘记忆",
+    "spawn_agents": "🤖 并行子 Agent",
     "update_plan": "📋 更新计划",
     "read_background_output": "📋 读取后台输出",
     "list_background_commands": "📋 列出后台命令",

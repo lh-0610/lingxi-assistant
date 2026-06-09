@@ -351,33 +351,35 @@ def agent_loop(ui):
         except Exception as save_err:
             logger.error(f"保存会话失败: {save_err}", exc_info=True)
 
-        # Telegram 通知：任务完成——不分端都把【完整】回复发回手机（长则分段不截断）。
-        # 走 notify_long（尊重 NOTIFY 开关 / 分级 / 节流，用户可在设置里关 done 通知）。
-        try:
-            from .notify import notify_long as _notify_long
-            _notify_long("done", "灵犀回复", clean_text or "(无文本回复)", "agent_done")
-        except Exception:
-            pass
-
-        # 捕获本轮的会话：标题生成在新线程跑，必须 bind 到这个会话，否则
-        # maybe_generate_session_title 读 state.current_session_id/title/model 会落到
-        # 当时的 active（用户可能已切走），把标题/项目 tag 写错会话。
         from . import session as _session
         _title_sess = _session.current_session()
 
-        def _gen_title_bg():
-            _session.bind_thread(_title_sess)
+        # 子 Agent 是临时会话：不推手机通知、不起标题生成（也不落历史，见 save_session 守卫）
+        if not getattr(_title_sess, "is_subagent", False):
+            # Telegram 通知：任务完成——不分端都把【完整】回复发回手机（长则分段不截断）。
+            # 走 notify_long（尊重 NOTIFY 开关 / 分级 / 节流，用户可在设置里关 done 通知）。
             try:
-                maybe_generate_session_title()
-                bridge = getattr(ui, "bridge", None)
-                if bridge is not None:
-                    bridge.sessions_refresh.emit()  # 标题出来后刷新侧栏（线程安全）
-            except Exception as e:
-                logger.error(f"自动生成标题失败: {e}", exc_info=True)
-            finally:
-                _session.unbind_thread()
+                from .notify import notify_long as _notify_long
+                _notify_long("done", "灵犀回复", clean_text or "(无文本回复)", "agent_done")
+            except Exception:
+                pass
 
-        _threading.Thread(target=_gen_title_bg, daemon=True).start()
+            # 标题生成在新线程跑，必须 bind 到这个会话，否则 maybe_generate_session_title
+            # 读 state.current_session_id/title/model 会落到当时的 active（用户可能已切走），
+            # 把标题/项目 tag 写错会话。
+            def _gen_title_bg():
+                _session.bind_thread(_title_sess)
+                try:
+                    maybe_generate_session_title()
+                    bridge = getattr(ui, "bridge", None)
+                    if bridge is not None:
+                        bridge.sessions_refresh.emit()  # 标题出来后刷新侧栏（线程安全）
+                except Exception as e:
+                    logger.error(f"自动生成标题失败: {e}", exc_info=True)
+                finally:
+                    _session.unbind_thread()
+
+            _threading.Thread(target=_gen_title_bg, daemon=True).start()
 
     except Exception as e:
         ui.remove_thinking_indicator()

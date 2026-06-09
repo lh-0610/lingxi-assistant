@@ -20,10 +20,21 @@ def _fresh_active_session():
     会跨测试残留——比如上个测试设了 active.project，下个直接 monkeypatch state.current_project
     的测试就读不到（current_project() 优先会话级、非 _UNSET 不回退全局）。每测试 fresh active
     让这些字段回默认（project=_UNSET → 回退全局），测试间互不干扰。
+
+    还要清线程绑定：bind_thread 是线程级的，pytest 全程同一主线程——若某测试（如直接调
+    subagent.spawn，它会把调用线程绑到父会话）跑完没解绑，后续测试 current_session() 会串到
+    残留会话。每测试前后 unbind 一次，保证 current_session() 干净回退 active。
     """
     from src import session as _session
+    from src import state as _state
+    # 中和全局 current_project：import src.agent 时会 state.current_project = projects.get_current()
+    # 把【开发者 app 里当前打开的项目】恢复进来（如手动切到别的项目测试）。不清的话，不自己设
+    # current_project 的测试（如 test_related_files 依赖项目根=本仓库）会被串到那个项目而失败。
+    _state.current_project = None
+    _session.unbind_thread()
     _session.set_active(_session.Session())
     yield
+    _session.unbind_thread()
 
 
 @pytest.fixture()
