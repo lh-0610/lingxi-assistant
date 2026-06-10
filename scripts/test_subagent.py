@@ -120,6 +120,29 @@ class TestSubagentSpawn:
         assert (git_repo / "b.py").read_text(encoding="utf-8") == "created by b.py\n"
         assert results[0]["summary"].startswith("done")
 
+    def test_spawn_subagent_that_commits_merges_back(self, git_repo, monkeypatch):
+        """子 Agent 在自己 worktree 里 git_commit 后，提交的改动也要合并回主项目（防静默丢失）。"""
+        import src.subagent as subagent
+        import src.tools as tools
+        import src.session as session
+
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def fake_loop(ui):
+            cwd = Path(tools._project_cwd())
+            (cwd / "feat.py").write_text("print('feat')\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=str(cwd), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "subagent commit"], cwd=str(cwd),
+                           check=True, capture_output=True, env=env)
+            session.current_session().chat_history.append(AIMessage(content="done"))
+
+        monkeypatch.setattr(subagent, "_run_agent_loop", fake_loop)
+        results = subagent.spawn(["build feat"], str(git_repo), None)
+
+        assert results[0]["merge"] == "ok", results[0]
+        assert (git_repo / "feat.py").read_text(encoding="utf-8") == "print('feat')\n"
+
     def test_spawn_restores_parent_thread_binding(self, git_repo, monkeypatch):
         import src.subagent as subagent
         import src.session as session

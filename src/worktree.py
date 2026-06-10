@@ -128,6 +128,47 @@ def is_git_repo(path) -> bool:
         return False
 
 
+def _ensure_worktree_excluded(project_path: str) -> None:
+    """把 ``.lingxi-worktrees/`` 写进主仓库的 ``.git/info/exclude``（本地忽略）。
+
+    隔离 worktree 建在主项目根的 ``.lingxi-worktrees/`` 下，否则它会以未跟踪文件出现在主项目
+    ``git status`` —— 污染 git_status 工具、让 has_uncommitted_changes 误报、甚至被
+    ``git add -A`` 误纳进提交。用 ``.git/info/exclude``（本地、不提交）而非用户的 ``.gitignore``
+    （被跟踪文件，改它会脏化用户的工作区/提交）。best-effort：失败只记日志，不影响 worktree 创建。
+    """
+    line = ".lingxi-worktrees/"
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            cwd=project_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        if r.returncode != 0:
+            return
+        exclude_path = (r.stdout or "").strip()
+        if not exclude_path:
+            return
+        if not os.path.isabs(exclude_path):
+            exclude_path = os.path.join(project_path, exclude_path)
+
+        existing = ""
+        if os.path.isfile(exclude_path):
+            with open(exclude_path, encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+        # 整行精确匹配，避免把已有的 ".lingxi-worktrees" 子串误判成已存在
+        if any(ln.strip() == line for ln in existing.splitlines()):
+            return
+
+        os.makedirs(os.path.dirname(exclude_path), exist_ok=True)
+        with open(exclude_path, "a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(line + "\n")
+        logger.info(f"已把 {line} 加入 {exclude_path}（本地忽略隔离目录）")
+    except Exception as e:
+        logger.warning(f"写 info/exclude 失败（不影响 worktree 创建）: {e}")
+
+
 def _sanitize_branch(name: str) -> str:
     """把 session_id 转成合法 git 分支名。已合法的名字原样保留。"""
     if not name:
@@ -193,6 +234,7 @@ def create(session, project_path: str, session_id: str = None) -> str | None:
 
     try:
         os.makedirs(wt_dir, exist_ok=True)
+        _ensure_worktree_excluded(project_path)  # 本地忽略隔离目录，别污染主项目 git status
         if not _is_within(wt_path, wt_dir):
             raise ValueError("worktree 路径越界")
 
@@ -329,15 +371,16 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         if not os.path.isdir(wt_path):
             return False, "隔离区目录不存在，无法恢复改动。"
 
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=wt_path, capture_output=True, text=True,
+        # base = 主项目当前 HEAD = worktree 的分叉基点（常态下主项目自 create 起未动）。
+        # 必须用它而非 worktree 的 HEAD：AI 若在隔离区里 git_commit 过，工作区是干净的，按
+        # worktree HEAD 取 diff 会判成"无改动"，提交过的工作就随 worktree 删除而静默丢失。
+        # 对 base 取 diff（git add -A 后比 index 与 base）则把"已提交 + 未提交"净改动一起算进来。
+        base_r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_path, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10,
         )
-        if status.returncode != 0:
-            return False, f"读取隔离区状态失败：{(status.stderr or '').strip() or '未知错误'}"
-        if not (status.stdout or "").strip():
-            return True, "隔离区没有需要恢复的改动。"
+        base = (base_r.stdout or "").strip() if base_r.returncode == 0 else "HEAD"
 
         add = subprocess.run(
             ["git", "add", "-A"],
@@ -349,15 +392,19 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
 
         changed = subprocess.run(
             # core.quotepath=false：非 ASCII（中文）文件名不被转义成 \xxx，否则快照/恢复对不上真路径
-            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "HEAD"],
+            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", base],
             cwd=wt_path, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10,
         )
+        if changed.returncode != 0:
+            return False, f"读取隔离区改动失败：{(changed.stderr or '').strip() or '未知错误'}"
         changed_files = [line.strip() for line in (changed.stdout or "").splitlines() if line.strip()]
+        if not changed_files:
+            return True, "隔离区没有需要恢复的改动。"
         snapshots = _snapshot_project_files(project_path, changed_files)
 
         diff = subprocess.run(
-            ["git", "diff", "--cached", "--binary", "HEAD"],
+            ["git", "diff", "--cached", "--binary", base],
             cwd=wt_path, capture_output=True,
             timeout=30,
         )
