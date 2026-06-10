@@ -2021,11 +2021,14 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             sess.render_log.clear()    # 新一轮提问开始：清掉上一轮的渲染事件缓冲
         sess.thread = threading.current_thread()
         _session.bind_thread(sess)
+        from .. import roles as _roles
+        sess.role_snapshot = _roles.capture_active_role()  # 冻结本轮人格（防生成途中被换卡）
         try:
             agent.agent_loop(self)
         finally:
             sess.is_generating = False
             sess.thread = None
+            sess.role_snapshot = None    # 解冻：空闲会话回退读全局当前角色
             _session.unbind_thread()
             self.bridge.finished.emit(sess)
 
@@ -2039,6 +2042,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             sess.render_log.clear()    # 新一轮提问开始：清掉上一轮的渲染事件缓冲
         sess.thread = threading.current_thread()
         _session.bind_thread(sess)
+        from .. import roles as _roles
+        sess.role_snapshot = _roles.capture_active_role()  # 冻结本轮人格（防生成途中被换卡）
         try:
             self.show_message(
                 f"\n🔎 使用「{vision_model_name}」识别图片，随后交给「{original_model_name}」继续处理\n",
@@ -2080,6 +2085,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         finally:
             sess.is_generating = False
             sess.thread = None
+            sess.role_snapshot = None    # 解冻：空闲会话回退读全局当前角色
             _session.unbind_thread()
             self.bridge.finished.emit(sess)
 

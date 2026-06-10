@@ -64,6 +64,49 @@ class TestSystemPrompt:
         assert roles.PAINTING_GUIDE in result
 
 
+class TestRoleSnapshot:
+    """角色卡会话快照：一轮生成途中前台换卡，不改变本会话本轮的人格。"""
+
+    def test_capture_active_role_reads_globals(self, monkeypatch):
+        monkeypatch.setattr(roles, "_role_card_content", "c")
+        monkeypatch.setattr(roles, "_role_card_name", "n")
+        monkeypatch.setattr(roles, "_role_card_path", "p")
+        assert roles.capture_active_role() == {"content": "c", "name": "n", "path": "p"}
+
+    def test_session_snapshot_overrides_global(self, isolated_memory, monkeypatch):
+        """会话有快照时，get_system_prompt 用快照角色，无视全局当前角色。"""
+        from src import session as _session
+        monkeypatch.setattr(roles, "_role_card_content", "我是全局新角色")
+        sess = _session.get_active()
+        sess.role_snapshot = {"content": "我是快照旧角色", "name": "旧", "path": None}
+        try:
+            result = roles.get_system_prompt()
+            assert "我是快照旧角色" in result
+            assert "我是全局新角色" not in result
+        finally:
+            sess.role_snapshot = None
+
+    def test_falls_back_to_global_without_snapshot(self, isolated_memory, monkeypatch):
+        """会话无快照（空闲）时回退读全局——前台换卡下一轮即生效。"""
+        from src import session as _session
+        monkeypatch.setattr(roles, "_role_card_content", "我是全局角色")
+        _session.get_active().role_snapshot = None
+        assert "我是全局角色" in roles.get_system_prompt()
+
+    def test_snapshot_with_none_content_yields_default(self, isolated_memory, monkeypatch):
+        """拍快照时本无角色卡（content=None）→ 用默认 prompt，不串全局后设的卡。"""
+        from src import session as _session
+        monkeypatch.setattr(roles, "_role_card_content", "全局后来才设的卡")
+        sess = _session.get_active()
+        sess.role_snapshot = {"content": None, "name": None, "path": None}
+        try:
+            result = roles.get_system_prompt()
+            assert "全局后来才设的卡" not in result
+            assert "角色设定（必须严格遵守）" not in result
+        finally:
+            sess.role_snapshot = None
+
+
 class TestLoadRulesFromDir:
     """_load_rules_from_dir：单目录规则文件加载。"""
 

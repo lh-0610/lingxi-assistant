@@ -224,8 +224,14 @@ def get_system_prompt(include_painting: bool = False):
     `include_painting` 由 `_stream_with_tools` 在检测到画图意图时传 True，
     其它情况省下 3500+ 字的 token 消耗。
     """
-    if _role_card_content:
-        base = SYSTEM_PROMPT + "\n\n# 角色设定（必须严格遵守）\n\n" + _role_card_content
+    # 角色卡：优先用【当前会话本轮冻结的快照】（_run_agent 在每轮生成开始时拍下当时的
+    # 全局角色），让后台会话生成途中、前台换了角色卡，也不会把它的人格中途换掉；会话没有
+    # 快照（前台空闲 / 启动 / 新建历史 / 子 Agent）时回退读全局，使前台换卡下一轮即生效。
+    from . import session as _session
+    _snap = getattr(_session.current_session(), "role_snapshot", None)
+    role_content = _snap["content"] if _snap is not None else _role_card_content
+    if role_content:
+        base = SYSTEM_PROMPT + "\n\n# 角色设定（必须严格遵守）\n\n" + role_content
     else:
         base = SYSTEM_PROMPT
 
@@ -532,6 +538,19 @@ def clear_role_card():
     if os.path.exists(ROLE_CONFIG):
         os.remove(ROLE_CONFIG)
     logger.info("清除角色卡，恢复默认")
+
+
+def capture_active_role():
+    """快照当前【前台/全局】激活的角色卡，供会话在一轮生成开始时冻结自己的人格。
+
+    返回 dict（content/name/path）；content 为 None 表示无角色卡（用默认 SYSTEM_PROMPT）。
+    返回新 dict（字符串不可变，无需深拷贝），写进 session.role_snapshot 后即与全局解耦。
+    """
+    return {
+        "content": _role_card_content,
+        "name": _role_card_name,
+        "path": _role_card_path,
+    }
 
 
 def get_current_role_name():

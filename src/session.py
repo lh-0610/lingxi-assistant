@@ -61,6 +61,7 @@ class Session:
         "is_generating", "thread", "key", "needs_redraw", "project",
         "command_allowlist", "command_prefix_allowlist", "edit_path_allowlist",
         "pending_confirm", "render_log", "render_lock", "is_subagent",
+        "role_snapshot",
     )
 
     def __init__(self):
@@ -86,6 +87,11 @@ class Session:
         self.render_log = []
         self.render_lock = threading.Lock()
         self.is_subagent = False
+        # 本轮生成开始时冻结的角色卡快照（roles.capture_active_role() 的返回 dict）。
+        # None = 用全局当前角色。worker 在 _run_agent 起手拍下、finally 清回 None：
+        # 让后台会话生成途中、前台换了角色卡，也不会把这个会话的人格中途换掉；
+        # 空闲（非生成）会话始终读全局，前台换卡下一轮即生效。
+        self.role_snapshot = None
         # 会话所属项目：首次 save 时锚定为当时的全局 current_project，之后不被项目切换
         # 影响。修"无项目会话被切项目后误归到新项目"——worker 的 save 可能晚于主线程
         # 切项目，若取全局 current_project 就会被打上新项目 tag。
