@@ -821,14 +821,20 @@ def _collect_tool_calls(gathered):
     valid_tool_calls = []
     if gathered is None:
         return valid_tool_calls
+    # 合成 id 兜底用单调序号：部分 provider（某些本地模型）不返回 tool_call id，原来回退成
+    # 工具名——同一轮调两次同名工具时两条 id 撞车，AIMessage.tool_calls 与 ToolMessage 配对
+    # 错乱，下一轮 Anthropic/OpenAI 因「重复 tool_use id」抛 400。带序号保证唯一；provider
+    # 给了真 id 时完全不变（or 短路）。序号每次迭代都自增，跨两个 loop 也不重复。
+    _i = 0
     for tc in (gathered.tool_calls or []):
         name = tc.get("name", "")
         if name and name in get_tool_map():
             valid_tool_calls.append({
                 "name": name,
                 "args": tc.get("args") or {},
-                "id": tc.get("id") or name,
+                "id": tc.get("id") or f"call_{name}_{_i}",
             })
+        _i += 1
     # 兼容 args JSON 解析失败的工具调用：保持原 fail-open 行为（args={}）
     for tc in (getattr(gathered, 'invalid_tool_calls', None) or []):
         name = tc.get("name", "") or ""
@@ -836,8 +842,9 @@ def _collect_tool_calls(gathered):
             valid_tool_calls.append({
                 "name": name,
                 "args": {},
-                "id": tc.get("id") or name,
+                "id": tc.get("id") or f"call_{name}_{_i}",
             })
+        _i += 1
     return valid_tool_calls
 
 

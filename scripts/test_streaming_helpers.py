@@ -189,6 +189,23 @@ class TestToolCallCollection:
             {"name": "read_file", "args": {}, "id": "bad"},
         ]
 
+    def test_synthesizes_unique_ids_for_idless_duplicate_calls(self, monkeypatch):
+        """provider 不返回 id 时，同名工具调两次不应撞成同一个 id（否则下一轮 400）。"""
+        monkeypatch.setattr(streaming, "get_tool_map", lambda: {"read_file": object()})
+        gathered = SimpleNamespace(
+            tool_calls=[
+                {"name": "read_file", "args": {"path": "a.py"}, "id": None},
+                {"name": "read_file", "args": {"path": "b.py"}, "id": ""},
+            ],
+            invalid_tool_calls=[],
+        )
+
+        result = streaming._collect_tool_calls(gathered)
+        ids = [tc["id"] for tc in result]
+        assert len(result) == 2
+        assert len(set(ids)) == 2, f"id 应唯一，实际 {ids}"
+        assert all(i for i in ids), "不应有空 id"
+
     def test_extracts_anthropic_thinking_blocks(self):
         gathered = SimpleNamespace(content=[
             {"type": "thinking", "thinking": "first"},
