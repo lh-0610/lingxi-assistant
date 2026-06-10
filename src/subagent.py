@@ -96,7 +96,8 @@ def _changed_files(path: str | None) -> list[str]:
         return []
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            # quotepath=false：中文文件名不转义；否则报给模型的改动列表是乱码
+            ["git", "-c", "core.quotepath=false", "status", "--porcelain"],
             cwd=path, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10,
         )
@@ -105,7 +106,11 @@ def _changed_files(path: str | None) -> list[str]:
     files = []
     for line in (result.stdout or "").splitlines():
         if len(line) >= 4:
-            files.append(line[3:].strip())
+            name = line[3:].strip()
+            # 重命名条目 "R  old -> new"：取新名，别把 "old -> new" 当成一个文件名
+            if " -> " in name:
+                name = name.split(" -> ", 1)[1].strip()
+            files.append(name)
     return sorted(set(files))
 
 

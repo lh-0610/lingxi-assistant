@@ -55,6 +55,50 @@ class TestHeadlessUI:
 
 
 class TestSubagentSpawn:
+    def test_subagent_blocks_outside_paths(self, tmp_path):
+        import src.session as session
+        import src.tools as tools
+
+        prev = session.get_active()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        child = session.Session()
+        child.is_subagent = True
+        child.project = str(tmp_path)
+        child.worktree = str(worktree)
+        session.set_active(child)
+        try:
+            outside = tmp_path / "outside.txt"
+            result = tools.write_file.func(str(outside), "x")
+            assert "worktree" in result or "子 Agent" in result
+            assert not outside.exists()
+
+            inside = tools.write_file.func("inside.txt", "ok")
+            assert "成功" in inside
+            assert (worktree / "inside.txt").read_text(encoding="utf-8") == "ok"
+        finally:
+            session.set_active(prev)
+
+    def test_subagent_blocks_outside_commands(self, tmp_path):
+        import src.session as session
+        import src.tools as tools
+
+        prev = session.get_active()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        child = session.Session()
+        child.is_subagent = True
+        child.project = str(tmp_path)
+        child.worktree = str(worktree)
+        session.set_active(child)
+        try:
+            outside = tmp_path / "outside.txt"
+            cmd = f'python -c "print(r\"{outside}\")"'
+            result = tools.run_command.func(cmd)
+            assert "worktree" in result or "子 Agent" in result
+        finally:
+            session.set_active(prev)
+
     def test_spawn_two_tasks_merges_different_files(self, git_repo, monkeypatch):
         import src.subagent as subagent
         import src.tools as tools

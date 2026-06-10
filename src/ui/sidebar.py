@@ -304,14 +304,47 @@ class SidebarMixin:
         menu.addAction(a_remove)
         menu.exec(anchor_widget.mapToGlobal(anchor_widget.rect().bottomLeft()))
 
+    def _stop_session_generation(self, sess, wait: bool = False, timeout: float = 3.0):
+        if sess is None or not getattr(sess, "is_generating", False):
+            return True
+        import threading
+        thread = getattr(sess, "thread", None)
+        sess.stop_flag = True
+        pc = getattr(sess, "pending_confirm", None)
+        if pc:
+            try:
+                if pc[0] == "command":
+                    _, _, result_holder, done_event = pc
+                else:
+                    _, _, _, result_holder, done_event = pc
+                if result_holder is not None:
+                    result_holder["allow"] = False
+                done_event.set()
+            except Exception:
+                pass
+            sess.pending_confirm = None
+        if wait and thread and thread is not threading.current_thread():
+            thread.join(timeout)
+            if thread.is_alive():
+                return False
+        sess.is_generating = False
+        if sess.thread is thread:
+            sess.thread = None
+        return True
+
     def _delete_session(self, session_id):
-        if agent.current_session_id == session_id:
-            self._force_stop_generation()
+        from .. import session as _session
+        _sess = _session.get(session_id)
+        if _sess and getattr(_sess, "is_generating", False):
+            if agent.current_session_id == session_id:
+                if not self._force_stop_generation(wait=True):
+                    return
+            else:
+                if not self._stop_session_generation(_sess, wait=True):
+                    return
         # 删除会话前回收其 worktree
         try:
-            from .. import session as _session
             from ..worktree import finish
-            _sess = _session.get(session_id)
             if _sess and getattr(_sess, "worktree", None):
                 finish(_sess, apply_changes=False)
         except Exception:

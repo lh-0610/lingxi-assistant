@@ -249,6 +249,7 @@ class GPTSoVITSTTS(QObject):
         stream.start()
         first_chunk = True
         total_bytes = 0
+        leftover = b""   # int16 需偶数字节；chunk 边界落单的尾字节缓冲到下一块，否则 frombuffer 崩
         try:
             for chunk in resp.iter_content(chunk_size=4096):
                 if self._stop_requested:
@@ -259,7 +260,15 @@ class GPTSoVITSTTS(QObject):
                     self.started.emit()
                     logger.info("GPT-SoVITS 开始流式播放")
                     first_chunk = False
-                samples = np.frombuffer(chunk, dtype=np.int16)
+                data = leftover + chunk
+                if len(data) % 2:
+                    leftover = data[-1:]
+                    data = data[:-1]
+                else:
+                    leftover = b""
+                if not data:
+                    continue
+                samples = np.frombuffer(data, dtype=np.int16)
                 stream.write(samples)
                 total_bytes += len(chunk)
             if not self._stop_requested:

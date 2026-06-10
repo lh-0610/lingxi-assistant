@@ -82,12 +82,7 @@ if __name__ == "__main__":
             _tg_poll_shutdown()
         except Exception:
             pass
-        # 回收所有 worktree 隔离环境
-        try:
-            from src.worktree import cleanup_all
-            cleanup_all()
-        except Exception:
-            pass
+        # worktree 隔离区由用户显式恢复/丢弃，退出时保留以避免丢失改动。
     app.aboutToQuit.connect(_cleanup_on_exit)
 
     sys.exit(app.exec())

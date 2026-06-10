@@ -4,6 +4,8 @@
 之前的对话拼成大 prompt，再让 CLI 一次性吐 stream-json 事件回来解析。
 """
 import json as _json
+import os
+import signal
 import subprocess
 import threading as _threading
 import time
@@ -15,6 +17,29 @@ from .paths import logger
 from .config import CLAUDE_CODE_MODEL
 from .memory import save_session, maybe_generate_session_title
 from .roles import get_system_prompt, get_current_role_name, get_role_card_content
+
+
+def _kill_proc_tree(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            return
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 def claude_code_loop(ui):
@@ -73,6 +98,7 @@ def claude_code_loop(ui):
     # 心跳计时（提前定义，避免 Popen 异常时 NameError）
     heartbeat_stop = _threading.Event()
     heartbeat_started = False
+    proc = None
     try:
         cmd = [
             "claude", "-p",
@@ -98,9 +124,10 @@ def claude_code_loop(ui):
             cmd,
             stdin=subprocess.PIPE if stdin_data else None,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
+            start_new_session=(os.name != "nt"),
         )
         if stdin_data:
             proc.stdin.write(stdin_data)
@@ -120,10 +147,12 @@ def claude_code_loop(ui):
 
         # 解析 stream-json 事件
         full_text = ""
+        thinking_tokens = 0   # CLI 只上报思考 token 估算，不返回思维链原文
+        diagnostic_lines = []
         indicator_removed = False
         for line in proc.stdout:
             if state.stop_flag:
-                proc.kill()
+                _kill_proc_tree(proc)
                 break
             line = line.strip()
             if not line:
@@ -131,12 +160,18 @@ def claude_code_loop(ui):
             try:
                 event = _json.loads(line)
             except _json.JSONDecodeError:
+                diagnostic_lines.append(line)
                 continue
 
             etype = event.get("type")
 
-            # 首次事件就移除等待指示
-            if not indicator_removed:
+            # 思考阶段：CLI 持续上报思考 token 估算（但不返回思维链原文）
+            if etype == "system" and event.get("subtype") == "thinking_tokens":
+                thinking_tokens = max(thinking_tokens, event.get("estimated_tokens", 0) or 0)
+                continue
+
+            # 首个"内容"事件才撤掉等待指示——思考阶段保留心跳，让用户看到在思考
+            if not indicator_removed and etype in ("assistant", "user", "result"):
                 indicator_removed = True
                 heartbeat_stop.set()
                 ui.remove_thinking_indicator()
@@ -151,10 +186,21 @@ def claude_code_loop(ui):
                         full_text += text
                         ui.show_message(text, "ai_msg")
                     elif btype == "thinking":
-                        # 思考内容
+                        # 思考内容。注意：claude CLI 默认不返回思维链原文，
+                        # 只给一个带 signature 的空 thinking 块 + thinking_tokens 计数。
+                        # 此时 thinking == ""，显示"已思考"活动而非静默留白。
                         thinking = block.get("thinking", "")
                         if thinking:
                             ui.show_message(f"{thinking}\n", "think_msg")
+                        elif block.get("signature") or thinking_tokens:
+                            n = f"约 {thinking_tokens} tokens" if thinking_tokens else "思维链未公开"
+                            ui.show_message(
+                                f"💭 已思考（{n}）—— Claude CLI 未返回思维链原文\n",
+                                "think_msg",
+                            )
+                    elif btype == "redacted_thinking":
+                        # 加密脱敏的思考块（安全原因），同样给可见标记而非留白
+                        ui.show_message("💭 已思考（内容已脱敏）\n", "think_msg")
                     elif btype == "tool_use":
                         # 工具调用
                         tool_name = block.get("name", "?")
@@ -189,10 +235,16 @@ def claude_code_loop(ui):
         heartbeat_stop.set()
         if not indicator_removed:
             ui.remove_thinking_indicator()
-        proc.wait()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _kill_proc_tree(proc)
+            proc.wait(timeout=5)
 
         if proc.returncode != 0 and not state.stop_flag:
-            err = proc.stderr.read()
+            err = "\n".join(diagnostic_lines).strip()
+            if not err:
+                err = f"Claude Code exited with code {proc.returncode}"
             logger.error(f"Claude Code 错误: {err}")
             ui.show_message(f"\n⚠️ {err}\n", "ai_msg")
 
@@ -215,3 +267,5 @@ def claude_code_loop(ui):
         ui.remove_thinking_indicator()
         logger.error(f"Claude Code 异常: {e}", exc_info=True)
         ui.show_retry(str(e)[:100])
+    finally:
+        _kill_proc_tree(proc)

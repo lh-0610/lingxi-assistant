@@ -84,3 +84,8 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("agent")
+
+# 第三方库 INFO 噪声压到 WARNING：httpx 会把完整请求 URL（含 Telegram bot token）写进
+# INFO 日志（存 30 天，等于明文泄漏 token）；也顺手消掉每 30s 一条 getUpdates 的刷屏。
+for _noisy_logger in ("httpx", "httpcore", "telegram"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)

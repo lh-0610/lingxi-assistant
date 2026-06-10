@@ -398,7 +398,11 @@ def _project_cwd() -> str:
     current = _session.current_session()
     if current:
         wt = current.worktree
+        if getattr(current, "is_subagent", False):
+            # 子 Agent 严格限定在自己 worktree（无则空，配合 _subagent_path_rejection 沙箱）
+            return wt or ""
         if wt and os.path.isdir(wt):
+            # 普通隔离会话：worktree 失效则回退主项目，别把操作落到死路径
             return wt
     proj = _session.current_project()   # 会话级：_UNSET 回退全局，统一来源
     if proj and os.path.isdir(proj):
@@ -413,6 +417,67 @@ def _resolve_path(path: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(_project_cwd(), path))
+
+
+def _path_inside(path: str, root: str) -> bool:
+    if not path or not root:
+        return False
+    try:
+        path_real = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+        root_real = os.path.normcase(os.path.realpath(os.path.abspath(root)))
+        return os.path.commonpath([path_real, root_real]) == root_real
+    except (OSError, ValueError):
+        return False
+
+
+def _current_subagent_worktree():
+    try:
+        current = _session.current_session()
+    except Exception:
+        return None
+    if not getattr(current, "is_subagent", False):
+        return None
+    root = getattr(current, "worktree", None)
+    if root and os.path.isdir(root):
+        return root
+    return ""
+
+
+def _subagent_path_rejection(path: str, target: str = "path") -> str:
+    root = _current_subagent_worktree()
+    if root is None:
+        return ""
+    if not root:
+        return "拒绝：子 Agent 没有有效 worktree，不能访问文件系统。"
+    if not _path_inside(path, root):
+        return f"拒绝：子 Agent 只能访问自己的 worktree，不能访问此{target}: {path}"
+    return ""
+
+
+def _subagent_command_rejection(command: str, cwd: str | None = None) -> str:
+    root = _current_subagent_worktree()
+    if root is None:
+        return ""
+    if not root:
+        return "拒绝：子 Agent 没有有效 worktree，不能执行命令。"
+    if cwd and not _path_inside(cwd, root):
+        return f"拒绝：子 Agent 命令只能在自己的 worktree 内执行: {cwd}"
+
+    text = command or ""
+    if re.search(r"(^|[\\/\s\"'=])\.\.([\\/\s\"']|$)", text):
+        return "拒绝：子 Agent 命令不能使用 '..' 跳出自己的 worktree。"
+
+    path_patterns = [
+        r"[A-Za-z]:[\\/][^\s\"'<>|&;]+",
+        r"\\\\[^\s\"'<>|&;]+",
+        r"(?<![\w:])/(?:home|tmp|var|etc|usr|mnt|workspace|Users|opt|root)/[^\s\"'<>|&;]*",
+    ]
+    for pattern in path_patterns:
+        for match in re.finditer(pattern, text):
+            candidate = match.group(0).rstrip(".,)]}")
+            if candidate and not _path_inside(candidate, root):
+                return f"拒绝：子 Agent 命令引用了 worktree 外路径: {candidate}"
+    return ""
 
 
 def _norm_vpath(path: str) -> str:
@@ -496,7 +561,11 @@ def read_file(path: str, offset: int = 1, limit: int = READ_FILE_DEFAULT_LIMIT) 
       - 默认 2000 行通常已经够；如果文件 > 2000 行，会自动截断并提示总行数
     """
     try:
-        with open(_resolve_path(path), "r", encoding="utf-8") as f:
+        full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
+        with open(full, "r", encoding="utf-8") as f:
             all_lines = f.readlines()
     except Exception as e:
         return f"读取失败: {e}"
@@ -545,6 +614,10 @@ def _confirm_file_write(full: str, old_content: str, new_content: str):
     返回 (allowed, reject_message)：allowed=True 时 reject_message 为 None；
     allowed=False 时 reject_message 是给 AI 的拒绝文案。
     """
+    if full != "(patch)":
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return False, reject
     try:
         from . import session as _session
         if getattr(_session.current_session(), "is_subagent", False):
@@ -584,6 +657,9 @@ def write_file(path: str, content: str) -> str:
     """写入内容到文件（覆盖）。path: 文件路径, content: 要写入的内容"""
     try:
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
         # 读旧内容算 diff（文件不存在视为空）
         old_content = ""
         if os.path.exists(full):
@@ -616,6 +692,9 @@ def append_file(path: str, content: str) -> str:
     """追加内容到文件末尾。path: 文件路径, content: 要追加的内容"""
     try:
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
         # 读旧内容算 diff（追加 = 旧内容 + 新内容）
         old_content = ""
         if os.path.exists(full):
@@ -687,6 +766,17 @@ def _realign_indent(new_string, file_indent_unit, model_indent_unit):
     return "".join(result)
 
 
+def _matched_span_end(file_lines, start_line, line_count, old):
+    """匹配区间的结束字符位置。L2/L3/L4 按行匹配后算区间——若 old 末行不带换行
+    （read_file 用 rstrip 展示，model 给的 old/new 通常都没有尾换行），就不要把文件
+    末匹配行的换行算进区间，否则替换成无尾换行的 new_string 后会把下一行黏上来。"""
+    end = sum(len(file_lines[j]) for j in range(start_line + line_count))
+    if not old.endswith("\n"):
+        last = file_lines[start_line + line_count - 1]
+        end -= len(last) - len(last.rstrip("\r\n"))   # 减掉文件末匹配行的换行（\n 或 \r\n）
+    return end
+
+
 def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
     """分层匹配级联：L1 精确 → L2 去行尾空白 → L3 去全部首尾空白+缩进重对齐 → L4 模糊。
 
@@ -748,7 +838,7 @@ def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
         spans = []
         for start_line in l2_hits:
             char_start = sum(len(file_lines[j]) for j in range(start_line))
-            char_end = sum(len(file_lines[j]) for j in range(start_line + old_line_count))
+            char_end = _matched_span_end(file_lines, start_line, old_line_count, old)
             spans.append((char_start, char_end))
         line_no = l2_hits[0] + 1
         return "normalized", spans, [new_string] * len(spans), ("L2 去行尾空白匹配", [line_no])
@@ -772,7 +862,7 @@ def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
             model_indent_unit = _detect_indent_unit(old_lines)
             realigned = _realign_indent(new_string, file_indent_unit, model_indent_unit)
             char_start = sum(len(file_lines[j]) for j in range(start_line))
-            char_end = sum(len(file_lines[j]) for j in range(start_line + old_line_count))
+            char_end = _matched_span_end(file_lines, start_line, old_line_count, old)
             spans.append((char_start, char_end))
             new_texts.append(realigned)
         line_no = l3_hits[0] + 1
@@ -821,7 +911,7 @@ def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
             model_indent_unit = _detect_indent_unit(old_lines)
             realigned = _realign_indent(new_string, file_indent_unit, model_indent_unit)
             char_start = sum(len(file_lines[j]) for j in range(start_line))
-            char_end = sum(len(file_lines[j]) for j in range(start_line + window_size))
+            char_end = _matched_span_end(file_lines, start_line, window_size, old)
             spans.append((char_start, char_end))
             new_texts.append(realigned)
         line_no = top_hits[0][0] + 1
@@ -881,6 +971,9 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
         return "失败：old_string 和 new_string 相同，不需要替换"
 
     full = _resolve_path(path)
+    reject = _subagent_path_rejection(full, "文件")
+    if reject:
+        return reject
     if not os.path.exists(full):
         return f"失败：文件不存在 {full}"
 
@@ -952,6 +1045,9 @@ def list_directory(path: str = ".") -> str:
     """列出目录下的文件和文件夹。path: 目录路径，默认当前项目根（无项目时为进程目录）"""
     try:
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "目录")
+        if reject:
+            return reject
         items = os.listdir(full)
         dirs, files = [], []
         for item in sorted(items):
@@ -1065,6 +1161,9 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
     cd_target = _parse_cd(command)
     if cd_target is not None:
         if os.path.isdir(cd_target):
+            reject = _subagent_path_rejection(cd_target, "目录")
+            if reject:
+                return reject
             state.shell_cwd = cd_target
             return f"已切换工作目录到: {cd_target}"
         return f"目录不存在: {cd_target}"
@@ -1092,6 +1191,9 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
             return _msg
 
     run_cwd = _shell_cwd()
+    reject = _subagent_command_rejection(command, run_cwd)
+    if reject:
+        return reject
 
     # stderr 合并进 stdout 走同一管道，按时间顺序输出（不再分开拼接）
     try:
@@ -1257,6 +1359,9 @@ def search_in_file(path: str, keyword: str, offset: int = 0, limit: int = SEARCH
         offset = max(0, int(offset or 0))
         limit = max(1, min(SEARCH_IN_FILE_MAX_LIMIT, int(limit or SEARCH_IN_FILE_DEFAULT_LIMIT)))
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
         # search_in_file 是单文件搜索；传目录会让 open() 在 Windows 上报 Errno 13
         # Permission denied，给个清晰提示引导用 search_files，而不是抛系统错。
         if os.path.isdir(full):
@@ -1326,6 +1431,9 @@ def search_files(regex: str, path: str = ".", file_pattern: str = "*", max_resul
         return f"失败：正则不合法 — {e}"
 
     full = _resolve_path(path) if path else _project_cwd()
+    reject = _subagent_path_rejection(full, "目录")
+    if reject:
+        return reject
     if not os.path.isdir(full):
         return f"失败：目录不存在 {full}"
 
@@ -1391,8 +1499,7 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024, model: st
     # 优先存到当前项目根的 outputs/，没项目就存到 chat_memory/generated/，
     # 避免硬编码到某个人的本地目录（之前是 D:\games\servicedaily\photos）
     # 用会话级 project（_project_cwd 同源）：后台会话生图存到自己项目，不跟前台切项目走
-    from . import session as _session
-    proj = _session.current_project()
+    proj = _project_cwd()
     if proj and os.path.isdir(proj):
         save_dir = os.path.join(proj, "outputs")
     else:
@@ -1507,6 +1614,9 @@ def get_project_instructions(path: str = ".") -> str:
     from .roles import load_project_rules
     root = _project_cwd()
     target = _resolve_path(path or ".")
+    reject = _subagent_path_rejection(target, "目录")
+    if reject:
+        return reject
     result = load_project_rules(root, target)
     if not result:
         return (
@@ -1539,6 +1649,9 @@ def spawn_agents(tasks: list[str]) -> str:
     cur = _session.current_session()
     if getattr(cur, "is_subagent", False):
         return "子 Agent 不能再派生子 Agent。"
+    if getattr(cur, "worktree", None):
+        return ("隔离模式下暂不支持并行子 Agent：子 Agent 基于主项目 HEAD 改动并合并回主项目，"
+                "会绕过当前隔离。请先退出隔离模式，或顺序执行这些子任务。")
     if not isinstance(tasks, list) or not [t for t in tasks if str(t).strip()]:
         return "请提供非空 tasks 列表，每项是一个独立子任务。"
 
@@ -1830,6 +1943,9 @@ def find_definition(name: str, path: str = "") -> str:
     names = []
     if path:
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
         try:
             with open(full, encoding="utf-8") as f:
                 src = f.read()
@@ -1869,6 +1985,9 @@ def find_references(name: str, path: str = "") -> str:
     refs = []
     if path:
         full = _resolve_path(path)
+        reject = _subagent_path_rejection(full, "文件")
+        if reject:
+            return reject
         try:
             with open(full, encoding="utf-8") as f:
                 src = f.read()
@@ -2610,6 +2729,10 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     比 run_command 跑 pytest 省事——直接给你哪些挂了、错在哪，便于定位修复。"""
     # ── 构建命令：<解释器> -m pytest（frozen 下 sys.executable=exe 不能用，见 _resolve_python） ──
     cmd = [_resolve_python(), "-m", "pytest", "--tb=short", "-q"]
+    run_cwd = _shell_cwd()
+    reject = _subagent_command_rejection("pytest", run_cwd)
+    if reject:
+        return reject
 
     # ── path 安全校验：_resolve_path + commonpath 防逃逸（同 code_map） ──
     if path:
@@ -2629,7 +2752,7 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
     try:
         t0 = time.time()
         result = subprocess.run(
-            cmd, cwd=_shell_cwd(),
+            cmd, cwd=run_cwd,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
         elapsed = time.time() - t0
@@ -3615,6 +3738,24 @@ def fetch_url(url: str, max_chars: int = 8000) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return f"不支持的协议: {parsed.scheme or '(无协议)'}。只允许 http:// 或 https://"
+
+    # SSRF 防护：拒绝指向本机 / 内网 / 链路本地 / 保留地址的主机，防被诱导读取
+    # 云元数据（169.254.169.254）或本机管理端口。
+    import socket as _socket
+    import ipaddress as _ipaddress
+    _host = parsed.hostname
+    if not _host:
+        return "无效网址：缺少主机名。"
+    try:
+        for _info in _socket.getaddrinfo(_host, None):
+            _ip = _ipaddress.ip_address(_info[4][0])
+            if (_ip.is_private or _ip.is_loopback or _ip.is_link_local
+                    or _ip.is_reserved or _ip.is_multicast or _ip.is_unspecified):
+                return f"拒绝抓取：{_host} 解析到非公网地址 {_ip}（防 SSRF / 内网探测）。"
+    except _socket.gaierror:
+        return f"无法解析主机: {_host}"
+    except Exception:
+        pass
 
     try:
         resp = _requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (LingXi)"})

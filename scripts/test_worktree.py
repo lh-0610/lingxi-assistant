@@ -208,6 +208,22 @@ class TestCreate:
         assert p1 == p2
         assert len(_WORKTREES) == 1
 
+    def test_reuses_existing_disk_worktree_after_registry_loss(self, git_repo):
+        """模拟重启：内存注册表没了，但磁盘上的同名 worktree 应复用。"""
+        from src.worktree import create, _WORKTREES
+        session = MagicMock()
+        session.worktree = None
+        p1 = create(session, git_repo, session_id="s_reuse")
+        assert p1 is not None
+
+        _WORKTREES.clear()
+        session.worktree = None
+        p2 = create(session, git_repo, session_id="s_reuse")
+
+        assert p2 == p1
+        assert session.worktree == p1
+        assert _WORKTREES["s_reuse"]["path"] == p1
+
     def test_two_sessions_different_worktrees(self, git_repo):
         """不同 session 应得到不同 worktree 路径。"""
         from src.worktree import create
@@ -323,15 +339,20 @@ class TestFinish:
         session.worktree = None
         wt_path = create(session, git_repo, session_id="f_apply")
 
-        new_file = os.path.join(wt_path, "restored.txt")
-        with open(new_file, "w", encoding="utf-8") as f:
+        tracked_file = os.path.join(wt_path, "README.md")
+        with open(tracked_file, "w", encoding="utf-8") as f:
             f.write("from isolated worktree\n")
 
         ok, msg = finish(session, apply_changes=True)
         assert ok, msg
         assert session.worktree is None
         assert not os.path.isdir(wt_path)
-        assert (git_repo / "restored.txt").read_text(encoding="utf-8") == "from isolated worktree\n"
+        assert (git_repo / "README.md").read_text(encoding="utf-8") == "from isolated worktree\n"
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "README.md"],
+            cwd=str(git_repo), capture_output=True, text=True
+        )
+        assert status.stdout.rstrip("\r\n") == " M README.md"
 
     def test_finish_loaded_session_without_registry_removes_git_metadata(self, git_repo):
         """重启后只有 worktree 路径、注册表为空时，finish 也应走 git worktree remove。"""

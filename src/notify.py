@@ -48,8 +48,7 @@ def notify(level: str, title: str, message: str, event_type: str) -> bool:
         logger.debug(f"通知被节流: {event_type}（{NOTIFY_THROTTLE_SECONDS}s 内不重复）")
         return False
 
-    # 4. 记录时间 + 存历史
-    _last_sent[event_type] = now
+    # 4. 存历史（不管成败都记一次尝试）
     _history.append({
         "time": now,
         "level": level,
@@ -58,8 +57,11 @@ def notify(level: str, title: str, message: str, event_type: str) -> bool:
         "event_type": event_type,
     })
 
-    # 5. 推送
-    return telegram_push.push(level, title, message)
+    # 5. 推送；只有成功才记节流时间——失败不该把重试窗口占掉（否则网络恢复后真通知被压掉）
+    ok = telegram_push.push(level, title, message)
+    if ok:
+        _last_sent[event_type] = now
+    return ok
 
 
 def notify_long(level: str, title: str, message: str, event_type: str) -> bool:
@@ -76,12 +78,14 @@ def notify_long(level: str, title: str, message: str, event_type: str) -> bool:
     if now - last < NOTIFY_THROTTLE_SECONDS:
         logger.debug(f"通知被节流: {event_type}（{NOTIFY_THROTTLE_SECONDS}s 内不重复）")
         return False
-    _last_sent[event_type] = now
     _history.append({
         "time": now, "level": level, "title": title,
         "message": message, "event_type": event_type,
     })
-    return telegram_push.push_long(level, title, message)
+    ok = telegram_push.push_long(level, title, message)
+    if ok:
+        _last_sent[event_type] = now   # 成功才占节流窗口，失败留给重试
+    return ok
 
 
 def get_history() -> list[dict]:

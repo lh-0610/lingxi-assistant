@@ -371,6 +371,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             or content.startswith("[图片识别结果，由 ")
         )
 
+    def _next_img_name(self) -> str:
+        """历史图片资源用单调递增名，不能用 id(img)——QImage 临时对象的地址会被复用，
+        导致两张不同的历史图片拿到同一资源名、渲染成同一张。"""
+        self._img_seq = getattr(self, "_img_seq", 0) + 1
+        return f"hist_img_{self._img_seq}"
+
     def _redraw_chat(self):
         self.chat_area.clear()
         if hasattr(self, "_image_paths"):
@@ -398,7 +404,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                                 if not img.isNull():
                                     if img.width() > 300:
                                         img = img.scaledToWidth(300, Qt.SmoothTransformation)
-                                    name = f"hist_img_{id(img)}"
+                                    name = self._next_img_name()
                                     self.chat_area.document().addResource(
                                         self.chat_area.document().ResourceType.ImageResource,
                                         name, img
@@ -418,7 +424,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                                     if not img.isNull():
                                         if img.width() > 300:
                                             img = img.scaledToWidth(300, Qt.SmoothTransformation)
-                                        name = f"hist_img_{id(img)}"
+                                        name = self._next_img_name()
                                         self.chat_area.document().addResource(
                                             self.chat_area.document().ResourceType.ImageResource,
                                             name, img
@@ -1449,7 +1455,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         )
         return text + hint
 
-    def _force_stop_generation(self):
+    def _force_stop_generation(self, wait: bool = False, timeout: float = 3.0):
         """强制停止当前生成，立即更新 UI 状态。
 
         与 _on_send_click 中的 stop 不同：这里会同步把 is_generating 置 False
@@ -1459,22 +1465,31 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         from .. import session as _session
         sess = _session.get_active()
         if not sess.is_generating:
-            return
+            return True
+        thread = getattr(sess, "thread", None)
         state.stop_flag = True
         self._release_pending_confirm()
         self._release_pending_edit()
+        if wait and thread and thread is not threading.current_thread():
+            thread.join(timeout)
+            if thread.is_alive():
+                return False
         # 立即标记生成结束——_on_finished 再被触发时会跳过重复处理
         sess.is_generating = False
-        sess.thread = None
+        if sess.thread is thread:
+            sess.thread = None
         self._ai_reply_start = None
         # 对齐 _on_finished 的按钮恢复（输入框有内容则 enabled）。
         self._update_btn_state("enabled" if self._has_input else "disabled")
+        return True
 
     def _on_send_click(self):
         from .. import session as _session
         sess = _session.get_active()
         if sess.is_generating:
-            self._force_stop_generation()
+            # wait=True：join 旧 worker。若超时未退则保持 is_generating=True、按钮停"停止"态，
+            # 用户无法立刻再发 → 杜绝"旧 worker 还在跑就起新 worker"双开乱写同一会话。
+            self._force_stop_generation(wait=True)
         elif self._has_input or self._pending_images:
             self._send_message()
 
@@ -2633,6 +2648,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """线程安全：显示错误信息和重试按钮"""
         from .. import session as _session
         _sess = _session.current_session()
+        # 记进 render_log：后台会话报错时，切回去才看得到（否则报错静默消失、像没回复就停了）
+        with _sess.render_lock:
+            _sess.render_log.append(("msg", f"\n⚠️ {error_msg}\n", "ai_msg"))
         if _sess is not _session.get_active():
             _sess.needs_redraw = True
             return

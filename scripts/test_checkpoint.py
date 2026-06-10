@@ -1,6 +1,7 @@
 """checkpoint 的真实 git 仓库回归测试。"""
 import shutil
 import subprocess
+from datetime import datetime
 
 import pytest
 
@@ -73,7 +74,7 @@ class TestCheckpointUndo:
 
         ok, _ = checkpoint.undo_last_checkpoint()
 
-        assert ref == "stash@{0}"
+        assert ref and not ref.startswith("stash@{")
         assert ok is True
         assert path.read_text(encoding="utf-8") == "user edit\n"
 
@@ -85,9 +86,34 @@ class TestCheckpointUndo:
 
         ok, _ = checkpoint.undo_last_checkpoint()
 
-        assert ref == "stash@{0}"
+        assert ref and not ref.startswith("stash@{")
         assert ok is True
         assert path.read_text(encoding="utf-8") == "user draft\n"
+
+    def test_same_second_checkpoints_restore_in_order(self, git_repo, monkeypatch):
+        path = git_repo / "tracked.txt"
+        path.write_text("user edit\n", encoding="utf-8")
+
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 6, 10, 12, 0, 0, 123456, tzinfo=tz)
+
+        monkeypatch.setattr(checkpoint, "datetime", FixedDatetime)
+
+        ref1 = checkpoint.make_checkpoint(str(git_repo), "edit_file", str(path))
+        path.write_text("ai edit 1\n", encoding="utf-8")
+        ref2 = checkpoint.make_checkpoint(str(git_repo), "edit_file", str(path))
+        path.write_text("ai edit 2\n", encoding="utf-8")
+
+        ok2, _ = checkpoint.undo_last_checkpoint()
+        assert ok2 is True
+        assert path.read_text(encoding="utf-8") == "ai edit 1\n"
+
+        ok1, _ = checkpoint.undo_last_checkpoint()
+        assert ok1 is True
+        assert path.read_text(encoding="utf-8") == "user edit\n"
+        assert ref1 != ref2
 
     def test_new_file_outside_project_is_not_deleted(self, git_repo, tmp_path):
         outside = tmp_path / "outside.txt"

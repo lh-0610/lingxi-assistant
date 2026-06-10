@@ -33,6 +33,19 @@ _checkpoint_stack: list = []
 _lock = threading.Lock()
 _MAX_STACK = 50
 
+# 串行化整个 checkpoint/undo：两会话同项目并发时，stash push 与紧随的 rev-parse refs/stash
+# 之间若被另一次 push 插入，refs/stash 会指向别人的快照 → 串改。RLock 覆盖 push→rev-parse→apply。
+import functools as _functools
+_git_lock = threading.RLock()
+
+
+def _git_synchronized(fn):
+    @_functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        with _git_lock:
+            return fn(*args, **kwargs)
+    return _wrapper
+
 # 不同 project root 的 git 仓库检测缓存，避免每次 edit 都 fork git
 _is_git_cache: dict = {}
 
@@ -81,6 +94,7 @@ def _path_is_tracked(project_root: str, path: str) -> bool:
         return False
 
 
+@_git_synchronized
 def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[str]:
     """打一个快照。返回 stash ref（成功）或 None（跳过 / 失败）。
 
@@ -109,10 +123,18 @@ def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[st
         )
         if r.returncode != 0:
             return None
-        # 立刻 pop 回工作区——保留 stash ref 同时不影响当前内容
-        # 注意：git stash apply 而不是 pop，apply 会保留 stash 列表里的引用
+        ref_r = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/stash"],
+            cwd=project_root, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5,
+        )
+        if ref_r.returncode != 0:
+            subprocess.run(["git", "stash", "drop"], cwd=project_root, timeout=5)
+            return None
+        ref = (ref_r.stdout or "").strip()
+        # 立刻 apply 回工作区，并使用稳定的 stash commit hash，避免后续 stash 顺序变化。
         r2 = subprocess.run(
-            ["git", "stash", "apply"],
+            ["git", "stash", "apply", ref],
             cwd=project_root, capture_output=True, timeout=10,
         )
         if r2.returncode != 0:
@@ -122,7 +144,6 @@ def make_checkpoint(project_root: str, tool_name: str, path: str) -> Optional[st
     except Exception:
         return None
 
-    ref = "stash@{0}"  # 刚 push 进去的就在 0
     _push_stack(project_root, ref, tool_name, full_path, existed=existed, tracked=tracked)
     # 真正把超额的旧快照从 git 里删掉，否则 stash 会无限堆积
     # （之前只 pop 内存里的栈、没 drop git stash，攒到几百张拖慢 git）
@@ -191,6 +212,7 @@ def latest_checkpoint_info() -> Optional[dict]:
         return dict(_checkpoint_stack[-1]) if _checkpoint_stack else None
 
 
+@_git_synchronized
 def undo_last_checkpoint() -> tuple[bool, str]:
     """撤销最近一次 checkpoint。
 
@@ -248,18 +270,7 @@ def undo_last_checkpoint() -> tuple[bool, str]:
     # 比 `git stash apply` 更稳——后者在工作区脏（AI 已改了其它东西）时会
     # 报 "would be overwritten" 然后失败。
     try:
-        list_r = subprocess.run(
-            ["git", "stash", "list"], cwd=project_root, capture_output=True, timeout=5,
-        )
-        target = None
-        if list_r.returncode == 0:
-            ts_str = datetime.fromtimestamp(cp["ts"]).strftime("%Y%m%d-%H%M%S")
-            for line in list_r.stdout.decode("utf-8", errors="replace").splitlines():
-                if ts_str in line:
-                    target = line.split(":", 1)[0]
-                    break
-        target = target or ref
-
+        target = ref
         if not cp.get("tracked", True):
             target = f"{target}^3"
         r = subprocess.run(

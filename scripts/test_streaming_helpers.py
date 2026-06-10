@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 import src.streaming as streaming
 
@@ -82,6 +82,49 @@ class TestSystemMessageNormalization:
         assert "continue verification" in normalized[-1].content
         assert history[-1] is late_system
         assert isinstance(history[-1], SystemMessage)
+
+
+class TestSanitizeToolPairs:
+    def test_dangling_tool_use_gets_placeholder_result(self):
+        # 停止/删除留下：AIMessage 有 tool_call 但缺对应 ToolMessage
+        history = [
+            HumanMessage(content="q"),
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "t1"}]),
+            HumanMessage(content="next"),
+        ]
+        out = streaming._sanitize_tool_pairs(history)
+        assert isinstance(out[2], ToolMessage) and out[2].tool_call_id == "t1"
+        assert out[3] is history[2]
+
+    def test_drops_orphan_tool_result(self):
+        # 压缩把 tool_use 压走，只剩孤儿 ToolMessage
+        history = [
+            HumanMessage(content="q"),
+            ToolMessage(content="result", tool_call_id="gone"),
+            AIMessage(content="answer"),
+        ]
+        out = streaming._sanitize_tool_pairs(history)
+        assert all(not isinstance(m, ToolMessage) for m in out)
+
+    def test_keeps_well_formed_pairs_unchanged(self):
+        history = [
+            AIMessage(content="", tool_calls=[{"name": "x", "args": {}, "id": "a"}]),
+            ToolMessage(content="ok", tool_call_id="a"),
+        ]
+        out = streaming._sanitize_tool_pairs(history)
+        assert len(out) == 2 and out[0] is history[0] and out[1] is history[1]
+
+    def test_partial_answer_fills_only_missing(self):
+        history = [
+            AIMessage(content="", tool_calls=[
+                {"name": "x", "args": {}, "id": "a"},
+                {"name": "y", "args": {}, "id": "b"},
+            ]),
+            ToolMessage(content="ok", tool_call_id="a"),
+        ]
+        out = streaming._sanitize_tool_pairs(history)
+        ids = {m.tool_call_id for m in out if isinstance(m, ToolMessage)}
+        assert ids == {"a", "b"}
 
 
 class TestSystemPromptCache:

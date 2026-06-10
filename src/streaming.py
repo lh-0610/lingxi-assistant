@@ -140,6 +140,48 @@ def _normalize_nonleading_system_messages(messages):
     return normalized
 
 
+def _sanitize_tool_pairs(messages):
+    """保证发给 API 的历史里 tool_use 必配 tool_result（Anthropic / MiMo 硬性要求）。
+
+    停止生成 / 删除会话 / 历史压缩都可能留下"AIMessage 有 tool_call 但缺对应
+    ToolMessage"（或反之的孤儿 ToolMessage），原样发出去会 400
+    （tool_use ids must have corresponding tool_result）。这里统一兜底：
+      - AIMessage 的某个 tool_call 没人应答 → 紧跟其后补一条占位 ToolMessage
+      - 没有对应 tool_use 的孤儿 ToolMessage（如压缩把 tool_use 压走了）→ 丢弃
+    只清洗发送副本，不动 state.chat_history。一处兜住停止/删除/压缩的悬空块。
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    def _tcid(tc):
+        return tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+
+    valid_ids = set()
+    answered = set()
+    for m in messages or []:
+        if isinstance(m, AIMessage):
+            for tc in (getattr(m, "tool_calls", None) or []):
+                if _tcid(tc):
+                    valid_ids.add(_tcid(tc))
+        elif isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None):
+            answered.add(m.tool_call_id)
+
+    out = []
+    for m in messages or []:
+        if isinstance(m, ToolMessage):
+            if getattr(m, "tool_call_id", None) in valid_ids:
+                out.append(m)          # 有对应 tool_use 才保留
+            continue                   # 否则丢弃孤儿 result
+        out.append(m)
+        if isinstance(m, AIMessage):
+            for tc in (getattr(m, "tool_calls", None) or []):
+                tid = _tcid(tc)
+                if tid and tid not in answered:
+                    out.append(ToolMessage(
+                        content="[工具调用被中断，无结果]", tool_call_id=tid))
+                    answered.add(tid)   # 防同一 id 重复补
+    return out
+
+
 def _stream_chunks_with_retry(llm_with_tools, messages, ui=None):
     """Retry transient stream startup failures before any chunk is displayed."""
     for attempt in range(STREAM_RETRY_ATTEMPTS):
@@ -538,6 +580,10 @@ def _prepare_stream_history(ui):
             )
         except Exception:
             pass
+
+    # 发送前兜底：保证 tool_use/tool_result 配对（停止/删除/压缩留下的悬空会 400）。
+    # 放在压缩之后——压缩切断的 pair 也一并修。
+    history_for_send = _sanitize_tool_pairs(history_for_send)
 
     # ── Debug Inspector：开始一条 record（即使用户没打开 F12 也照收）──
     # 把首条 SystemMessage 单拿出来当 system_prompt 字段，messages 列表里不再重复

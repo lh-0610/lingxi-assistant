@@ -40,8 +40,9 @@ _confirm_counter = [0]
 
 
 def _new_confirm_id() -> str:
-    _confirm_counter[0] += 1
-    return str(_confirm_counter[0])
+    with _pending_lock:   # 多会话并发确认时 counter 自增不原子会撞 id，覆盖彼此的 pending 条目
+        _confirm_counter[0] += 1
+        return str(_confirm_counter[0])
 
 
 def _resolve_remote_confirm(cid: str, allow: bool, remember: bool = False) -> bool:
@@ -64,9 +65,15 @@ def _resolve_remote_confirm(cid: str, allow: bool, remember: bool = False) -> bo
         if remember:
             entry["result"]["remember"] = True
         # 手机端明确拒绝 = 停掉本次生成（与 PC 端 _resolve_command_confirm 行为一致），
-        # 否则远程 agent 被拒后会继续往下试别的、反复弹手机确认
+        # 否则远程 agent 被拒后会继续往下试别的、反复弹手机确认。
+        # 关键：停的是【发起确认的那个会话】（result 里携带的 _session），不是当前 active——
+        # 否则在前台聊别的会话时，手机拒绝会误杀前台那个无辜会话。
         if not allow:
-            _state.stop_flag = True
+            _req_sess = entry["result"].get("_session")
+            if _req_sess is not None:
+                _req_sess.stop_flag = True
+            else:
+                _state.stop_flag = True
         # 让主线程隐藏可能还挂着的 PC 确认卡（仅 UI，不碰 result/done）。
         # 必须在 done.set() 之前 emit：dismiss 先入主线程队列，worker 唤醒后即便
         # 立刻弹下一张卡，FIFO 也保证 dismiss 先处理、不会误清掉新卡。

@@ -167,7 +167,9 @@ def save_session(*, session=None):
         "title": title,
         "updated": datetime.now().isoformat(),
         "project": current_project,
-        "messages": [_msg_to_dict(m) for m in chat_history],
+        # list() 先快照：worker 线程可能正在 append（切会话时主线程存后台会话），
+        # 直接迭代会撞 "list changed size during iteration"。
+        "messages": [_msg_to_dict(m) for m in list(chat_history)],
     }
     with _LOCK:
         with open(session_file, "w", encoding="utf-8") as f:
@@ -332,6 +334,14 @@ def _update_index(session_id, title, project=None):
         for old_id in dropped_ids:
             if old_id in kept_ids or old_id == state.current_session_id:
                 continue
+            # 内存里还开着的会话（前台或后台正在跑的）不删盘——否则正在用的旧会话被挤出
+            # 50 名额时文件被删，重启即丢整段对话。
+            try:
+                from . import session as _session_mod
+                if _session_mod.get(old_id) is not None:
+                    continue
+            except Exception:
+                pass
             old_file = os.path.join(MEMORY_DIR, f"{old_id}.json")
             try:
                 if os.path.exists(old_file):

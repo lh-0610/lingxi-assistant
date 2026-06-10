@@ -320,6 +320,7 @@ def _build_mcp_tools() -> list:
     from langchain_core.tools import StructuredTool
 
     all_tools = []
+    _seen_names = set()   # 防同 server 内不同原名清洗后撞名（如 search-web / search_web）互相覆盖
 
     for server_name, tools_list in _server_tools.items():
         for mcp_tool in tools_list:
@@ -330,6 +331,12 @@ def _build_mcp_tools() -> list:
             # 命名规则：mcp_{server}_{tool}（非法字符 → _，防撞内置工具）
             safe_name = re.sub(r"[^a-zA-Z0-9]", "_", original_name).strip("_")
             wrapped_name = f"mcp_{server_name}_{safe_name}"
+            if wrapped_name in _seen_names:   # 撞名 → 加数字后缀，别让后者悄悄覆盖前者
+                _suffix = 2
+                while f"{wrapped_name}_{_suffix}" in _seen_names:
+                    _suffix += 1
+                wrapped_name = f"{wrapped_name}_{_suffix}"
+            _seen_names.add(wrapped_name)
 
             # display name 加 🔌 前缀
             MCP_DISPLAY_NAMES[wrapped_name] = f"🔌 {original_name}（{server_name}）"

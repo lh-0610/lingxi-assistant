@@ -87,6 +87,17 @@ def _dispatch(text: str):
 def _poll_loop():
     global _offset, _running
     logger.info("Telegram 遥控轮询线程已启动")
+    # 启动先跳过积压：离线期间堆积的旧消息/旧回调不该一上线就执行（offset=-1 只取最新一条，
+    # 把 _offset 推到它之后即丢弃全部 backlog；也避免旧 callback 撞上重置归 1 的 confirm 计数器）。
+    try:
+        _r0 = httpx.get(f"{_BASE_URL}/getUpdates", params={"offset": -1, "timeout": 0}, timeout=10)
+        if _r0.status_code == 200:
+            _d0 = _r0.json()
+            if _d0.get("ok") and _d0.get("result"):
+                _offset = _d0["result"][-1]["update_id"] + 1
+                logger.info(f"Telegram 跳过启动前积压，offset 从 {_offset} 开始")
+    except Exception:
+        pass
     while _running:
         try:
             r = httpx.get(

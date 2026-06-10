@@ -9,11 +9,26 @@ import re
 import shutil
 import subprocess
 import logging
+import tempfile
+import threading
+import functools
 
 logger = logging.getLogger(__name__)
 
 # 运行期活跃 worktree 注册表：session_id → {"path": str, "branch": str}
 _WORKTREES: dict[str, dict] = {}
+
+# 串行化所有 worktree 生命周期操作：_WORKTREES 是被 UI 线程（隔离开关）、worker 线程
+# （子 Agent spawn）、退出清理共享的可变 dict，且并发 `git worktree add` 会撞 git 索引锁。
+_WT_LOCK = threading.RLock()
+
+
+def _synchronized(fn):
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        with _WT_LOCK:
+            return fn(*args, **kwargs)
+    return _wrapper
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -151,6 +166,7 @@ def _is_within(child, parent) -> bool:
 # ── core API ──────────────────────────────────────────────────────────────────
 
 
+@_synchronized
 def create(session, project_path: str, session_id: str = None) -> str | None:
     """创建隔离 worktree，返回路径字符串；非 git 仓库返回 ``None``。
 
@@ -180,6 +196,16 @@ def create(session, project_path: str, session_id: str = None) -> str | None:
         if not _is_within(wt_path, wt_dir):
             raise ValueError("worktree 路径越界")
 
+        # 程序退出时会保留隔离区，重启后同一 session_id 应复用磁盘上的 worktree。
+        if os.path.isdir(wt_path):
+            info = _worktree_info_from_path(wt_path)
+            if info and os.path.realpath(info["project_path"]) == os.path.realpath(project_path):
+                _WORKTREES[session_id] = {"path": wt_path, "branch": branch}
+                session.worktree = wt_path
+                logger.info(f"已恢复隔离 worktree: {wt_path} (branch={branch})")
+                return wt_path
+            _cleanup_worktree(wt_path)
+
         # 若分支残留先删（从上次异常退出恢复）
         subprocess.run(
             ["git", "branch", "-D", branch],
@@ -208,6 +234,7 @@ def create(session, project_path: str, session_id: str = None) -> str | None:
         return None
 
 
+@_synchronized
 def finish(session, *, apply_changes: bool = False) -> tuple[bool, str]:
     """结束会话的 worktree。
 
@@ -253,6 +280,7 @@ def finish(session, *, apply_changes: bool = False) -> tuple[bool, str]:
     return True, "隔离区已丢弃并清理。"
 
 
+@_synchronized
 def cleanup_all() -> None:
     """清理所有注册的 worktree。调用时机：程序退出。"""
     for sid, info in list(_WORKTREES.items()):
@@ -294,6 +322,7 @@ def _remove_worktree(wt_path: str, branch: str) -> None:
 
 def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[bool, str]:
     """把 worktree 相对 HEAD 的所有改动应用到主项目工作区。"""
+    temp_index = None
     try:
         if not project_path or not os.path.isdir(project_path):
             return False, "无法定位主项目，已保留隔离区未清理。"
@@ -319,7 +348,8 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
             return False, f"暂存隔离区改动失败：{(add.stderr or '').strip() or '未知错误'}"
 
         changed = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "HEAD"],
+            # core.quotepath=false：非 ASCII（中文）文件名不被转义成 \xxx，否则快照/恢复对不上真路径
+            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "HEAD"],
             cwd=wt_path, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10,
         )
@@ -337,9 +367,20 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         if not diff.stdout:
             return True, "隔离区没有需要恢复的改动。"
 
+        index_path = os.path.join(project_path, ".git", "index")
+        tmp = tempfile.NamedTemporaryFile(prefix="lingxi-index-", delete=False)
+        tmp.close()
+        temp_index = tmp.name
+        if os.path.exists(index_path):
+            shutil.copy2(index_path, temp_index)
+
+        git_env = os.environ.copy()
+        git_env["GIT_INDEX_FILE"] = temp_index
+
         check = subprocess.run(
             ["git", "apply", "--check", "--3way", "--binary"],
             cwd=project_path, input=diff.stdout, capture_output=True,
+            env=git_env,
             timeout=30,
         )
         if check.returncode != 0:
@@ -353,6 +394,7 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         apply = subprocess.run(
             ["git", "apply", "--3way", "--binary"],
             cwd=project_path, input=diff.stdout, capture_output=True,
+            env=git_env,
             timeout=30,
         )
         if apply.returncode != 0:
@@ -367,6 +409,12 @@ def _apply_changes_to_project(wt_path: str, project_path: str | None) -> tuple[b
         return False, "恢复隔离区改动超时，已保留 worktree。"
     except Exception as e:
         return False, f"恢复隔离区改动异常，已保留 worktree：{e}"
+    finally:
+        if temp_index and os.path.exists(temp_index):
+            try:
+                os.remove(temp_index)
+            except OSError:
+                pass
 
 
 def _snapshot_project_files(project_path: str, rel_paths: list[str]) -> dict[str, bytes | None]:

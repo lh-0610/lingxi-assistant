@@ -197,6 +197,25 @@ class TestEditFileIntegration:
         content = f.read_text(encoding="utf-8")
         assert content == "xxx bbb xxx bbb xxx"
 
+    def test_l2_match_does_not_glue_next_line(self, project_dir):
+        """L2(去行尾空白)匹配后不应吞掉文件末匹配行的换行，把下一行黏上来。"""
+        f = project_dir / "glue.py"
+        # 第二行带尾随空格 → old(无尾空格) L1 精确匹配失败、落到 L2
+        f.write_text("def f():\n    x = 1   \n    return x\ndef g():\n    pass\n", encoding="utf-8")
+        from src.tools import edit_file
+
+        result = edit_file.func(
+            str(f),
+            "def f():\n    x = 1\n    return x",   # 无尾随空格、无尾换行
+            "def f():\n    x = 2\n    return x",
+        )
+        assert "成功" in result or "✅" in result
+        content = f.read_text(encoding="utf-8")
+        assert "x = 2" in content
+        # 关键：return x 与 def g() 仍各自成行，没被黏成 "return xdef g():"
+        assert "    return x\ndef g():" in content
+        assert "return xdef g" not in content
+
     def test_old_string_not_found(self, project_dir, sample_py_file):
         from src.tools import edit_file
 
