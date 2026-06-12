@@ -45,6 +45,8 @@
 - 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`·`git_status`（只读）+ `git_stage`·`git_commit`（git 写，**执行前强制弹确认卡、无 push**）/ `fetch_url`·`web_search`（联网查资料）
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
 - ↶ **Checkpoint / 撤销**：edit/write/append 写盘前自动 git stash 快照，顶栏一键撤销 AI 上一轮改动（路径级恢复）
+- 🔒 **隔离模式（Git worktree）**：顶栏一键把 AI 的改动关进独立 worktree，主项目零影响；满意点「恢复」把改动合并回主项目（AI 在隔离区里 commit 过的也算），冲突时保留 worktree 不污染主项目。需 git 项目
+- 🤖 **并行子 Agent**：任务能拆成 3 个以上【相互独立、改不同文件】的子任务时，`spawn_agents` 派生多个子 Agent，各自在独立 worktree 并行写代码、自动合并回主项目（有依赖 / 改同一文件的不并行，退回顺序执行）
 - 📄 **`.lingxirules` 项目级指令**：项目根放一个文件写项目约定，自动注入、优先级最高
 
 ### MCP 客户端（可选）
