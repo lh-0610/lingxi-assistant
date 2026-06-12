@@ -19,6 +19,7 @@ from . import checkpoint as _checkpoint
 from .verification import mark_dirty as _v_mark_dirty, mark_check as _v_mark_check, mark_tests as _v_mark_tests, mark_diff_reviewed as _v_mark_diff_reviewed
 from .paths import _app_data_dir, logger
 from .limits import (
+    BG_MAX_RETAINED_EXITED,
     READ_FILE_DEFAULT_LIMIT,
     RUN_COMMAND_MAX_OUTPUT_CHARS,
     RUN_COMMAND_TIMEOUT_S,
@@ -467,9 +468,15 @@ def _subagent_command_rejection(command: str, cwd: str | None = None) -> str:
     if re.search(r"(^|[\\/\s\"'=])\.\.([\\/\s\"']|$)", text):
         return "拒绝：子 Agent 命令不能使用 '..' 跳出自己的 worktree。"
 
+    # 这是 best-effort 防护(子 Agent 是用户派的协作 LLM、非对抗沙箱),正则永远抓不全所有
+    # 路径写法;真正的边界是 run_command 的 cwd=worktree。已知未覆盖:未展开的环境变量
+    # (%SystemRoot% / $HOME)、命令替换 $(...)。下面尽量堵常见的绝对路径形式。
     path_patterns = [
-        r"[A-Za-z]:[\\/][^\s\"'<>|&;]+",
-        r"\\\\[^\s\"'<>|&;]+",
+        r"[A-Za-z]:[\\/][^\s\"'<>|&;]+",        # 带盘符: C:\... / D:/...
+        r"\\\\[^\s\"'<>|&;]+",                    # UNC: \\server\share
+        # 盘符相对的绝对路径: \Windows\System32\... —— Windows 下解析到当前盘根，逃出 worktree。
+        # 要求前面不是字符/冒号/反斜杠(避免命中 UNC 第二段或转义序列)。
+        r"(?<![\w:\\])\\(?:[^\s\"'<>|&;\\/]+[\\/])*[^\s\"'<>|&;\\/]+",
         r"(?<![\w:])/(?:home|tmp|var|etc|usr|mnt|workspace|Users|opt|root)/[^\s\"'<>|&;]*",
     ]
     for pattern in path_patterns:
@@ -1134,6 +1141,21 @@ def _new_bg_id() -> str:
         return f"bg{_bg_counter[0]}"
 
 
+def _evict_old_exited_bg() -> None:
+    """淘汰积累的【已退出】后台进程，保留最近 BG_MAX_RETAINED_EXITED 个仍可读最终输出。
+
+    必须在持有 _bg_lock 时调用。只淘汰已退出项（proc.poll() 非 None），运行中的从不动；
+    按 start_ts 淘汰最老的。防长会话里崩溃/跑完的后台任务连同 2000 行输出 deque 无限驻留。
+    """
+    exited = [(sid, info) for sid, info in _bg_procs.items()
+              if info["proc"].poll() is not None]
+    if len(exited) <= BG_MAX_RETAINED_EXITED:
+        return
+    exited.sort(key=lambda kv: kv[1]["start_ts"])  # 最老的在前
+    for sid, _info in exited[:len(exited) - BG_MAX_RETAINED_EXITED]:
+        _bg_procs.pop(sid, None)
+
+
 @tool
 def run_command(command: str, timeout: int | None = None, background: bool = False) -> str:
     """执行系统命令并**流式**返回输出（边跑边显示，不必等命令结束）。
@@ -1235,6 +1257,7 @@ def run_command(command: str, timeout: int | None = None, background: bool = Fal
                 pass  # 进程被杀时 stdout 关闭会抛异常，忽略
 
         with _bg_lock:
+            _evict_old_exited_bg()   # 注册新进程前先淘汰积累的已退出项，防无限驻留
             _bg_procs[bg_id] = {
                 "proc": proc,
                 "command": command,
@@ -3545,7 +3568,7 @@ def git_stage(paths: list[str]) -> str:
         )
         cached_output = (cached.stdout or "").strip()
 
-        output = f"✅ 已暂存以下路径:\n" + "\n".join(f"  · {p}" for p in rel_paths)
+        output = "✅ 已暂存以下路径:\n" + "\n".join(f"  · {p}" for p in rel_paths)
         if cached_output:
             output += f"\n\n--- 当前暂存区 ---\n{cached_output}"
         output += "\n\n💡 建议继续用 git_diff(staged=True) 审查暂存内容，确认无误后再提交。"
@@ -3598,7 +3621,7 @@ def git_unstage(paths: list[str]) -> str:
         )
         cached_output = (cached.stdout or "").strip()
 
-        output = f"✅ 已取消暂存:\n" + "\n".join(f"  · {p}" for p in rel_paths)
+        output = "✅ 已取消暂存:\n" + "\n".join(f"  · {p}" for p in rel_paths)
         if cached_output:
             output += f"\n\n--- 当前暂存区 ---\n{cached_output}"
         else:
@@ -3658,10 +3681,10 @@ def git_commit(message: str) -> str:
                 elif line[1] in "MD":
                     unstaged_files.append(line[3:].strip() if len(line) > 3 else "")
             if unstaged_files:
-                warnings.append(f"⚠️ 以下文件有未暂存改动，不会进入本次提交:\n" +
+                warnings.append("⚠️ 以下文件有未暂存改动，不会进入本次提交:\n" +
                                 "\n".join(f"  · {f}" for f in unstaged_files[:20]))
             if untracked_files:
-                warnings.append(f"⚠️ 以下未跟踪文件不会进入本次提交:\n" +
+                warnings.append("⚠️ 以下未跟踪文件不会进入本次提交:\n" +
                                 "\n".join(f"  · {f}" for f in untracked_files[:20]))
 
         # 获取暂存文件列表（给提交后的摘要用）

@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer, QSize, QRectF
 from PySide6.QtGui import QIcon, QPainter, QFont, QFontMetrics, QColor, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
-    QTextEdit, QVBoxLayout, QWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QTextEdit, QVBoxLayout, QWidget, QStyle, QStyledItemDelegate,
 )
 
 from ._base import BASE_DIR

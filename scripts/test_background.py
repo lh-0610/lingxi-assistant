@@ -53,6 +53,54 @@ class TestNewBgId:
         assert all(re.fullmatch(r"bg\d+", i) for i in ids)
 
 
+class _FakeProc:
+    """假进程：poll() 返回 None=运行中 / 整数=已退出。"""
+    def __init__(self, exited: bool):
+        self.returncode = 0 if exited else None
+    def poll(self):
+        return self.returncode
+
+
+class TestBgEviction:
+    """_evict_old_exited_bg：已退出项有界淘汰，运行中的永不动。"""
+
+    def test_evicts_oldest_exited_keeps_running(self):
+        from src.tools import _evict_old_exited_bg, _bg_lock, _bg_procs
+        from src.limits import BG_MAX_RETAINED_EXITED
+        with _bg_lock:
+            _bg_procs.clear()
+            # 2 个运行中（最老）+ 超过上限的已退出
+            _bg_procs["run_a"] = {"proc": _FakeProc(False), "command": "a", "output": [], "start_ts": 1.0}
+            _bg_procs["run_b"] = {"proc": _FakeProc(False), "command": "b", "output": [], "start_ts": 2.0}
+            for i in range(BG_MAX_RETAINED_EXITED + 3):
+                _bg_procs[f"exit_{i}"] = {"proc": _FakeProc(True), "command": f"e{i}",
+                                          "output": [], "start_ts": 100.0 + i}
+            _evict_old_exited_bg()
+            keys = set(_bg_procs.keys())
+        try:
+            # 运行中的两个必须都在
+            assert "run_a" in keys and "run_b" in keys
+            # 已退出的被裁到上限
+            exited_left = [k for k in keys if k.startswith("exit_")]
+            assert len(exited_left) == BG_MAX_RETAINED_EXITED
+            # 被淘汰的是最老的（exit_0/1/2），最新的保留
+            assert "exit_0" not in keys
+            assert f"exit_{BG_MAX_RETAINED_EXITED + 2}" in keys
+        finally:
+            with _bg_lock:
+                _bg_procs.clear()
+
+    def test_noop_when_under_limit(self):
+        from src.tools import _evict_old_exited_bg, _bg_lock, _bg_procs
+        with _bg_lock:
+            _bg_procs.clear()
+            _bg_procs["e1"] = {"proc": _FakeProc(True), "command": "x", "output": [], "start_ts": 1.0}
+            _evict_old_exited_bg()
+            n = len(_bg_procs)
+            _bg_procs.clear()
+        assert n == 1
+
+
 class TestBackgroundLifecycle:
     def test_start_returns_bg_id_and_registers(self, bg_env):
         result = run_command.func(_SLEEP_CMD, background=True)

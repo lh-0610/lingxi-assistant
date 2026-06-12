@@ -6,7 +6,6 @@
   - extract_imports（Python import/from + JS import/require）
   - code_map_ts（目录级符号地图）
 """
-import os
 import pytest
 
 from src import codeintel

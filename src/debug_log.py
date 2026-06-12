@@ -12,7 +12,15 @@ import uuid
 from collections import deque
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Signal
+# Qt 可选：headless 部署（服务器版，无 PySide6）只用数据层，Signal 通知降级为 no-op。
+# 桌面端行为完全不变（有 PySide6 时走原 QObject + Signal 路径）。
+try:
+    from PySide6.QtCore import QObject as _QtBase, Signal as _QtSignal
+    _HAS_QT = True
+except ImportError:
+    _QtBase = object
+    _QtSignal = None
+    _HAS_QT = False
 
 from .limits import DEBUG_BASE64_PREVIEW_CHARS, DEBUG_MAX_RECORDS, DEBUG_TEXT_PREVIEW_CHARS
 
@@ -21,9 +29,10 @@ _BASE64_PREVIEW = DEBUG_BASE64_PREVIEW_CHARS  # 多模态 image base64 截断阈
 _TEXT_PREVIEW = DEBUG_TEXT_PREVIEW_CHARS      # 单条文本消息过长时截断
 
 
-class _Recorder(QObject):
-    """单例 QObject——挂 Qt Signal 给 UI 用。"""
-    record_added = Signal(dict)  # 新增一条 record 时 emit
+class _Recorder(_QtBase):
+    """单例——有 Qt 时挂 Signal 给 Inspector UI，headless 时纯内存 ring buffer。"""
+    if _HAS_QT:
+        record_added = _QtSignal(dict)  # 新增一条 record 时 emit
 
     def __init__(self):
         super().__init__()
@@ -34,7 +43,8 @@ class _Recorder(QObject):
         with self._lock:
             self._records.append(record)
         # signal 在 worker 线程 emit；接收槽默认 AutoConnection 会自动 queue 到 UI 线程
-        self.record_added.emit(record)
+        if _HAS_QT:
+            self.record_added.emit(record)
 
     def all(self) -> list[dict]:
         with self._lock:

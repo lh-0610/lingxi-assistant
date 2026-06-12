@@ -128,3 +128,28 @@ class TestCheckpointUndo:
         assert ok is False
         assert "超出项目范围" in message
         assert outside.read_text(encoding="utf-8") == "keep me\n"
+
+    def test_failed_undo_keeps_checkpoint_for_retry(self, git_repo, tmp_path):
+        """撤销失败时快照必须保留在栈上，让用户能再次重试（修‘pop 后失败丢状态’）。"""
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep me\n", encoding="utf-8")
+        checkpoint._push_stack(
+            str(git_repo), "__HEAD__:00:00:00", "write_file", str(outside),
+            existed=False, tracked=False,
+        )
+        assert checkpoint.has_undoable_checkpoint() is True
+
+        ok, _ = checkpoint.undo_last_checkpoint()
+        assert ok is False
+        # 关键：失败后快照仍在，可重试
+        assert checkpoint.has_undoable_checkpoint() is True
+
+    def test_successful_undo_consumes_checkpoint(self, git_repo):
+        """撤销成功后才弹栈：成功一次后栈应为空。"""
+        path = git_repo / "tracked.txt"
+        checkpoint.make_checkpoint(str(git_repo), "edit_file", str(path))
+        path.write_text("ai edit\n", encoding="utf-8")
+
+        ok, _ = checkpoint.undo_last_checkpoint()
+        assert ok is True
+        assert checkpoint.has_undoable_checkpoint() is False

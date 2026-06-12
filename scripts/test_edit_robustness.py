@@ -2,7 +2,9 @@
 
 直接测 _locate_edit 核心逻辑，不走 edit_file 的确认卡/checkpoint。
 """
-import sys, os, time
+import sys
+import os
+import time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

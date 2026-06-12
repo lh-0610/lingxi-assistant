@@ -7,11 +7,11 @@
 """
 import json
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget, QApplication,
+    QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QApplication,
 )
 
 from .. import debug_log
@@ -249,7 +249,7 @@ class DebugInspector(QDialog):
         request_block += code_block(sys_view or "<em>（空）</em>")
 
         # ── 请求：messages ──
-        request_block += f'<p style="color:#666;margin:8px 0 4px 0;">messages：</p>'
+        request_block += '<p style="color:#666;margin:8px 0 4px 0;">messages：</p>'
         for i, m in enumerate(req.get("messages") or []):
             role = m.get("role", "?")
             color = {"user": "#1e6fff", "assistant": "#d87755",
@@ -303,7 +303,7 @@ class DebugInspector(QDialog):
             resp_text[:DEBUG_RESPONSE_PREVIEW_CHARS]
             + ("..." if len(resp_text) > DEBUG_RESPONSE_PREVIEW_CHARS else "")
         )
-        response_block = section_title(f'📤 响应')
+        response_block = section_title('📤 响应')
         response_block += f'<p style="color:#666;margin:4px 0;">text（{len(resp_text)} 字）：</p>'
         response_block += code_block(resp_view or "<em>（空）</em>")
 

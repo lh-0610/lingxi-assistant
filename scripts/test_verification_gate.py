@@ -8,7 +8,6 @@
 
 import os
 import sys
-import types
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 

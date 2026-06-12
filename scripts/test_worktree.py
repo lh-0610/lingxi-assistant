@@ -9,11 +9,9 @@ import os
 import sys
 import shutil
 import subprocess
-import tempfile
 import threading
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -237,7 +235,7 @@ class TestCreate:
 
     def test_lock_prevents_concurrent_create(self, git_repo):
         """并发 create 不会冲突。"""
-        from src.worktree import create, _WORKTREES
+        from src.worktree import create
         results = {}
         errors = []
 

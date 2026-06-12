@@ -3,7 +3,6 @@
 同时保留 git_diff / git_log 已有测试。
 需要 git 才有意义，没装则整文件跳过。
 """
-import os
 import subprocess
 import shutil
 

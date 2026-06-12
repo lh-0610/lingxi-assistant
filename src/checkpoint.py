@@ -223,7 +223,14 @@ def undo_last_checkpoint() -> tuple[bool, str]:
     with _lock:
         if not _checkpoint_stack:
             return False, "没有可撤销的 checkpoint"
-        cp = _checkpoint_stack.pop()
+        cp = _checkpoint_stack[-1]   # 先 peek 不 pop：撤销可能失败（文件占用/冲突/越界），
+                                     # 失败要保留快照让用户重试，成功才 _consume() 弹出。
+
+    def _consume():
+        """撤销成功后才把这条快照弹出栈（仅当它仍是栈顶，防并发误弹）。"""
+        with _lock:
+            if _checkpoint_stack and _checkpoint_stack[-1] is cp:
+                _checkpoint_stack.pop()
 
     project_root = cp["project_root"]
     ref = cp["ref"]
@@ -244,8 +251,10 @@ def undo_last_checkpoint() -> tuple[bool, str]:
         try:
             if os.path.isfile(full_path) or os.path.islink(full_path):
                 os.remove(full_path)
+                _consume()
                 return True, f"已撤销新建文件 {rel}"
             if not os.path.exists(full_path):
+                _consume()
                 return True, f"新建文件 {rel} 已不存在，无需撤销"
             return False, f"撤销失败：{rel} 已不是普通文件，拒绝删除"
         except Exception as e:
@@ -260,6 +269,7 @@ def undo_last_checkpoint() -> tuple[bool, str]:
                 cwd=project_root, capture_output=True, timeout=10,
             )
             if r.returncode == 0:
+                _consume()
                 return True, f"已撤销对 {rel} 的改动（恢复到 HEAD）"
             return False, f"git checkout 失败：{r.stderr.decode('utf-8', errors='replace')[:200]}"
         except Exception as e:
@@ -278,9 +288,10 @@ def undo_last_checkpoint() -> tuple[bool, str]:
             cwd=project_root, capture_output=True, timeout=10,
         )
         if r.returncode == 0:
+            _consume()
             return True, f"已撤销 {cp['tool']} 对 {os.path.basename(path)} 的改动"
         return False, (
-            f"git checkout 失败："
+            "git checkout 失败："
             + r.stderr.decode("utf-8", errors="replace")[:200]
         )
     except Exception as e:

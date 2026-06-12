@@ -10,9 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src import state
 from src.tools import (
-    _locate_edit,
     _realign_indent,
 )
 

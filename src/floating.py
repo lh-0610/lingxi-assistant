@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .paths import MEMORY_DIR, APP_DIR, RESOURCE_DIR, logger
+from .paths import MEMORY_DIR, RESOURCE_DIR, logger
 try:
     from .config import PET_ANIMATION_SPEED
 except ImportError:

@@ -15,6 +15,10 @@ SEARCH_FILES_MAX_RESULTS = 50
 RUN_COMMAND_TIMEOUT_S = 300
 RUN_COMMAND_MAX_OUTPUT_CHARS = 5000
 TOOL_RESULT_PREVIEW_CHARS = 500
+# 后台命令注册表里"已退出"的进程最多保留几个（仍可被 read_background_output 读最终输出）。
+# 超过则淘汰最老的已退出项，防长会话里崩溃/跑完的后台任务连同 2000 行输出 deque 无限驻留。
+# 运行中的进程从不被淘汰。
+BG_MAX_RETAINED_EXITED = 10
 
 DEBUG_MAX_RECORDS = 50
 DEBUG_BASE64_PREVIEW_CHARS = 200

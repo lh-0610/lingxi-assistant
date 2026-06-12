@@ -14,35 +14,39 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from . import state as _state
 from . import state  # 公开给 ui.py 直接用：ui 里所有"写入"改成 src.state.X = ...
 from .paths import logger
+# ⚠️ 本模块是 facade(门面):下面很多名字在 agent.py 内部"未使用",但它们是**出口**——
+# UI 层(chat_window/sidebar/header)统一经 `agent.X` 访问(见 CLAUDE.md 架构说明)。
+# 用 noqa: F401 标记,**任何 linter / AI 清理"未使用 import"都不许删**,删了 UI 运行时直接
+# AttributeError(发图视觉桥接/角色卡切换/会话侧栏全炸,且单测覆盖不到这些 UI 路径)。
 from .models import (
     MODEL_LIST,
     check_ollama,
     _create_llm,
-    get_model_config_issues,
-    current_model_supports_vision,
-    get_vision_model_index,
-    describe_images_with_vision,
+    get_model_config_issues,        # noqa: F401  facade 出口 → chat_window
+    current_model_supports_vision,  # noqa: F401  facade 出口 → chat_window 视觉桥接
+    get_vision_model_index,         # noqa: F401  facade 出口 → chat_window 视觉桥接
+    describe_images_with_vision,    # noqa: F401  facade 出口 → chat_window 视觉桥接
 )
 from .roles import (
     SYSTEM_PROMPT,
     get_system_prompt as _get_system_prompt,  # 内部用
     get_current_role_name,
-    get_current_role_path,
-    set_role_card,
-    clear_role_card,
+    get_current_role_path,          # noqa: F401  facade 出口 → header 角色卡
+    set_role_card,                  # noqa: F401  facade 出口 → header 角色卡
+    clear_role_card,                # noqa: F401  facade 出口 → header 角色卡
     load_saved_role_card,
 )
 from .memory import (
     save_session,
-    load_session,
-    list_sessions,
-    delete_session,
-    reset_history,
+    load_session,                   # noqa: F401  facade 出口 → sidebar
+    list_sessions,                  # noqa: F401  facade 出口 → sidebar
+    delete_session,                 # noqa: F401  facade 出口 → sidebar
+    reset_history,                  # noqa: F401  facade 出口 → header/sidebar
     maybe_generate_session_title,
-    move_sessions_to_no_project,
+    move_sessions_to_no_project,    # noqa: F401  facade 出口 → sidebar 删项目
     _build_ai_message,
 )
-from .tools import ALL_TOOLS, build_all_tools
+from .tools import ALL_TOOLS, build_all_tools  # noqa: F401  ALL_TOOLS 为 facade 出口
 from .streaming import _stream_with_tools, _execute_tool
 from .claude_code import claude_code_loop as _claude_code_loop
 from . import session as _session_mod

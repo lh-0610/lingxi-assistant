@@ -79,6 +79,27 @@ class TestSubagentSpawn:
         finally:
             session.set_active(prev)
 
+    def test_subagent_blocks_drive_relative_path(self, tmp_path):
+        """Windows 盘符相对绝对路径(\\Windows\\...)会逃出 worktree，沙箱必须拦下。"""
+        import src.session as session
+        import src.tools as tools
+
+        prev = session.get_active()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        child = session.Session()
+        child.is_subagent = True
+        child.project = str(tmp_path)
+        child.worktree = str(worktree)
+        session.set_active(child)
+        try:
+            rej = tools._subagent_command_rejection(r"type \Windows\System32\drivers\etc\hosts")
+            assert rej and "worktree 外路径" in rej
+            # worktree 内的相对命令不应被误拦
+            assert tools._subagent_command_rejection("python build.py") == ""
+        finally:
+            session.set_active(prev)
+
     def test_subagent_blocks_outside_commands(self, tmp_path):
         import src.session as session
         import src.tools as tools
