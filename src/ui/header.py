@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QMenu, QMessageBox,
-    QPushButton, QWidget,
+    QPushButton, QSizePolicy, QWidget,
 )
 
 from .. import agent
@@ -64,6 +64,10 @@ class HeaderMixin:
         # 跟启动时解析的默认模型（agent 里按 default_model_id 设的 current_model_index）
         # 同步，而不是写死 0（0 是 Claude Code）。在 connect 之前设，不触发回调。
         self.model_combo.setCurrentIndex(agent.current_model_index)
+        # 关键:不让下拉框横向膨胀。QComboBox 默认会被 layout 拉伸去填满可用空间(实测能涨到
+        # 640px),把后面的 addStretch 吃光、一路顶到撤销按钮 → 顶栏看起来"挤在一起/被挡"。
+        # Maximum 策略让它停在 sizeHint(内容宽,受 stylesheet min-width 托底),多余空间归 stretch。
+        self.model_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._style_model_combo()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         layout.addWidget(self.model_combo)
