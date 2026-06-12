@@ -252,12 +252,14 @@ def create(session, project_path: str, session_id: str = None) -> str | None:
         subprocess.run(
             ["git", "branch", "-D", branch],
             cwd=project_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
 
         # 创建 worktree + 分支
         subprocess.run(
             ["git", "worktree", "add", "-b", branch, wt_path, "HEAD"],
             cwd=project_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             check=True, timeout=30,
         )
 
@@ -272,6 +274,7 @@ def create(session, project_path: str, session_id: str = None) -> str | None:
         subprocess.run(
             ["git", "branch", "-D", branch],
             cwd=project_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
         return None
 
@@ -346,7 +349,8 @@ def _remove_worktree(wt_path: str, branch: str) -> None:
         try:
             subprocess.run(
                 ["git", "worktree", "remove", "--force", wt_path],
-                cwd=project_path, capture_output=True, text=True, timeout=30,
+                cwd=project_path, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=30,
             )
         except Exception:
             _cleanup_worktree(wt_path)
@@ -354,7 +358,8 @@ def _remove_worktree(wt_path: str, branch: str) -> None:
         try:
             subprocess.run(
                 ["git", "branch", "-D", branch],
-                cwd=project_path, capture_output=True, text=True, timeout=10,
+                cwd=project_path, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10,
             )
         except Exception:
             pass
