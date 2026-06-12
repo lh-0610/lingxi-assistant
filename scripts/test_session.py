@@ -196,6 +196,25 @@ class TestSaveLoadSession:
         assert len(state.chat_history) == 3
         assert state.current_session_id == sid
 
+    def test_reset_history_drops_recycled_session_from_registry(self, isolated_memory):
+        """切角色卡/恢复默认走 reset_history：把当前会话回收成新对话后，必须把旧 id 从注册表
+        摘掉，否则点击侧栏旧会话会命中这个被清空的对象、显示空白且加载不出（回归 #会话加载）。"""
+        import src.session as _session
+        self._setup_session(isolated_memory)
+        save_session()
+        sid = state.current_session_id
+        assert sid is not None
+        assert _session.get(sid) is not None          # 存盘后在注册表
+
+        reset_history()                               # 回收当前会话成空白新对话
+        assert state.current_session_id is None
+        assert _session.get(sid) is None              # 旧 id 已摘除（不再命中空对象）
+
+        # 旧会话内容仍在盘上，重新读盘能完整恢复
+        assert load_session(sid) is True
+        assert len(state.chat_history) == 3
+        assert state.current_session_id == sid
+
     def test_save_skips_short_history(self, isolated_memory):
         """只有 system message 时不应保存。"""
         state.chat_history.clear()

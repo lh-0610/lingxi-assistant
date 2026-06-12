@@ -365,8 +365,14 @@ class SidebarMixin:
         _prev = _session.get_active()  # 切换前的会话，新建会话继承它的 model/mode
         # 存当前 active（不打断正在后台跑的会话；save 内部会把它 re-key 进注册表）
         agent.save_session()
-        # 命中注册表 → 该会话已在内存（可能正在后台跑），直接切 active，绝不重读盘覆盖它
+        # 命中注册表 → 该会话已在内存（可能正在后台跑），直接切 active，绝不重读盘覆盖它。
         target = _session.get(session_id)
+        # 但要校验它【确实仍是这个会话】：reset_history（切角色卡 / 恢复默认）会把某个 Session
+        # 对象"回收"成空白新对话（current_session_id 置 None、历史清空），却仍以旧 id 留在注册表。
+        # 若不校验，点击侧栏该会话会命中这个被清空的陈旧对象、显示空白且不重读盘（本会话"加载
+        # 不出来"，直到新对话把它挤掉才恢复）。id 不匹配即视为未命中、重新读盘。
+        if target is not None and getattr(target, "current_session_id", None) != session_id:
+            target = None
         if target is None:
             # 未打开：新建 Session 读盘填充并注册（key = session_id）
             target = _session.Session()
