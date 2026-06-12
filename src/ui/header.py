@@ -137,12 +137,17 @@ class HeaderMixin:
           - 900 ~ 1100：紧凑模式，关键按钮（角色卡 / 思考 / Act / 撤销）只显示图标 + 短词
           - < 900     ：超紧凑，纯图标
         """
+        # 用【顶栏自己的宽度】而非窗口宽度判折叠:顶栏在侧栏右侧,侧栏开着时它的可用宽度
+        # = 窗口 − 侧栏(~280px)。原来按 self.width()(整窗)算,侧栏一开顶栏区域明明很窄、
+        # 却仍判成"宽"不折叠 → 按钮在窄区域里挤成一团/被挡。header.width() 反映真实可用宽。
         w = self.width()
-        # 阈值偏大些,让按钮在挤之前就先折叠(模型框 + 撤销/隔离/Act/思考/角色卡 一排,
-        # 中等宽度下全文字会把 addStretch 压成 0、互相贴住/溢出)。
-        if w >= 1180:
+        _hdr = self.model_combo.parentWidget() if hasattr(self, "model_combo") else None
+        if _hdr is not None and _hdr.width() > 0:
+            w = _hdr.width()
+        # 阈值偏大些,让按钮在挤之前就先折叠(模型框 + 撤销/隔离/Act/思考/角色卡 一排)。
+        if w >= 1080:
             level = 0   # 正常
-        elif w >= 960:
+        elif w >= 860:
             level = 1   # 紧凑
         else:
             level = 2   # 超紧凑
@@ -181,14 +186,17 @@ class HeaderMixin:
             else:
                 self.role_btn.setText(full)
                 self.role_btn.setToolTip("")
-        # model_combo 紧凑时让最小宽度松一点
+        # model_combo 宽度按档位约束。关键是 setMaximumWidth 硬上限:QComboBox 的 sizeHint
+        # 取【下拉列表里最长的模型名】,会把框撑到 ~350px(哪怕当前选中的是短名),挤占右侧
+        # 按钮。设硬上限后超长当前项用省略号显示,框不再当空间黑洞。
         if hasattr(self, "model_combo"):
             min_w = 185 if level == 0 else (150 if level == 1 else 120)
-            # 通过 stylesheet 改 min-width，需要重 polish
+            max_w = 240 if level == 0 else (200 if level == 1 else 175)
             ss = self.model_combo.styleSheet()
             import re as _re
             ss = _re.sub(r"min-width:\s*\d+px;", f"min-width: {min_w}px;", ss)
             self.model_combo.setStyleSheet(ss)
+            self.model_combo.setMaximumWidth(max_w)
 
     # ── 顶栏按钮交互 ──
 
