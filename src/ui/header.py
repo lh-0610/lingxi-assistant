@@ -83,7 +83,7 @@ class HeaderMixin:
         layout.addWidget(self.undo_btn)
 
         # 隔离模式按钮（Git worktree 保护主目录）
-        self.isolation_btn = QPushButton("🔒 隔离")
+        self.isolation_btn = QPushButton("隔离")
         self.isolation_btn.setCursor(Qt.PointingHandCursor)
         self.isolation_btn.setToolTip("隔离模式：AI 在独立 worktree 目录操作，不影响主项目\n需项目已启用版本控制")
         self.isolation_btn.clicked.connect(self._toggle_isolation)
@@ -171,11 +171,10 @@ class HeaderMixin:
         if hasattr(self, "isolation_btn") and self.isolation_btn.isVisible():
             from .. import session as _sess
             active = _sess.get_active()
-            # 超窄(level 2)只留 emoji 当图标,不清空(清空成裸按钮反而看不出是什么)
             if active.worktree:
-                self.isolation_btn.setText("🔓" if level == 2 else "🔓 恢复")
+                self.isolation_btn.setText("" if level == 2 else "恢复")
             else:
-                self.isolation_btn.setText("🔒" if level == 2 else "🔒 隔离")
+                self.isolation_btn.setText("" if level == 2 else "隔离")
         # role_btn 保留角色名（信息密度高，比按钮文字本身重要）
         if hasattr(self, "role_btn"):
             # 紧凑模式下截短到 4 个字
@@ -428,10 +427,12 @@ class HeaderMixin:
     def _style_isolation_btn(self, active: bool):
         """隔离按钮配色：active=True 时高亮表示正在隔离。
 
-        只设颜色 / tooltip，**不设文字**——文字（含窄屏折叠成纯图标）由
+        只设图标 / 颜色 / tooltip，**不设文字**——文字（含窄屏折叠成纯图标）由
         _refresh_header_compactness 统一管理，否则两边抢着 setText、窄屏不折叠会重叠。
         """
         if active:
+            self.isolation_btn.setIcon(self._svg_icon("unlock.svg", self._t("ai_label")))
+            self.isolation_btn.setIconSize(QSize(16, 16))
             self.isolation_btn.setToolTip(
                 "隔离模式已开启：AI 在独立 worktree 目录操作\n"
                 "点击「恢复」：把隔离区改动应用回主项目 + 清理 worktree"
@@ -446,6 +447,8 @@ class HeaderMixin:
                 f"  border-color: {self._t('ai_label')}; }}"
             )
         else:
+            self.isolation_btn.setIcon(self._svg_icon("lock.svg", self._t("text")))
+            self.isolation_btn.setIconSize(QSize(16, 16))
             self.isolation_btn.setToolTip(
                 "隔离模式：AI 在独立 worktree 目录操作，不影响主项目\n需项目已启用版本控制"
             )
