@@ -10,8 +10,6 @@
 """
 from __future__ import annotations
 
-import os
-import tempfile
 import threading
 
 import numpy as np

@@ -54,6 +54,8 @@ assets/desktop_pet/sprites/
 !assets/desktop_pet/thinking_desktop_pet_final.gif
 !assets/desktop_pet/wave_desktop_pet_final.gif
 !assets/desktop_pet/lingxi_pet.png
+# 桌宠源视频(AI 生成的 MP4，本地留着重新抠图生成 GIF 用，不进仓库)
+assets/*.mp4
 
 # 角色卡（特定 IP，自行加入；example.md 例外保留作模板）
 roles/*.md
@@ -72,3 +74,6 @@ tmp/
 
 # Git worktree isolation workspaces
 .lingxi-worktrees/
+
+# 官网源码（部署在服务器，不进仓库 —— 用户决定）
+website/
