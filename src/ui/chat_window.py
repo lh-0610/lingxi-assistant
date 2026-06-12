@@ -1158,6 +1158,13 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             f"  border-color: {self._t('sidebar_border')};"
             f"}}"
         )
+        # 隔离按钮可见性跟随"有无项目"(隔离=git worktree,必须有项目)。本方法在 __init__、
+        # 切项目、切隔离时都会调,所以启动恢复了默认项目时这里就让隔离按钮出现——修"启动有
+        # 默认项目却没有隔离按钮,要切一次会话才冒出来"。
+        if hasattr(self, "isolation_btn"):
+            self.isolation_btn.setVisible(bool(current))
+            if current:
+                self._style_isolation_btn(active=is_isolated)
 
     @staticmethod
     def _abbreviate_path(path, max_chars=60):

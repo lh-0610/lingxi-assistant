@@ -95,7 +95,7 @@ GPT_SOVITS_GPT_MODEL = _config.get("gpt_sovits_gpt_model", "")        # GPT 权�
 GPT_SOVITS_SOVITS_MODEL = _config.get("gpt_sovits_sovits_model", "")  # SoVITS 权重相对路径，如 SoVITS_weights_v2/xxx.pth
 
 # 桌宠动画
-PET_ANIMATION_SPEED = _safe_float("pet_animation_speed", 0.5, min_val=0.1, max_val=5.0)  # 1.0=GIF 原速；0.5=慢 2 倍；2.0=快 2 倍
+PET_ANIMATION_SPEED = _safe_float("pet_animation_speed", 1.0, min_val=0.1, max_val=5.0)  # 1.0=GIF 原速；0.5=慢 2 倍；2.0=快 2 倍
 
 # 通知（Telegram 推送）
 _notify_cfg = _config.get("notify", {}) or {}

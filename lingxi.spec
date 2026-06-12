@@ -91,19 +91,20 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# onedir 模式（产物是 dist/灵犀/ 文件夹，里面有 灵犀.exe + _internal/）。
+# 相比 onefile：启动**秒开**（不必每次把 175MB 解压到临时目录），代价是分发的是文件夹
+# 而非单个 exe。打 zip 发布即可。EXE 只装引导器 + 脚本，二进制/数据交给 COLLECT。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,        # onedir：二进制不塞进 exe，由 COLLECT 收进 _internal/
     name='灵犀',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -111,4 +112,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['icon.ico'],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='灵犀',
 )

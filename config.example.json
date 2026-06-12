@@ -37,7 +37,7 @@
   "gpt_sovits_install_dir": "",
   "gpt_sovits_gpt_model": "",
   "gpt_sovits_sovits_model": "",
-  "pet_animation_speed": 0.5,
+  "pet_animation_speed": 1.0,
 
   "mimo_models":      ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni"],
   "qwen_cloud_models":["qwen3.5-plus", "qwen-max", "qwen-plus", "qwen-turbo"],

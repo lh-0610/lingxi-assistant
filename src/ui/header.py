@@ -134,9 +134,11 @@ class HeaderMixin:
           - < 900     ：超紧凑，纯图标
         """
         w = self.width()
-        if w >= 1100:
+        # 阈值偏大些,让按钮在挤之前就先折叠(模型框 + 撤销/隔离/Act/思考/角色卡 一排,
+        # 中等宽度下全文字会把 addStretch 压成 0、互相贴住/溢出)。
+        if w >= 1180:
             level = 0   # 正常
-        elif w >= 900:
+        elif w >= 960:
             level = 1   # 紧凑
         else:
             level = 2   # 超紧凑
@@ -145,10 +147,9 @@ class HeaderMixin:
         if hasattr(self, "think_btn"):
             self.think_btn.setText("" if level == 2 else "思考")
             self.think_btn.setToolTip("思考模式：让模型显式输出 reasoning 过程")
-        # mode_btn（Plan/Act）—— 紧凑时仍保留单字方便认出当前模式
+        # mode_btn（Plan/Act）—— 各档都保留短词:它没有图标,清空会变成认不出的裸按钮
         if hasattr(self, "mode_btn"):
-            txt = "Plan" if self.mode_btn.isChecked() else "Act"
-            self.mode_btn.setText("" if level == 2 else txt)
+            self.mode_btn.setText("Plan" if self.mode_btn.isChecked() else "Act")
         # undo_btn
         if hasattr(self, "undo_btn"):
             if level == 0:
@@ -161,10 +162,11 @@ class HeaderMixin:
         if hasattr(self, "isolation_btn") and self.isolation_btn.isVisible():
             from .. import session as _sess
             active = _sess.get_active()
+            # 超窄(level 2)只留 emoji 当图标,不清空(清空成裸按钮反而看不出是什么)
             if active.worktree:
-                self.isolation_btn.setText("" if level == 2 else "🔓 恢复")
+                self.isolation_btn.setText("🔓" if level == 2 else "🔓 恢复")
             else:
-                self.isolation_btn.setText("" if level == 2 else "🔒 隔离")
+                self.isolation_btn.setText("🔒" if level == 2 else "🔒 隔离")
         # role_btn 保留角色名（信息密度高，比按钮文字本身重要）
         if hasattr(self, "role_btn"):
             # 紧凑模式下截短到 4 个字
@@ -177,7 +179,7 @@ class HeaderMixin:
                 self.role_btn.setToolTip("")
         # model_combo 紧凑时让最小宽度松一点
         if hasattr(self, "model_combo"):
-            min_w = 210 if level == 0 else (160 if level == 1 else 130)
+            min_w = 185 if level == 0 else (150 if level == 1 else 120)
             # 通过 stylesheet 改 min-width，需要重 polish
             ss = self.model_combo.styleSheet()
             import re as _re
@@ -412,9 +414,12 @@ class HeaderMixin:
             self.undo_btn.setToolTip("还没有可撤销的 AI 改动")
 
     def _style_isolation_btn(self, active: bool):
-        """隔离按钮配色：active=True 时高亮表示正在隔离。"""
+        """隔离按钮配色：active=True 时高亮表示正在隔离。
+
+        只设颜色 / tooltip，**不设文字**——文字（含窄屏折叠成纯图标）由
+        _refresh_header_compactness 统一管理，否则两边抢着 setText、窄屏不折叠会重叠。
+        """
         if active:
-            self.isolation_btn.setText("🔓 恢复")
             self.isolation_btn.setToolTip(
                 "隔离模式已开启：AI 在独立 worktree 目录操作\n"
                 "点击「恢复」：把隔离区改动应用回主项目 + 清理 worktree"
@@ -429,7 +434,6 @@ class HeaderMixin:
                 f"  border-color: {self._t('ai_label')}; }}"
             )
         else:
-            self.isolation_btn.setText("🔒 隔离")
             self.isolation_btn.setToolTip(
                 "隔离模式：AI 在独立 worktree 目录操作，不影响主项目\n需项目已启用版本控制"
             )
@@ -442,6 +446,9 @@ class HeaderMixin:
                 f"QPushButton:hover {{ background: {self._t('history_hover_bg')};"
                 f"  border-color: {self._t('ai_label')}; }}"
             )
+        # 文字按当前窗口宽度刷新（UI 已构造完才调，避免构造期半成品）
+        if hasattr(self, "model_combo"):
+            self._refresh_header_compactness()
 
     def _toggle_isolation(self):
         """切换隔离模式。"""
