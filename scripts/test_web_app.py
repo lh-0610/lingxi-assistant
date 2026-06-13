@@ -151,6 +151,40 @@ def test_remote_session_flag(stub_core):
     assert svc.sess.remote_session is True
 
 
+# ── 模型选择 ──
+def test_model_switch(client):
+    from src import agent
+    target = 2 if len(agent.MODEL_LIST) > 2 else 0
+    r = client.post("/api/model", json={"index": target}, headers={"X-Auth-Token": TOKEN})
+    assert r.status_code == 200
+    assert r.json()["model"] == agent.MODEL_LIST[target][0]
+    s = client.get("/api/status", headers={"X-Auth-Token": TOKEN}).json()
+    assert s["model_index"] == target
+    # 越界 → 400
+    assert client.post("/api/model", json={"index": 99999}, headers={"X-Auth-Token": TOKEN}).status_code == 400
+
+
+def test_fixed_model_arg(stub_core):
+    # --model 指定的模型名应被解析并固定为会话默认
+    from src import agent
+    if len(agent.MODEL_LIST) < 2:
+        pytest.skip("模型数不足")
+    name = agent.MODEL_LIST[1][0]
+    c = TestClient(create_app(auth_token=TOKEN, model=name))
+    s = c.get("/api/status", headers={"X-Auth-Token": TOKEN}).json()
+    assert s["model"] == name and s["model_index"] == 1
+
+
+def test_resolve_model_index():
+    from web.app import _resolve_model_index
+    ml = [("Claude Code",), ("mimo-v2.5-pro",), ("deepseek-v4-pro",)]
+    assert _resolve_model_index("mimo-v2.5-pro", ml) == 1   # 精确名
+    assert _resolve_model_index("deepseek", ml) == 2        # 子串
+    assert _resolve_model_index(2, ml) == 2                 # 序号
+    assert _resolve_model_index("不存在的", ml) is None
+    assert _resolve_model_index(None, ml) is None
+
+
 # ── 静态页 ──
 def test_index_served(client):
     r = client.get("/")

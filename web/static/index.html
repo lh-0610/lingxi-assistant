@@ -32,6 +32,9 @@
     animation:pulse 2s infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
   header .spacer{flex:1;}
+  #model-sel{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-border);
+    border-radius:8px;padding:5px 8px;font-size:12px;max-width:46vw;outline:none;}
+  #model-sel:disabled{opacity:0.5;}
   #btn-clear{background:none;border:none;color:var(--c-sub);font-size:14px;
     padding:8px 12px;cursor:pointer;min-height:44px;min-width:44px;
     display:flex;align-items:center;justify-content:center;}
@@ -113,6 +116,7 @@
   <header>
     <div class="dot" id="status-dot"></div>
     <span class="logo">灵犀</span>
+    <select id="model-sel" title="选择模型"></select>
     <div class="spacer"></div>
     <button id="btn-clear" title="新对话">新对话</button>
   </header>
@@ -176,6 +180,43 @@
   const $tokenIn  = document.getElementById('token-input');
   const $tokenOk  = document.getElementById('token-ok');
   const $tokenSkip = document.getElementById('token-skip');
+  const $modelSel = document.getElementById('model-sel');
+
+  // ── 鉴权头 ──
+  function authHeaders(extra) {
+    var h = Object.assign({}, extra || {});
+    if (token) { h['X-Auth-Token'] = token; }
+    return h;
+  }
+
+  // ── 加载状态 + 填充模型下拉 ──
+  function loadStatus() {
+    fetch('/api/status', { headers: authHeaders() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(s) {
+        if (!s || !s.models) return;
+        $modelSel.innerHTML = '';
+        s.models.forEach(function(name, i) {
+          var opt = document.createElement('option');
+          opt.value = i; opt.textContent = name;
+          if (i === s.model_index) opt.selected = true;
+          $modelSel.appendChild(opt);
+        });
+      })
+      .catch(function() {});
+  }
+
+  $modelSel.addEventListener('change', function() {
+    if (generating) return;
+    var idx = parseInt($modelSel.value, 10);
+    fetch('/api/model', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ index: idx })
+    }).then(function(r) {
+      if (!r.ok) { addMsg('error', '⚠ 切换模型失败'); loadStatus(); }
+    }).catch(function() {});
+  });
 
   // ── Token Modal ──
   // 已从 URL / localStorage 拿到 token 就直接进;否则弹框要求输入(服务端强制鉴权)
@@ -187,6 +228,7 @@
     if (token) { localStorage.setItem('lingxi_token', token); }
     $overlay.style.display = 'none';
     $input.focus();
+    loadStatus();
   };
   if ($tokenSkip) { $tokenSkip.style.display = 'none'; }  // 服务端强制 token,去掉"跳过"
   $tokenIn.addEventListener('keydown', function(e) {
@@ -276,6 +318,7 @@
 
     generating = true;
     $send.disabled = true;
+    $modelSel.disabled = true;
     setStatus('busy');
     var thinkEl = addThinking();
     var aiEl = null;
@@ -324,6 +367,7 @@
       if (thinkEl.parentNode) thinkEl.remove();
       generating = false;
       $send.disabled = false;
+      $modelSel.disabled = false;
       setStatus('ok');
     });
 
@@ -392,6 +436,7 @@
   // ── 初始化 ──
   setStatus('ok');
   autoResize();
+  loadStatus();   // 有 token 就拉模型列表填下拉(无 token 时静默失败,输入后再拉)
 })();
 </script>
 </body>

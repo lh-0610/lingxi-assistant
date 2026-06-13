@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8787, help="监听端口(默认 8787)")
     parser.add_argument("--project", default=None, help="固定对话的目标项目路径(留空用当前活动项目)")
     parser.add_argument("--token", default=None, help="鉴权 token(留空则自动生成并持久化)")
+    parser.add_argument("--model", default=None, help="默认模型(模型名或序号,如 mimo-v2.5-pro;留空用 config 默认。页面上仍可随时切)")
     args = parser.parse_args()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,7 +56,7 @@ def main() -> None:
         logger.error("无法导入 web 应用: %s", e)
         sys.exit(1)
 
-    app = create_app(project=args.project, auth_token=args.token)
+    app = create_app(project=args.project, auth_token=args.token, model=args.model)
     token = app.state.auth_token
 
     port = args.port

@@ -33,6 +33,26 @@ class Busy(Exception):
     """当前会话正在生成,拒绝并发请求(对应 HTTP 409)。"""
 
 
+def _resolve_model_index(spec, model_list) -> Optional[int]:
+    """把 --model 的取值(模型名 / 序号)解析成 MODEL_LIST 下标;无法解析返回 None。"""
+    if spec is None or spec == "":
+        return None
+    try:
+        i = int(spec)
+        if 0 <= i < len(model_list):
+            return i
+    except (ValueError, TypeError):
+        pass
+    s = str(spec).strip().lower()
+    for i, m in enumerate(model_list):
+        if m[0].strip().lower() == s:
+            return i
+    for i, m in enumerate(model_list):           # 退化:子串匹配(mimo / deepseek 等好打)
+        if s and s in m[0].lower():
+            return i
+    return None
+
+
 # ── HeadlessWebUI ───────────────────────────────────────────────────────────────
 class HeadlessWebUI:
     """无 Qt 的 UI 适配器:把 agent_loop / streaming / tools 的渲染调用转成事件,
@@ -100,10 +120,11 @@ class HeadlessWebUI:
 class ChatService:
     """持有**一个常驻会话**(对标 telegram 遥控:同时只跑一个任务),与桌面共用核心。"""
 
-    def __init__(self, project: Optional[str] = None) -> None:
+    def __init__(self, project: Optional[str] = None, model: Optional[str] = None) -> None:
         self._lock = threading.Lock()
         self._inited = False
         self._fixed_project = project
+        self._fixed_model = model              # --model 指定的默认模型(名/序号);None=继承配置默认
         self.ui = HeadlessWebUI()
         self.sess = None
 
@@ -116,8 +137,15 @@ class ChatService:
             from src.roles import get_system_prompt
             from langchain_core.messages import SystemMessage
 
+            # 默认模型:--model 指定 > 配置默认(import 时恢复的 state.current_model_index)。
+            # 关键:绝不用 Session() 的裸默认 0(那是 Claude Code 子进程,会去调 claude CLI)。
+            # 必须在 set_active(sess) 之前读 state.current_model_index(此时还指向启动默认会话)。
+            default_idx = getattr(state, "current_model_index", 0) or 0
+            fixed_idx = _resolve_model_index(self._fixed_model, getattr(_agent, "MODEL_LIST", []))
+
             sess = _session.Session()
             sess.remote_session = True            # ★ 启用 _execute_tool 的遥控安全分级
+            sess.current_model_index = fixed_idx if fixed_idx is not None else default_idx
             if self._fixed_project:
                 sess.project = self._fixed_project
                 state.current_project = self._fixed_project
@@ -128,6 +156,18 @@ class ChatService:
             state.ui_ref = self.ui                # ★ tools 无 UI 时会直接放行写盘,必须设
             self.sess = sess
             self._inited = True
+
+    def set_model(self, index: int) -> str:
+        """切换常驻会话的模型(下一轮生效)。返回模型名;越界抛 ValueError,生成中抛 Busy。"""
+        from src import agent as _agent
+        models = getattr(_agent, "MODEL_LIST", [])
+        if not isinstance(index, int) or not (0 <= index < len(models)):
+            raise ValueError("model index out of range")
+        if self.is_generating():
+            raise Busy()
+        self._init()
+        self.sess.current_model_index = index
+        return models[index][0]
 
     def stop(self) -> None:
         if self.sess is not None:
@@ -226,8 +266,12 @@ def _resolve_token(explicit: Optional[str]) -> tuple[str, bool]:
         return secrets.token_urlsafe(24), True
 
 
-def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = None) -> Any:
-    """创建 FastAPI 应用。鉴权 token 必有(默认安全),通过 app.state.auth_token 暴露给 serve.py 打印。"""
+def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = None,
+               model: Optional[str] = None) -> Any:
+    """创建 FastAPI 应用。鉴权 token 必有(默认安全),通过 app.state.auth_token 暴露给 serve.py 打印。
+
+    model:--model 指定的默认模型(名/序号);None 则继承 config 的 default_model_id。
+    """
     try:
         import fastapi  # noqa: F401
         from fastapi import FastAPI, Request, HTTPException
@@ -244,7 +288,7 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
     app.state.auth_token = token
     app.state.token_generated = generated
 
-    svc = ChatService(project=project)
+    svc = ChatService(project=project, model=model)
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
     def _check(req: "Request") -> None:
@@ -281,10 +325,15 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
         try:
             from src import agent as _agent
             models = [m[0] for m in getattr(_agent, "MODEL_LIST", [])]
-            idx = getattr(_agent, "current_model_index", 0)
-            model = models[idx] if 0 <= idx < len(models) else ""
         except Exception:
-            models, idx, model = [], 0, ""
+            models = []
+        # 以 Web 常驻会话的模型为准(先确保会话存在),而非全局默认会话
+        try:
+            svc._init()
+            idx = svc.sess.current_model_index
+        except Exception:
+            idx = 0
+        model = models[idx] if 0 <= idx < len(models) else ""
         try:
             from src.config import REMOTE_MODE
         except Exception:
@@ -297,6 +346,21 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
             "project": project,
             "tool_mode": REMOTE_MODE,
         }
+
+    @app.post("/api/model")
+    async def _set_model(request: Request):
+        _check(request)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        try:
+            name = svc.set_model(body.get("index"))
+        except Busy:
+            return JSONResponse({"error": "生成中不能切模型"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"error": "model index out of range"}, status_code=400)
+        return {"ok": True, "model": name}
 
     @app.post("/api/chat")
     async def _chat(request: Request):
