@@ -87,7 +87,7 @@
   .msg.ai .copy-btn:active{color:var(--c-accent);}
 
   /* ── 输入区 ── */
-  #input-area{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;
+  #input-area{display:flex;align-items:center;gap:8px;padding:10px 12px;
     padding-bottom:calc(10px + var(--safe-bot));
     background:var(--c-surface);border-top:1px solid var(--c-border);}
   #msg-input{flex:1;resize:none;border:1px solid var(--c-border);border-radius:14px;
@@ -145,7 +145,7 @@
   </div>
 
   <div id="input-area">
-    <textarea id="msg-input" rows="1" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)" autofocus></textarea>
+    <textarea id="msg-input" rows="1" placeholder="输入消息…" autofocus></textarea>
     <button id="btn-send" title="发送">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round"
