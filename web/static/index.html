@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#1a1b26">
+<title>灵犀 AI 助手</title>
+<style>
+  :root{
+    --c-bg:    #1a1b26;--c-surface:#24283b;--c-border:#3b4261;
+    --c-text:  #c0caf5;--c-sub:#565f89;--c-accent:#7aa2f7;
+    --c-green: #9ece6a;--c-orange:#e0af68;--c-red:#f7768e;
+    --c-purple:#bb9af7;
+    --safe-top:env(safe-area-inset-top,0px);
+    --safe-bot:env(safe-area-inset-bottom,0px);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;overflow:hidden;background:var(--c-bg);color:var(--c-text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  #app{display:flex;flex-direction:column;height:100%;padding-top:var(--safe-top);}
+
+  /* ── 头部 ── */
+  header{display:flex;align-items:center;gap:8px;padding:10px 16px;
+    background:var(--c-surface);border-bottom:1px solid var(--c-border);min-height:48px;}
+  header .logo{font-size:18px;font-weight:700;color:var(--c-accent);letter-spacing:0.5px;}
+  header .dot{width:10px;height:10px;border-radius:50%;background:var(--c-green);
+    animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  header .spacer{flex:1;}
+  #btn-clear{background:none;border:none;color:var(--c-sub);font-size:14px;
+    padding:8px 12px;cursor:pointer;min-height:44px;min-width:44px;
+    display:flex;align-items:center;justify-content:center;}
+  #btn-clear:hover{color:var(--c-accent);}
+
+  /* ── 消息区 ── */
+  #messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;
+    -webkit-overflow-scrolling:touch;}
+  .msg{max-width:88%;padding:10px 14px;border-radius:16px;line-height:1.55;font-size:15px;
+    word-wrap:break-word;white-space:pre-wrap;position:relative;}
+  .msg.user{align-self:flex-end;background:var(--c-accent);color:#fff;
+    border-bottom-right-radius:4px;}
+  .msg.ai{align-self:flex-start;background:var(--c-surface);color:var(--c-text);
+    border:1px solid var(--c-border);border-bottom-left-radius:4px;}
+  .msg.ai p{margin:0.4em 0;}
+  .msg.ai pre{background:#1a1b26;padding:8px 10px;border-radius:8px;overflow-x:auto;
+    margin:0.5em 0;font-size:13px;}
+  .msg.ai code{font-size:13px;font-family:"Fira Code",Consolas,monospace;}
+  .msg.ai a{color:var(--c-accent);}
+  .msg.error{align-self:center;max-width:95%;background:rgba(247,118,142,0.12);
+    border:1px solid var(--c-red);color:var(--c-red);text-align:center;font-size:13px;}
+  .msg.system{align-self:center;max-width:90%;background:rgba(187,154,247,0.10);
+    border:1px solid var(--c-purple);color:var(--c-purple);text-align:center;font-size:13px;}
+
+  /* ── 思考指示器 ── */
+  .thinking{display:flex;gap:6px;align-items:center;padding:8px 14px;
+    background:rgba(122,162,247,0.08);border:1px solid var(--c-border);border-radius:16px;
+    align-self:flex-start;font-size:13px;color:var(--c-sub);}
+  .thinking .dots span{display:inline-block;width:5px;height:5px;border-radius:50%;
+    background:var(--c-accent);margin:0 2px;animation:bounce 1.4s infinite both;}
+  .thinking .dots span:nth-child(2){animation-delay:0.2s}
+  .thinking .dots span:nth-child(3){animation-delay:0.4s}
+  @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
+
+  /* ── 输入区 ── */
+  #input-area{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;
+    padding-bottom:calc(10px + var(--safe-bot));
+    background:var(--c-surface);border-top:1px solid var(--c-border);}
+  #msg-input{flex:1;resize:none;border:1px solid var(--c-border);border-radius:14px;
+    padding:10px 14px;font-size:15px;color:var(--c-text);background:var(--c-bg);
+    max-height:120px;line-height:1.4;outline:none;transition:border-color 0.2s;}
+  #msg-input:focus{border-color:var(--c-accent);}
+  #msg-input::placeholder{color:var(--c-sub);}
+  #btn-send{background:var(--c-accent);color:#fff;border:none;border-radius:50%;
+    width:44px;height:44px;min-width:44px;min-height:44px;display:flex;
+    align-items:center;justify-content:center;cursor:pointer;
+    transition:opacity 0.2s;font-size:18px;flex-shrink:0;}
+  #btn-send:disabled{opacity:0.4;cursor:default;}
+  #btn-send:hover:not(:disabled){opacity:0.85;}
+
+  /* ── Token Modal ── */
+  #token-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;
+    align-items:center;justify-content:center;z-index:100;}
+  #token-box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;
+    padding:24px;width:min(92vw,360px);text-align:center;}
+  #token-box h3{margin-bottom:14px;color:var(--c-accent);font-size:16px;}
+  #token-box input{width:100%;border:1px solid var(--c-border);border-radius:10px;
+    padding:10px 14px;font-size:15px;background:var(--c-bg);color:var(--c-text);
+    outline:none;margin-bottom:14px;}
+  #token-box input:focus{border-color:var(--c-accent);}
+  #token-box button{width:100%;background:var(--c-accent);color:#fff;border:none;
+    border-radius:10px;padding:12px;font-size:15px;font-weight:600;cursor:pointer;}
+  #token-box .skip{margin-top:8px;font-size:12px;color:var(--c-sub);cursor:pointer;}
+  #token-box .skip:hover{color:var(--c-accent);}
+
+  /* ── Markdown 渲染 ── */
+  .msg.ai h1,.msg.ai h2,.msg.ai h3{margin:0.6em 0 0.3em;font-weight:600;}
+  .msg.ai ul,.msg.ai ol{margin:0.4em 0;padding-left:1.5em;}
+  .msg.ai blockquote{border-left:3px solid var(--c-border);margin:0.5em 0;
+    padding:0.2em 0 0.2em 0.8em;color:var(--c-sub);}
+
+  /* ── 滚动条 ── */
+  #messages::-webkit-scrollbar{width:4px;}
+  #messages::-webkit-scrollbar-thumb{background:var(--c-border);border-radius:4px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="dot" id="status-dot"></div>
+    <span class="logo">灵犀</span>
+    <div class="spacer"></div>
+    <button id="btn-clear" title="新对话">新对话</button>
+  </header>
+
+  <div id="messages">
+    <div class="msg system">欢迎使用灵犀 Web 前端 ✨</div>
+  </div>
+
+  <div id="input-area">
+    <textarea id="msg-input" rows="1" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)" autofocus></textarea>
+    <button id="btn-send" title="发送">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"></line>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+      </svg>
+    </button>
+  </div>
+
+  <div id="token-overlay">
+    <div id="token-box">
+      <h3>连接灵犀</h3>
+      <input id="token-input" type="password" placeholder="API Token（可留空）" autocomplete="off">
+      <button id="token-ok">连接</button>
+      <div class="skip" id="token-skip">跳过，直接进入 →</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── 状态 ──
+  const history = [];   // [{role, content}]
+  // token 优先级:URL ?token= → localStorage。拿到后存 localStorage 并从地址栏抹掉(防泄露/分享误带)
+  let token = '';
+  try {
+    var _u = new URL(window.location.href);
+    var _t = _u.searchParams.get('token');
+    if (_t) {
+      token = _t;
+      localStorage.setItem('lingxi_token', _t);
+      _u.searchParams.delete('token');
+      history_replace(_u);
+    } else {
+      token = localStorage.getItem('lingxi_token') || '';
+    }
+  } catch (e) {}
+  function history_replace(u) { try { window.history.replaceState({}, '', u.pathname + u.search); } catch (e) {} }
+  let generating = false;
+
+  // ── DOM ──
+  const $msgs     = document.getElementById('messages');
+  const $input    = document.getElementById('msg-input');
+  const $send     = document.getElementById('btn-send');
+  const $clear    = document.getElementById('btn-clear');
+  const $dot      = document.getElementById('status-dot');
+  const $overlay  = document.getElementById('token-overlay');
+  const $tokenIn  = document.getElementById('token-input');
+  const $tokenOk  = document.getElementById('token-ok');
+  const $tokenSkip = document.getElementById('token-skip');
+
+  // ── Token Modal ──
+  // 已从 URL / localStorage 拿到 token 就直接进;否则弹框要求输入(服务端强制鉴权)
+  if (token) {
+    $overlay.style.display = 'none';
+  }
+  $tokenOk.onclick = function() {
+    token = $tokenIn.value.trim();
+    if (token) { localStorage.setItem('lingxi_token', token); }
+    $overlay.style.display = 'none';
+    $input.focus();
+  };
+  if ($tokenSkip) { $tokenSkip.style.display = 'none'; }  // 服务端强制 token,去掉"跳过"
+  $tokenIn.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); $tokenOk.click(); }
+  });
+
+  // ── 工具函数 ──
+  function esc(s) {
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+  }
+
+  function scrollToBottom() {
+    requestAnimationFrame(function() {
+      $msgs.scrollTop = $msgs.scrollHeight;
+    });
+  }
+
+  function autoResize() {
+    $input.style.height = 'auto';
+    $input.style.height = Math.min($input.scrollHeight, 120) + 'px';
+  }
+
+  // ── 简易 Markdown → HTML（Web 端轻量实现）──
+  function mdToHtml(md) {
+    var h = esc(md);
+    // 代码块
+    h = h.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    // 行内代码
+    h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // 标题
+    h = h.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+    h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    // 粗体 / 斜体
+    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // 链接
+    h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // 无序列表
+    h = h.replace(/^- (.+)$/gm, '<li>$1</li>');
+    h = h.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    // 引用
+    h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+    // 换行
+    h = h.replace(/\n/g, '<br>');
+    return h;
+  }
+
+  // ── 消息渲染 ──
+  function addMsg(cls, html, isMarkdown) {
+    var div = document.createElement('div');
+    div.className = 'msg ' + cls;
+    div.innerHTML = isMarkdown ? mdToHtml(html) : esc(html).replace(/\n/g, '<br>');
+    $msgs.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function addThinking() {
+    var div = document.createElement('div');
+    div.className = 'thinking';
+    div.innerHTML = '<div class="dots"><span></span><span></span><span></span></div>'
+                  + '<span>灵犀思考中…</span>';
+    $msgs.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function setStatus(status) {
+    $dot.style.background = status === 'ok' ? 'var(--c-green)'
+                          : status === 'busy' ? 'var(--c-orange)'
+                          : 'var(--c-red)';
+  }
+
+  // ── 发送 ──
+  function doSend() {
+    var text = $input.value.trim();
+    if (!text || generating) return;
+
+    addMsg('user', text);
+    history.push({role: 'user', content: text});
+    $input.value = '';
+    autoResize();
+
+    generating = true;
+    $send.disabled = true;
+    setStatus('busy');
+    var thinkEl = addThinking();
+    var aiEl = null;
+    var hadContent = false;
+
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: Object.assign(
+        {'Content-Type': 'application/json'},
+        token ? {'Authorization': 'Bearer ' + token} : {}
+      ),
+      body: JSON.stringify({message: text, history: history.slice(0, -1)})
+    }).then(function(resp) {
+      if (!resp.ok) {
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error('鉴权失败，请检查 token');
+        }
+        throw new Error('请求失败: ' + resp.status);
+      }
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+
+      function readChunk() {
+        return reader.read().then(function(result) {
+          if (result.done) return;
+          buf += decoder.decode(result.value, {stream: true});
+          // NDJSON:一行一个 JSON 对象
+          var lines = buf.split('\n');
+          buf = lines.pop() || '';
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+            var ev;
+            try { ev = JSON.parse(line); } catch(e) { continue; }
+            handleEvent(ev);
+          }
+          return readChunk();
+        });
+      }
+      return readChunk();
+    }).catch(function(err) {
+      if (thinkEl.parentNode) thinkEl.remove();
+      addMsg('error', '⚠ ' + (err.message || '连接失败'));
+    }).finally(function() {
+      if (thinkEl.parentNode) thinkEl.remove();
+      generating = false;
+      $send.disabled = false;
+      setStatus('ok');
+    });
+
+    function handleEvent(ev) {
+      var type = ev.type;
+      if (type === 'ping' || type === 'done' || type === 'usage' || type === 'plan') return;
+
+      if (type === 'msg') {
+        var tag = ev.tag || '';
+        var text = ev.text || '';
+        // 思考指示器 / 思考块 / 工具中间态 / 布局占位:M1 不渲染
+        if (tag === 'thinking_indicator' || tag === 'remove_thinking') return;
+        if (tag === 'think_header' || tag === 'think_msg' || tag === 'think_collapse') return;
+        if (tag === 'tool_tag' || tag === 'tool_detail' || tag === 'tool_result' || tag === 'ai_image') return;
+        if (tag === 'ai_label' || tag === 'spacer' || tag === 'reset_ai_reply' || tag === 'user_label') return;
+        // 其余(ai_msg / 未知 tag)当正文流式追加(向前兼容)
+        if (thinkEl.parentNode) thinkEl.remove();
+        if (!aiEl) { aiEl = addMsg('ai', ''); hadContent = true; }
+        aiEl.textContent += text;
+        scrollToBottom();
+        return;
+      }
+
+      if (type === 'md') {
+        if (thinkEl.parentNode) thinkEl.remove();
+        if (aiEl) { aiEl.innerHTML = mdToHtml(ev.text || ''); }
+        else { aiEl = addMsg('ai', ev.text || '', true); }
+        hadContent = true;
+        history.push({role: 'assistant', content: ev.text || ''});
+        scrollToBottom();
+        return;
+      }
+
+      if (type === 'retry') {
+        addMsg('error', '⚠ ' + (ev.text || '模型请求失败,重试中…'));
+        return;
+      }
+
+      if (type === 'error') {
+        if (thinkEl.parentNode) thinkEl.remove();
+        addMsg('error', '⚠ ' + (ev.message || ev.text || '出错了'));
+        return;
+      }
+    }
+  }
+
+  // ── 事件绑定 ──
+  $send.addEventListener('click', doSend);
+
+  $input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      doSend();
+    }
+  });
+
+  $input.addEventListener('input', autoResize);
+
+  $clear.addEventListener('click', function() {
+    if (generating) return;
+    history.length = 0;
+    $msgs.innerHTML = '<div class="msg system">新对话已开始 ✨</div>';
+    $input.focus();
+  });
+
+  // ── 初始化 ──
+  setStatus('ok');
+  autoResize();
+})();
+</script>
+</body>
+</html>
