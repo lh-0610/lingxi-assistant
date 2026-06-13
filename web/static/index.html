@@ -102,6 +102,7 @@
   #btn-send:disabled{opacity:0.4;cursor:default;}
   #btn-send:hover:not(:disabled){opacity:0.85;}
   #btn-send.is-stop{background:var(--c-red);}
+  #btn-send svg{display:block;}   /* 去掉 inline-svg 基线间隙,图标真正居中 */
 
   /* ── Token Modal ── */
   #token-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;
@@ -380,9 +381,14 @@
   function stopGen() {
     fetch('/api/stop', { method: 'POST', headers: authHeaders() }).catch(function() {});
   }
-  var SEND_ICON = $send.innerHTML;   // 发送图标(纸飞机),停止时换成方块
+  // 干净的图标字符串(不从 HTML 捕获,避免换行空白影响居中)
+  var SEND_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"'
+                + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                + '<line x1="22" y1="2" x2="11" y2="13"></line>'
+                + '<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
   var STOP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
                 + '<rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
+  $send.innerHTML = SEND_ICON;   // 用干净版覆盖 HTML 里带空白的那份
 
   function setStatus(status) {
     $dot.style.background = status === 'ok' ? 'var(--c-green)'
@@ -467,11 +473,12 @@
         var tag = ev.tag || '';
         var text = ev.text || '';
         if (tag === 'thinking_indicator' || tag === 'remove_thinking') return;
-        // 思考过程 → 可折叠思考块
-        if (tag === 'think_header' || tag === 'think_msg') {
+        if (tag === 'think_header') return;   // 仅头部不建框:有真内容(think_msg)才建,避免空框收起成一条线
+        if (tag === 'think_msg') {
+          if (!text) return;                  // 空思考内容不建框
           if (thinkEl.parentNode) thinkEl.remove();
           if (!thinkBox) thinkBox = makeThinkBox();
-          if (tag === 'think_msg') thinkBox._tc.textContent += text;
+          thinkBox._tc.textContent += text;
           scrollToBottom();
           return;
         }
