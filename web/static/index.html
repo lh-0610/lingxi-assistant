@@ -69,16 +69,15 @@
   .thinking .dots span:nth-child(3){animation-delay:0.4s}
   @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
 
-  /* ── 思考块(可折叠)── */
+  /* ── 思考块(可折叠,用原生 details/summary)── */
   .think-box{align-self:flex-start;max-width:88%;background:rgba(187,154,247,0.08);
-    border:1px solid rgba(187,154,247,0.3);border-radius:14px;font-size:13px;overflow:hidden;}
-  .think-box .th{padding:7px 12px;color:var(--c-purple);cursor:pointer;user-select:none;
-    display:flex;align-items:center;gap:6px;}
-  .think-box .tc{padding:0 12px 8px;color:var(--c-sub);white-space:pre-wrap;line-height:1.5;
+    border:1px solid rgba(187,154,247,0.3);border-radius:14px;font-size:13px;padding:7px 12px;}
+  .think-box summary{color:var(--c-purple);cursor:pointer;user-select:none;list-style:none;outline:none;}
+  .think-box summary::-webkit-details-marker{display:none;}
+  .think-box summary::before{content:'▸ ';font-size:11px;}
+  .think-box[open] summary::before{content:'▾ ';}
+  .think-box .tc{margin-top:6px;color:var(--c-sub);white-space:pre-wrap;line-height:1.5;
     max-height:240px;overflow-y:auto;}
-  .think-box.collapsed .tc{display:none;}
-  .think-box .th::before{content:'▾';font-size:11px;transition:transform .15s;}
-  .think-box.collapsed .th::before{transform:rotate(-90deg);}
   /* ── token 用量 ── */
   .usage{align-self:flex-start;font-size:11px;color:var(--c-sub);padding:0 4px;}
   /* ── 复制按钮 ── */
@@ -320,14 +319,14 @@
     return div;
   }
 
-  // ── 思考块(可折叠)──
+  // ── 思考块(可折叠,原生 details:summary 永远可见,收起后仍是"💭 思考过程"标签)──
   function makeThinkBox() {
-    var box = document.createElement('div');
+    var box = document.createElement('details');
     box.className = 'think-box';
-    var th = document.createElement('div'); th.className = 'th'; th.textContent = '思考过程';
+    box.open = true;                       // 思考时展开
+    var s = document.createElement('summary'); s.textContent = '💭 思考过程';
     var tc = document.createElement('div'); tc.className = 'tc';
-    th.onclick = function() { box.classList.toggle('collapsed'); };
-    box.appendChild(th); box.appendChild(tc);
+    box.appendChild(s); box.appendChild(tc);
     $msgs.appendChild(box);
     box._tc = tc;
     return box;
@@ -482,7 +481,7 @@
           scrollToBottom();
           return;
         }
-        if (tag === 'think_collapse') { if (thinkBox) thinkBox.classList.add('collapsed'); return; }
+        if (tag === 'think_collapse') { if (thinkBox) thinkBox.open = false; return; }
         // 工具中间态 / 布局占位:M1 不渲染
         if (tag === 'tool_tag' || tag === 'tool_detail' || tag === 'tool_result' || tag === 'ai_image') return;
         if (tag === 'ai_label' || tag === 'spacer' || tag === 'reset_ai_reply' || tag === 'user_label') return;
@@ -505,7 +504,7 @@
 
       if (type === 'md') {
         if (thinkEl.parentNode) thinkEl.remove();
-        if (thinkBox) thinkBox.classList.add('collapsed');
+        if (thinkBox) thinkBox.open = false;
         if (aiEl) { aiEl.innerHTML = mdToHtml(ev.text || ''); }
         else { aiEl = addMsg('ai', ev.text || '', true); }
         addCopyBtn(aiEl, ev.text || '');
