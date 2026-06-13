@@ -116,6 +116,9 @@ _mode = (_remote_cfg.get("mode") or "chat_only").lower()
 if _mode not in ("chat_only", "safe_readonly", "unrestricted"):
     _mode = "chat_only"
 REMOTE_MODE: str = _mode
+# 联网查询独立开关:开了则不论 mode 都放行 fetch_url / web_search(只读网络工具)。
+# 默认 false(网络外发保守)。给 Web/手机版"能上网查"用,不必整体放到 unrestricted。
+REMOTE_ALLOW_WEB: bool = bool(_remote_cfg.get("allow_web_search", False))
 # safe_readonly 模式下，用户在内置黑名单之外【追加】的敏感文件名/后缀
 REMOTE_BLOCKLIST: list = _remote_cfg.get("readonly_blocklist", []) or []
 # 是否把需确认的操作（run_command / edit_file / MCP）推到手机 Telegram inline 按钮。

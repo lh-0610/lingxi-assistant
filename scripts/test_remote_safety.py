@@ -44,6 +44,31 @@ class TestRemoteSafety:
         last = _exec({"name": "read_file", "args": {"path": "config.json"}, "id": "1"})
         assert isinstance(last, ToolMessage) and "拒绝" in last.content
 
+    def test_allow_web_lets_fetch_through_in_chat_only(self, monkeypatch, clean_state):
+        # allow_web_search=true:chat_only 下也放行 fetch_url / web_search(其它仍拦)
+        monkeypatch.setattr(state, "remote_session", True)
+        monkeypatch.setattr(config, "REMOTE_MODE", "chat_only")
+        monkeypatch.setattr(config, "REMOTE_ALLOW_WEB", True)
+
+        class _FakeTool:
+            def invoke(self, args): return "WEBOK"
+        monkeypatch.setattr(streaming, "get_tool_map", lambda: {"fetch_url": _FakeTool(), "web_search": _FakeTool()})
+
+        last = _exec({"name": "fetch_url", "args": {"url": "http://example.com"}, "id": "1"})
+        assert isinstance(last, ToolMessage)
+        assert "chat_only" not in (last.content or "")        # 没被纯对话拦
+        # run_command 仍被 chat_only 拦(只放网络查询,不碰其它)
+        monkeypatch.setattr(streaming, "get_tool_map", lambda: {"run_command": _FakeTool()})
+        last2 = _exec({"name": "run_command", "args": {"command": "ls"}, "id": "2"})
+        assert isinstance(last2, ToolMessage) and "chat_only" in last2.content
+
+    def test_allow_web_off_still_blocks_fetch(self, monkeypatch, clean_state):
+        monkeypatch.setattr(state, "remote_session", True)
+        monkeypatch.setattr(config, "REMOTE_MODE", "chat_only")
+        monkeypatch.setattr(config, "REMOTE_ALLOW_WEB", False)
+        last = _exec({"name": "fetch_url", "args": {"url": "http://example.com"}, "id": "1"})
+        assert isinstance(last, ToolMessage) and "chat_only" in last.content
+
     def test_no_remote_session_not_blocked_by_chat_only(self, monkeypatch, clean_state):
         # 非远程会话（PC 发起）：remote_session=False，安全拦截不触发
         monkeypatch.setattr(state, "remote_session", False)

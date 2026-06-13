@@ -1057,8 +1057,13 @@ def _execute_tool(tc, ui, _preinvoked=None):
     #   safe_readonly —— 只放行 read/search_in_file/list，且过敏感文件黑名单
     #   unrestricted  —— 不拦
     if getattr(state, "remote_session", False):
-        from .config import REMOTE_MODE
-        if REMOTE_MODE == "chat_only":
+        from .config import REMOTE_MODE, REMOTE_ALLOW_WEB
+        # 联网查询独立开关:fetch_url / web_search 是只读网络工具(fetch_url 有 SSRF 防护、
+        # 拒内网/本机/云元数据)。默认仍不给远程(网络外发保守),但 allow_web_search=true 时
+        # 不论 chat_only / safe_readonly 都放行它俩——只加网络查询,不碰文件读写。
+        if name in ("fetch_url", "web_search") and REMOTE_ALLOW_WEB:
+            pass
+        elif REMOTE_MODE == "chat_only":
             ui.show_message(f"\n🔒 远程遥控（纯对话模式），拒绝工具 {name}\n", "tool_tag")
             state.chat_history.append(ToolMessage(
                 content=(

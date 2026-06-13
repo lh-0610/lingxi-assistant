@@ -67,6 +67,11 @@ Web 会话默认打 `remote_session=True`,复用桌面端的"遥控安全分级"
 另外**写类工具(改文件 / 跑命令)在 Web 端一律被确认环节拒绝**(`confirm_* → False`),即使 mode=unrestricted
 也不会远程改你的文件/执行命令(M1 没有网页确认卡)。**公网暴露建议把 `remote_control.mode` 设为 `chat_only` 或 `safe_readonly`。**
 
+**联网查询独立开关**:`remote_control.allow_web_search: true`(默认 false)单独放行 `fetch_url` / `web_search`
+(只读网络工具,fetch_url 有 SSRF 防护拒内网/本机/云元数据),**不论 mode 是什么都生效、且不碰文件读写**。
+想让手机版灵犀"能上网查"但不开放文件读时用它(保持 mode=chat_only + allow_web_search=true 即可)。
+`web_search` 还需配 `web_search_api_key`(Tavily);没配则 `fetch_url` 仍可用、`web_search` 优雅降级。
+
 ## PWA 安装
 
 手机浏览器打开后添加到主屏幕:iOS Safari「分享 → 添加到主屏幕」;Android Chrome「菜单 → 添加到主屏幕」。
