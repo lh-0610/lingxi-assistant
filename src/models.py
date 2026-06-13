@@ -179,6 +179,24 @@ def check_ollama():
         return False
 
 
+def _max_tokens_for(mtype, model_id):
+    """按模型给安全的输出额度上限(max_tokens)。
+
+    reasoning 模型(MiMo)思考会吃掉输出 token——8192 常常思考还没结束就到顶、根本轮不到
+    吐正文(F12 实测 output 顶在 8192、stop_reason=max_tokens),于是 raw_text 为空、被误报成
+    "连接被中断"。所以给 reasoning 模型更高额度。但 Haiku 3.5 等模型**输出上限本身就是 8192**,
+    超了会 400,故按模型区分,不能一刀切。
+    """
+    mid = (model_id or "").lower()
+    if mtype == "mimo":
+        return 16384                      # MiMo 大型 reasoning,思考耗 token,给足余量
+    if mtype == "anthropic":
+        if "haiku" in mid:
+            return 8192                   # Haiku 3.5 输出上限就是 8192,不能超
+        return 16384                      # Sonnet 4 等支持更高
+    return 8192                           # 其它 / 自定义保守(不知道对方上限)
+
+
 def _create_llm(model_index=None, reasoning=None):
     """根据选择创建 LLM 实例"""
     if model_index is None:
@@ -200,7 +218,7 @@ def _create_llm(model_index=None, reasoning=None):
         return ChatAnthropic(
             model=model_id,
             api_key=ANTHROPIC_API_KEY,
-            max_tokens=8192,
+            max_tokens=_max_tokens_for(mtype, model_id),
             default_request_timeout=LONG_TIMEOUT,
         )
     elif mtype == "mimo":
@@ -208,7 +226,7 @@ def _create_llm(model_index=None, reasoning=None):
             model=model_id,
             api_key=MIMO_API_KEY,
             base_url=MIMO_BASE_URL,
-            max_tokens=8192,
+            max_tokens=_max_tokens_for(mtype, model_id),
             default_request_timeout=LONG_TIMEOUT,
         )
     elif mtype == "gemini":
@@ -241,7 +259,7 @@ def _create_llm(model_index=None, reasoning=None):
                 model=model_id,
                 api_key=api_key,
                 base_url=base_url or None,
-                max_tokens=8192,
+                max_tokens=_max_tokens_for(mtype, model_id),
                 default_request_timeout=LONG_TIMEOUT,
             )
         # 默认 OpenAI 兼容协议（适配大多数第三方 API：OpenAI / 月之暗面 /

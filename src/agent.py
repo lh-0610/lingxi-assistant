@@ -47,7 +47,7 @@ from .memory import (
     _build_ai_message,
 )
 from .tools import ALL_TOOLS, build_all_tools  # noqa: F401  ALL_TOOLS 为 facade 出口
-from .streaming import _stream_with_tools, _execute_tool
+from .streaming import _stream_with_tools, _execute_tool, _extract_thinking
 from .claude_code import claude_code_loop as _claude_code_loop
 from . import session as _session_mod
 
@@ -301,16 +301,39 @@ def agent_loop(ui):
             else:
                 # 纯文本回复，先过完成闸门，再渲染 Markdown 并结束。
                 if not clean_text and not raw_text:
-                    # 流静默结束：服务端 / 代理在思考中切断了连接，没有任何 chunk 到达
-                    ui.show_message(
-                        "\n⚠️ 连接被中断（服务端或代理在思考期间关闭了连接）。"
-                        "请重试，或换一个模型。\n",
-                        "tool_result",
-                    )
-                    logger.warning(
-                        f"第 {round_i+1} 轮流结束但未收到任何内容，"
-                        f"疑似服务端 idle timeout 中断"
-                    )
+                    # 这一轮没收到正文。两种成因要分开报，否则全甩锅"连接被中断"会误导：
+                    #  ① 输出额度耗尽(stop_reason=max_tokens / finish_reason=length)：reasoning
+                    #     模型思考太长把 max_tokens 吃光，根本没轮到吐正文。raw_text 只装正文不装
+                    #     思考，于是为空。F12 表现：output 顶在 max_tokens、状态却是"成功"。
+                    #  ② 真·空流：服务端 / 代理 idle 超时切断，一个 chunk 都没来。
+                    stop_reason = ""
+                    try:
+                        _meta = getattr(gathered, "response_metadata", {}) or {}
+                        stop_reason = _meta.get("stop_reason") or _meta.get("finish_reason") or ""
+                    except Exception:
+                        stop_reason = ""
+                    if stop_reason in ("max_tokens", "length"):
+                        _had_think = bool(_extract_thinking(gathered))
+                        ui.show_message(
+                            "\n⚠️ 模型把本轮输出额度（max_tokens）用尽了"
+                            + ("（深度思考占满，没轮到输出正文）" if _had_think else "")
+                            + "。可关掉「思考」开关、把问题拆细后重试，或换更高额度的模型。\n",
+                            "tool_result",
+                        )
+                        logger.warning(
+                            f"第 {round_i+1} 轮 output 到达 max_tokens（stop_reason={stop_reason}），"
+                            f"无正文，疑似思考耗尽额度"
+                        )
+                    else:
+                        ui.show_message(
+                            "\n⚠️ 连接被中断（服务端或代理在思考期间关闭了连接）。"
+                            "请重试，或换一个模型。\n",
+                            "tool_result",
+                        )
+                        logger.warning(
+                            f"第 {round_i+1} 轮流结束但未收到任何内容（stop_reason={stop_reason or '空'}），"
+                            f"疑似服务端 idle timeout 中断"
+                        )
                     break
                 try:
                     from .verification import get_verification_gaps as _v_gaps
