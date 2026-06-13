@@ -157,6 +157,14 @@ class ChatService:
             self.sess = sess
             self._inited = True
 
+    def new_chat(self) -> None:
+        """开新对话:重置常驻会话历史(旧对话已 save 到盘)。生成中抛 Busy。"""
+        if self.is_generating():
+            raise Busy()
+        self._init()
+        from src.memory import reset_history
+        reset_history(session=self.sess)
+
     def set_model(self, index: int) -> str:
         """切换常驻会话的模型(下一轮生效)。返回模型名;越界抛 ValueError,生成中抛 Busy。"""
         from src import agent as _agent
@@ -404,5 +412,14 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
     async def _history(request: Request):
         _check(request)
         return {"messages": svc.history()}
+
+    @app.post("/api/new")
+    async def _new(request: Request):
+        _check(request)
+        try:
+            svc.new_chat()
+        except Busy:
+            return JSONResponse({"error": "生成中不能开新对话"}, status_code=409)
+        return {"ok": True}
 
     return app

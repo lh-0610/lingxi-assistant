@@ -131,6 +131,18 @@ def test_history_serializes_roles(client):
     assert roles == ["user", "assistant", "tool"]
 
 
+def test_new_chat_resets(client, isolated_memory):
+    from src import session as _session
+    from langchain_core.messages import HumanMessage
+    client.post("/api/chat", json={"message": "你好"}, headers={"X-Auth-Token": TOKEN})  # 建会话
+    _session.get_active().chat_history.append(HumanMessage(content="多一条"))
+    r = client.post("/api/new", headers={"X-Auth-Token": TOKEN})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    # 重置后历史只剩 system(history() 跳过 system → 空)
+    h = client.get("/api/history", headers={"X-Auth-Token": TOKEN}).json()["messages"]
+    assert h == []
+
+
 # ── 安全回归 ──
 def test_confirm_command_rejected():
     ui = HeadlessWebUI()

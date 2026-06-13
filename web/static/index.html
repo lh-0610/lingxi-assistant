@@ -69,6 +69,23 @@
   .thinking .dots span:nth-child(3){animation-delay:0.4s}
   @keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
 
+  /* ── 思考块(可折叠)── */
+  .think-box{align-self:flex-start;max-width:88%;background:rgba(187,154,247,0.08);
+    border:1px solid rgba(187,154,247,0.3);border-radius:14px;font-size:13px;overflow:hidden;}
+  .think-box .th{padding:7px 12px;color:var(--c-purple);cursor:pointer;user-select:none;
+    display:flex;align-items:center;gap:6px;}
+  .think-box .tc{padding:0 12px 8px;color:var(--c-sub);white-space:pre-wrap;line-height:1.5;
+    max-height:240px;overflow-y:auto;}
+  .think-box.collapsed .tc{display:none;}
+  .think-box .th::before{content:'▾';font-size:11px;transition:transform .15s;}
+  .think-box.collapsed .th::before{transform:rotate(-90deg);}
+  /* ── token 用量 ── */
+  .usage{align-self:flex-start;font-size:11px;color:var(--c-sub);padding:0 4px;}
+  /* ── 复制按钮 ── */
+  .msg.ai .copy-btn{display:inline-block;margin-top:6px;font-size:11px;color:var(--c-sub);
+    cursor:pointer;border:1px solid var(--c-border);border-radius:6px;padding:2px 8px;}
+  .msg.ai .copy-btn:active{color:var(--c-accent);}
+
   /* ── 输入区 ── */
   #input-area{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;
     padding-bottom:calc(10px + var(--safe-bot));
@@ -84,6 +101,7 @@
     transition:opacity 0.2s;font-size:18px;flex-shrink:0;}
   #btn-send:disabled{opacity:0.4;cursor:default;}
   #btn-send:hover:not(:disabled){opacity:0.85;}
+  #btn-send.is-stop{background:var(--c-red);}
 
   /* ── Token Modal ── */
   #token-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;
@@ -229,6 +247,7 @@
     $overlay.style.display = 'none';
     $input.focus();
     loadStatus();
+    loadHistory();
   };
   if ($tokenSkip) { $tokenSkip.style.display = 'none'; }  // 服务端强制 token,去掉"跳过"
   $tokenIn.addEventListener('keydown', function(e) {
@@ -300,6 +319,71 @@
     return div;
   }
 
+  // ── 思考块(可折叠)──
+  function makeThinkBox() {
+    var box = document.createElement('div');
+    box.className = 'think-box';
+    var th = document.createElement('div'); th.className = 'th'; th.textContent = '思考过程';
+    var tc = document.createElement('div'); tc.className = 'tc';
+    th.onclick = function() { box.classList.toggle('collapsed'); };
+    box.appendChild(th); box.appendChild(tc);
+    $msgs.appendChild(box);
+    box._tc = tc;
+    return box;
+  }
+
+  // ── 复制按钮 ──
+  function addCopyBtn(aiEl, text) {
+    var b = document.createElement('div');
+    b.className = 'copy-btn'; b.textContent = '复制';
+    b.onclick = function() {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function() {
+          b.textContent = '已复制'; setTimeout(function() { b.textContent = '复制'; }, 1200);
+        }).catch(function() {});
+      }
+    };
+    aiEl.appendChild(b);
+  }
+
+  // ── 历史恢复(重开 App 不丢对话:服务器还存着)──
+  function renderHistory(msgs) {
+    $msgs.innerHTML = '';
+    if (!msgs || !msgs.length) {
+      $msgs.innerHTML = '<div class="msg system">欢迎使用灵犀 Web 前端 ✨</div>';
+      return;
+    }
+    msgs.forEach(function(m) {
+      if (m.role === 'user') { addMsg('user', m.text || ''); }
+      else if (m.role === 'assistant') { addCopyBtn(addMsg('ai', m.text || '', true), m.text || ''); }
+      // tool 角色:chat_only 下无工具,忽略
+    });
+    scrollToBottom();
+  }
+  function loadHistory() {
+    fetch('/api/history', { headers: authHeaders() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) { if (d && d.messages) renderHistory(d.messages); })
+      .catch(function() {});
+  }
+  function doNewChat() {
+    if (generating) return;
+    fetch('/api/new', { method: 'POST', headers: authHeaders() })
+      .then(function() {
+        history.length = 0;
+        $msgs.innerHTML = '<div class="msg system">新对话已开始 ✨</div>';
+        $input.focus();
+      }).catch(function() {});
+  }
+
+  // ── 停止生成 ──
+  function stopGen() {
+    fetch('/api/stop', { method: 'POST', headers: authHeaders() }).catch(function() {});
+  }
+  var SEND_ICON = $send.innerHTML;   // 发送图标(纸飞机),停止时换成方块
+  var STOP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+                + '<rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
+
   function setStatus(status) {
     $dot.style.background = status === 'ok' ? 'var(--c-green)'
                           : status === 'busy' ? 'var(--c-orange)'
@@ -317,11 +401,14 @@
     autoResize();
 
     generating = true;
-    $send.disabled = true;
+    $send.innerHTML = STOP_ICON;     // 发送→停止(可点)
+    $send.classList.add('is-stop');
     $modelSel.disabled = true;
     setStatus('busy');
     var thinkEl = addThinking();
     var aiEl = null;
+    var thinkBox = null;
+    var usageEl = null;
     var hadContent = false;
 
     fetch('/api/chat', {
@@ -366,21 +453,30 @@
     }).finally(function() {
       if (thinkEl.parentNode) thinkEl.remove();
       generating = false;
-      $send.disabled = false;
+      $send.innerHTML = SEND_ICON;
+      $send.classList.remove('is-stop');
       $modelSel.disabled = false;
       setStatus('ok');
     });
 
     function handleEvent(ev) {
       var type = ev.type;
-      if (type === 'ping' || type === 'done' || type === 'usage' || type === 'plan') return;
+      if (type === 'ping' || type === 'done' || type === 'plan') return;
 
       if (type === 'msg') {
         var tag = ev.tag || '';
         var text = ev.text || '';
-        // 思考指示器 / 思考块 / 工具中间态 / 布局占位:M1 不渲染
         if (tag === 'thinking_indicator' || tag === 'remove_thinking') return;
-        if (tag === 'think_header' || tag === 'think_msg' || tag === 'think_collapse') return;
+        // 思考过程 → 可折叠思考块
+        if (tag === 'think_header' || tag === 'think_msg') {
+          if (thinkEl.parentNode) thinkEl.remove();
+          if (!thinkBox) thinkBox = makeThinkBox();
+          if (tag === 'think_msg') thinkBox._tc.textContent += text;
+          scrollToBottom();
+          return;
+        }
+        if (tag === 'think_collapse') { if (thinkBox) thinkBox.classList.add('collapsed'); return; }
+        // 工具中间态 / 布局占位:M1 不渲染
         if (tag === 'tool_tag' || tag === 'tool_detail' || tag === 'tool_result' || tag === 'ai_image') return;
         if (tag === 'ai_label' || tag === 'spacer' || tag === 'reset_ai_reply' || tag === 'user_label') return;
         // 其余(ai_msg / 未知 tag)当正文流式追加(向前兼容)
@@ -391,10 +487,21 @@
         return;
       }
 
+      if (type === 'usage') {
+        if (ev.total && typeof ev.total.total === 'number') {
+          if (!usageEl) { usageEl = document.createElement('div'); usageEl.className = 'usage'; $msgs.appendChild(usageEl); }
+          usageEl.textContent = '⛁ ' + ev.total.total + ' tokens';
+          scrollToBottom();
+        }
+        return;
+      }
+
       if (type === 'md') {
         if (thinkEl.parentNode) thinkEl.remove();
+        if (thinkBox) thinkBox.classList.add('collapsed');
         if (aiEl) { aiEl.innerHTML = mdToHtml(ev.text || ''); }
         else { aiEl = addMsg('ai', ev.text || '', true); }
+        addCopyBtn(aiEl, ev.text || '');
         hadContent = true;
         history.push({role: 'assistant', content: ev.text || ''});
         scrollToBottom();
@@ -415,28 +522,26 @@
   }
 
   // ── 事件绑定 ──
-  $send.addEventListener('click', doSend);
+  $send.addEventListener('click', function() {
+    if (generating) { stopGen(); } else { doSend(); }   // 生成中点 = 停止
+  });
 
   $input.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      doSend();
+      if (!generating) doSend();
     }
   });
 
   $input.addEventListener('input', autoResize);
 
-  $clear.addEventListener('click', function() {
-    if (generating) return;
-    history.length = 0;
-    $msgs.innerHTML = '<div class="msg system">新对话已开始 ✨</div>';
-    $input.focus();
-  });
+  $clear.addEventListener('click', doNewChat);   // 新对话:清服务端 + 客户端
 
   // ── 初始化 ──
   setStatus('ok');
   autoResize();
-  loadStatus();   // 有 token 就拉模型列表填下拉(无 token 时静默失败,输入后再拉)
+  loadStatus();    // 拉模型列表填下拉
+  loadHistory();   // 重开 App 恢复上次对话(服务器还存着;无 token 时静默失败)
 })();
 </script>
 </body>
