@@ -10,11 +10,13 @@ import asyncio
 import json
 import logging
 import os
-import queue
 import secrets
 import sys
 import threading
+from contextlib import contextmanager
 from typing import Any, Optional
+
+from web.auth import UserStore
 
 logger = logging.getLogger(__name__)
 
@@ -120,42 +122,52 @@ class HeadlessWebUI:
 class ChatService:
     """持有**一个常驻会话**(对标 telegram 遥控:同时只跑一个任务),与桌面共用核心。"""
 
-    def __init__(self, project: Optional[str] = None, model: Optional[str] = None) -> None:
+    def __init__(self, *, data_dir: str, project: Optional[str] = None,
+                 model: Optional[str] = None) -> None:
         self._lock = threading.Lock()
         self._inited = False
+        self._data_dir = data_dir              # ★ 本用户的数据根(隔离 chat_memory/记忆/项目)
         self._fixed_project = project
         self._fixed_model = model              # --model 指定的默认模型(名/序号);None=继承配置默认
         self.ui = HeadlessWebUI()
         self.sess = None
+
+    @contextmanager
+    def _ctx(self):
+        """把当前线程的数据根切到本用户目录,退出还原——所有读写盘前都要套。"""
+        from src import paths
+        paths.set_data_dir(self._data_dir)
+        try:
+            yield
+        finally:
+            paths.set_data_dir(None)
 
     def _init(self) -> None:
         """惰性初始化常驻会话 + 全局接线(首次请求时,确保 src 环境就绪)。"""
         with self._lock:
             if self._inited:
                 return
-            from src import state, session as _session, agent as _agent  # noqa: F401
-            from src.roles import get_system_prompt
-            from langchain_core.messages import SystemMessage
+            with self._ctx():     # get_system_prompt 读本用户的角色配置/长期记忆,必须在其数据上下文内
+                from src import state, session as _session, agent as _agent  # noqa: F401
+                from src.roles import get_system_prompt
+                from langchain_core.messages import SystemMessage
 
-            # 默认模型:--model 指定 > 配置默认(import 时恢复的 state.current_model_index)。
-            # 关键:绝不用 Session() 的裸默认 0(那是 Claude Code 子进程,会去调 claude CLI)。
-            # 必须在 set_active(sess) 之前读 state.current_model_index(此时还指向启动默认会话)。
-            default_idx = getattr(state, "current_model_index", 0) or 0
-            fixed_idx = _resolve_model_index(self._fixed_model, getattr(_agent, "MODEL_LIST", []))
+                # 默认模型:--model 指定 > 配置默认(import 时恢复的 state.current_model_index)。
+                # 关键:绝不用 Session() 的裸默认 0(那是 Claude Code 子进程,会去调 claude CLI)。
+                default_idx = getattr(state, "current_model_index", 0) or 0
+                fixed_idx = _resolve_model_index(self._fixed_model, getattr(_agent, "MODEL_LIST", []))
 
-            sess = _session.Session()
-            sess.remote_session = True            # ★ 启用 _execute_tool 的遥控安全分级
-            sess.current_model_index = fixed_idx if fixed_idx is not None else default_idx
-            if self._fixed_project:
-                sess.project = self._fixed_project
-                state.current_project = self._fixed_project
-            # 像桌面一样用 SystemMessage 起头(agent/streaming 依赖 history[0] 是 system)
-            sess.chat_history = [SystemMessage(content=get_system_prompt())]
-            _session.register(sess)
-            _session.set_active(sess)             # 主线程兜底路由到它
-            state.ui_ref = self.ui                # ★ tools 无 UI 时会直接放行写盘,必须设
-            self.sess = sess
-            self._inited = True
+                sess = _session.Session()
+                sess.remote_session = True            # ★ 启用 _execute_tool 的遥控安全分级
+                sess.current_model_index = fixed_idx if fixed_idx is not None else default_idx
+                if self._fixed_project:
+                    sess.project = self._fixed_project
+                # 像桌面一样用 SystemMessage 起头(agent/streaming 依赖 history[0] 是 system)
+                sess.chat_history = [SystemMessage(content=get_system_prompt())]
+                _session.register(sess)
+                state.ui_ref = self.ui                # tools 无 UI 时会直接放行写盘,必须设(Web 一律 None→False 拒绝)
+                self.sess = sess
+                self._inited = True
 
     def new_chat(self) -> None:
         """开新对话:重置常驻会话历史(旧对话已 save 到盘)。生成中抛 Busy。"""
@@ -163,7 +175,8 @@ class ChatService:
             raise Busy()
         self._init()
         from src.memory import reset_history
-        reset_history(session=self.sess)
+        with self._ctx():
+            reset_history(session=self.sess)
 
     def set_model(self, index: int) -> str:
         """切换常驻会话的模型(下一轮生效)。返回模型名;越界抛 ValueError,生成中抛 Busy。"""
@@ -225,6 +238,8 @@ class ChatService:
         ui = self.ui
 
         def _worker() -> None:
+            from src import paths
+            paths.set_data_dir(self._data_dir)   # ★ 本 worker 线程所有读写盘落到该用户目录
             _session.bind_thread(sess)
             try:
                 _agent.agent_loop(ui)            # 收尾自带 save_session + 标题生成
@@ -234,6 +249,7 @@ class ChatService:
             finally:
                 sess.is_generating = False
                 _session.unbind_thread()
+                paths.set_data_dir(None)
                 ui._emit("done")
 
         threading.Thread(target=_worker, name="web-agent", daemon=True).start()
@@ -241,42 +257,20 @@ class ChatService:
 
 
 # ── FastAPI 工厂 ──────────────────────────────────────────────────────────────
-def _resolve_token(explicit: Optional[str]) -> tuple[str, bool]:
-    """解析鉴权 token。优先级:显式 > 环境变量 > config.web.token > 自动生成并持久化。
-
-    返回 (token, generated)。token 始终非空(默认安全:不允许裸奔)。
-    """
-    tok = explicit or os.environ.get("LINGXI_WEB_TOKEN") or os.environ.get("WEB_AUTH_TOKEN")
-    if tok:
-        return tok, False
-    try:
-        from src import config as _cfg
-        tok = getattr(_cfg, "WEB_AUTH_TOKEN", None)
-    except Exception:
-        tok = None
-    if tok:
-        return tok, False
-    # 自动生成并持久化(下次启动复用同一个,链接不变)
-    try:
-        from src.paths import MEMORY_DIR
-        path = os.path.join(MEMORY_DIR, "web_token.json")
-        if os.path.isfile(path):
-            with open(path, encoding="utf-8") as f:
-                saved = json.load(f).get("token")
-            if saved:
-                return saved, False
-        tok = secrets.token_urlsafe(24)
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"token": tok}, f)
-        return tok, True
-    except Exception:
-        return secrets.token_urlsafe(24), True
+def _supplied_token(req) -> str:
+    """从请求里取 token:header X-Auth-Token / Authorization: Bearer / query ?token=。"""
+    auth = req.headers.get("Authorization", "")
+    return (
+        req.headers.get("X-Auth-Token")
+        or (auth[7:] if auth.startswith("Bearer ") else "")
+        or req.query_params.get("token", "")
+    )
 
 
-def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = None,
-               model: Optional[str] = None) -> Any:
-    """创建 FastAPI 应用。鉴权 token 必有(默认安全),通过 app.state.auth_token 暴露给 serve.py 打印。
+def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
+               **_ignore: Any) -> Any:
+    """创建 FastAPI 应用(多用户)。注册/登录拿 token,其余接口按 token 解析到用户、
+    各自独立的常驻会话 + 数据目录(数据隔离)。
 
     model:--model 指定的默认模型(名/序号);None 则继承 config 的 default_model_id。
     """
@@ -290,24 +284,40 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
             f"缺失模块: {getattr(e, 'name', e)}"
         ) from e
 
-    token, generated = _resolve_token(auth_token)
+    from src import paths
+    store = UserStore(paths.APP_DIR)
 
     app = FastAPI(title="灵犀 Web")
-    app.state.auth_token = token
-    app.state.token_generated = generated
+    app.state.user_store = store
 
-    svc = ChatService(project=project, model=model)
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
-    def _check(req: "Request") -> None:
-        # header X-Auth-Token / Authorization: Bearer,或 query ?token=(首次扫码/链接进入)
-        supplied = (
-            req.headers.get("X-Auth-Token")
-            or (req.headers.get("Authorization", "")[7:] if req.headers.get("Authorization", "").startswith("Bearer ") else "")
-            or req.query_params.get("token", "")
-        )
-        if not secrets.compare_digest(supplied, token):
-            raise HTTPException(status_code=401, detail="未授权")
+    # 每个用户一个常驻 ChatService(各自的会话 + 数据目录)
+    _services: dict[str, ChatService] = {}
+    _services_lock = threading.Lock()
+
+    def _svc_for(username: str) -> ChatService:
+        with _services_lock:
+            svc = _services.get(username)
+            if svc is None:
+                svc = ChatService(data_dir=store.data_dir_for(username), project=project, model=model)
+                _services[username] = svc
+            return svc
+
+    app.state.svc_for = _svc_for          # 供测试 / 内省拿到某用户的常驻会话
+
+    def _auth(req: "Request") -> str:
+        """校验 token,返回用户名;无效抛 401。"""
+        username = store.user_for_token(_supplied_token(req))
+        if not username:
+            raise HTTPException(status_code=401, detail="未授权,请登录")
+        return username
+
+    async def _json_body(request) -> dict:
+        try:
+            return await request.json()
+        except Exception:
+            return {}
 
     # ── 静态资源(不鉴权;页面本身无数据)──
     @app.get("/", response_class=HTMLResponse)
@@ -326,29 +336,56 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
     async def _icon512():
         return FileResponse(os.path.join(static_dir, "icon-512.png"), media_type="image/png")
 
-    # ── API ──
+    # ── 账号:注册 / 登录 / 登出 / 当前用户 ──
+    @app.post("/api/register")
+    async def _register(request: Request):
+        body = await _json_body(request)
+        token, err = store.register(body.get("username"), body.get("password"))
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        return {"ok": True, "token": token, "username": (body.get("username") or "").strip()}
+
+    @app.post("/api/login")
+    async def _login(request: Request):
+        body = await _json_body(request)
+        token, err = store.login(body.get("username"), body.get("password"))
+        if err:
+            return JSONResponse({"error": err}, status_code=401)
+        return {"ok": True, "token": token, "username": (body.get("username") or "").strip()}
+
+    @app.post("/api/logout")
+    async def _logout(request: Request):
+        store.revoke(_supplied_token(request))
+        return {"ok": True}
+
+    @app.get("/api/me")
+    async def _me(request: Request):
+        return {"username": _auth(request)}
+
+    # ── 业务 API(按 token 解析到各自用户的 svc)──
     @app.get("/api/status")
     async def _status(request: Request):
-        _check(request)
+        user = _auth(request)
+        svc = _svc_for(user)
         try:
             from src import agent as _agent
             models = [m[0] for m in getattr(_agent, "MODEL_LIST", [])]
         except Exception:
             models = []
-        # 以 Web 常驻会话的模型为准(先确保会话存在),而非全局默认会话
         try:
             svc._init()
             idx = svc.sess.current_model_index
         except Exception:
             idx = 0
-        model = models[idx] if 0 <= idx < len(models) else ""
+        model_name = models[idx] if 0 <= idx < len(models) else ""
         try:
             from src.config import REMOTE_MODE
         except Exception:
             REMOTE_MODE = "chat_only"
         return {
+            "user": user,
             "generating": svc.is_generating(),
-            "model": model,
+            "model": model_name,
             "model_index": idx,
             "models": models,
             "project": project,
@@ -357,11 +394,8 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
 
     @app.post("/api/model")
     async def _set_model(request: Request):
-        _check(request)
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        svc = _svc_for(_auth(request))
+        body = await _json_body(request)
         try:
             name = svc.set_model(body.get("index"))
         except Busy:
@@ -372,11 +406,8 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
 
     @app.post("/api/chat")
     async def _chat(request: Request):
-        _check(request)
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        svc = _svc_for(_auth(request))
+        body = await _json_body(request)
         message = (body.get("message") or "").strip()
         if not message:
             return JSONResponse({"error": "empty message"}, status_code=400)
@@ -404,20 +435,17 @@ def create_app(*, project: Optional[str] = None, auth_token: Optional[str] = Non
 
     @app.post("/api/stop")
     async def _stop(request: Request):
-        _check(request)
-        svc.stop()
+        _svc_for(_auth(request)).stop()
         return {"ok": True}
 
     @app.get("/api/history")
     async def _history(request: Request):
-        _check(request)
-        return {"messages": svc.history()}
+        return {"messages": _svc_for(_auth(request)).history()}
 
     @app.post("/api/new")
     async def _new(request: Request):
-        _check(request)
         try:
-            svc.new_chat()
+            _svc_for(_auth(request)).new_chat()
         except Busy:
             return JSONResponse({"error": "生成中不能开新对话"}, status_code=409)
         return {"ok": True}

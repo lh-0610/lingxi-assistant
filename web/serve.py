@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="监听地址(默认 127.0.0.1;给手机/外部访问用 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8787, help="监听端口(默认 8787)")
     parser.add_argument("--project", default=None, help="固定对话的目标项目路径(留空用当前活动项目)")
-    parser.add_argument("--token", default=None, help="鉴权 token(留空则自动生成并持久化)")
+    parser.add_argument("--token", default=None, help="(已废弃:改为多用户注册/登录,此参数忽略)")
     parser.add_argument("--model", default=None, help="默认模型(模型名或序号,如 mimo-v2.5-pro;留空用 config 默认。页面上仍可随时切)")
     args = parser.parse_args()
 
@@ -56,17 +56,16 @@ def main() -> None:
         logger.error("无法导入 web 应用: %s", e)
         sys.exit(1)
 
-    app = create_app(project=args.project, auth_token=args.token, model=args.model)
-    token = app.state.auth_token
+    app = create_app(project=args.project, model=args.model)
 
     port = args.port
-    print("\n灵犀 Web 前端已启动")
-    print(f"  本机访问   http://127.0.0.1:{port}/?token={token}")
+    print("\n灵犀 Web 前端已启动(多用户:注册 / 登录)")
+    print(f"  本机访问   http://127.0.0.1:{port}/")
     if args.host == "0.0.0.0":
         ip = _lan_ip()
         if ip:
-            print(f"  局域网     http://{ip}:{port}/?token={token}   (手机连同一 WiFi 打开)")
-    print(f"  token      {token}" + ("  (自动生成,保存于 chat_memory/web_token.json)" if app.state.token_generated else ""))
+            print(f"  局域网     http://{ip}:{port}/   (手机连同一 WiFi 打开)")
+    print("  首次使用在页面上注册账号;每个账号的对话/记忆数据互相隔离。")
     if args.host == "0.0.0.0":
         print("  注意:已绑 0.0.0.0 对外暴露。公网部署务必上 HTTPS + 防火墙只放该端口。")
     print()

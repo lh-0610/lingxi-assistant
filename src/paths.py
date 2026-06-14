@@ -44,6 +44,55 @@ CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 ROLE_CONFIG = os.path.join(MEMORY_DIR, "role_config.json")
 MCP_DIR = os.path.join(APP_DIR, "mcp")
 
+
+# ── 按用户/上下文的数据根(多用户 Web 用)────────────────────────────────────
+# 桌面端不调 set_data_dir → get_data_dir() 返回默认 APP_DIR,行为与重构前完全一致。
+# Web 端每个登录用户(及其 worker 线程)set_data_dir(<用户目录>),让 chat_memory /
+# projects / long_term_memory / role_config 落到各自子目录,实现数据隔离。
+import threading as _threading
+_data_ctx = _threading.local()
+
+
+def set_data_dir(path):
+    """设置当前线程的数据根目录;path=None 还原为默认(APP_DIR)。"""
+    if path is None:
+        _data_ctx.dir = None
+        return
+    _data_ctx.dir = path
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        pass
+
+
+def get_data_dir():
+    """当前上下文的数据根:线程本地覆盖优先,否则默认 APP_DIR。"""
+    return getattr(_data_ctx, "dir", None) or APP_DIR
+
+
+def memory_dir():
+    """chat_memory 目录(按当前上下文)。默认上下文回退到模块级 MEMORY_DIR,
+    保证桌面端 + 测试 monkeypatch(paths.MEMORY_DIR)行为不变。"""
+    d = getattr(_data_ctx, "dir", None)
+    return os.path.join(d, "chat_memory") if d else MEMORY_DIR
+
+
+def memory_index():
+    return os.path.join(memory_dir(), "index.json")
+
+
+def role_config():
+    return os.path.join(memory_dir(), "role_config.json")
+
+
+def projects_file():
+    return os.path.join(memory_dir(), "projects.json")
+
+
+def long_term_memory_file():
+    return os.path.join(memory_dir(), "long_term_memory.json")
+
+
 os.makedirs(APP_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 

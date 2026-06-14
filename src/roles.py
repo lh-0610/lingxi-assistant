@@ -8,7 +8,7 @@ import re
 import os
 import json
 
-from .paths import MEMORY_DIR, ROLE_CONFIG, logger
+from .paths import logger, memory_dir, role_config
 
 
 SYSTEM_PROMPT = """你是一个有帮助的AI助手，可以操作文件、跑命令、查代码、上网查资料。你拥有以下工具：
@@ -514,7 +514,7 @@ def _extract_character_name(content, fallback):
 
 
 def _ensure_memory_dir():
-    os.makedirs(MEMORY_DIR, exist_ok=True)
+    os.makedirs(memory_dir(), exist_ok=True)
 
 
 def set_role_card(content, name, path=None):
@@ -525,7 +525,7 @@ def set_role_card(content, name, path=None):
     _role_card_path = path
     # 持久化（保存提取后的名字，下次直接用）
     _ensure_memory_dir()
-    with open(ROLE_CONFIG, "w", encoding="utf-8") as f:
+    with open(role_config(), "w", encoding="utf-8") as f:
         json.dump({"name": _role_card_name, "path": path}, f, ensure_ascii=False)
     logger.info(f"加载角色卡: {_role_card_name}")
 
@@ -535,8 +535,8 @@ def clear_role_card():
     _role_card_content = None
     _role_card_name = None
     _role_card_path = None
-    if os.path.exists(ROLE_CONFIG):
-        os.remove(ROLE_CONFIG)
+    if os.path.exists(role_config()):
+        os.remove(role_config())
     logger.info("清除角色卡，恢复默认")
 
 
@@ -569,10 +569,10 @@ def get_role_card_content():
 def load_saved_role_card():
     """启动时自动加载上次的角色卡"""
     global _role_card_content, _role_card_name, _role_card_path
-    if not os.path.exists(ROLE_CONFIG):
+    if not os.path.exists(role_config()):
         return
     try:
-        with open(ROLE_CONFIG, "r", encoding="utf-8") as f:
+        with open(role_config(), "r", encoding="utf-8") as f:
             cfg = json.load(f)
         path = cfg.get("path")
         name = cfg.get("name")

@@ -304,13 +304,14 @@ class TestThreadBinding:
 # ════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
-def isolated_memory(tmp_path_factory, monkeypatch):
-    """隔离 memory 模块的文件路径到临时目录。"""
-    d = tmp_path_factory.mktemp("mem")
-    monkeypatch.setattr(memory, "MEMORY_DIR", str(d))
-    monkeypatch.setattr(memory, "MEMORY_INDEX", str(d / "index.json"))
+def isolated_memory(tmp_path_factory):
+    """隔离 memory 模块的文件路径到临时目录(走 paths 按上下文数据根)。"""
+    from src import paths as _paths
+    root = tmp_path_factory.mktemp("mem")
+    _paths.set_data_dir(str(root))
     memory._ensure_memory_dir()
-    return d
+    yield root / "chat_memory"      # 返回真正的会话目录(测试会用它拼 <sid>.json 路径)
+    _paths.set_data_dir(None)
 
 
 class TestMemorySession:

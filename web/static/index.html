@@ -103,20 +103,25 @@
   #btn-send.is-stop{background:var(--c-red);}
   #btn-send svg{display:block;}   /* 去掉 inline-svg 基线间隙,图标真正居中 */
 
-  /* ── Token Modal ── */
-  #token-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;
-    align-items:center;justify-content:center;z-index:100;}
-  #token-box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;
-    padding:24px;width:min(92vw,360px);text-align:center;}
-  #token-box h3{margin-bottom:14px;color:var(--c-accent);font-size:16px;}
-  #token-box input{width:100%;border:1px solid var(--c-border);border-radius:10px;
-    padding:10px 14px;font-size:15px;background:var(--c-bg);color:var(--c-text);
-    outline:none;margin-bottom:14px;}
-  #token-box input:focus{border-color:var(--c-accent);}
-  #token-box button{width:100%;background:var(--c-accent);color:#fff;border:none;
+  /* ── 登录 / 注册 ── */
+  #auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;
+    align-items:center;justify-content:center;z-index:100;padding:16px;}
+  #auth-box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;
+    padding:24px;width:min(92vw,360px);}
+  #auth-box h3{margin-bottom:16px;color:var(--c-accent);font-size:17px;text-align:center;}
+  #auth-box input{width:100%;border:1px solid var(--c-border);border-radius:10px;
+    padding:11px 14px;font-size:15px;background:var(--c-bg);color:var(--c-text);
+    outline:none;margin-bottom:12px;}
+  #auth-box input:focus{border-color:var(--c-accent);}
+  #auth-box button{width:100%;background:var(--c-accent);color:#fff;border:none;
     border-radius:10px;padding:12px;font-size:15px;font-weight:600;cursor:pointer;}
-  #token-box .skip{margin-top:8px;font-size:12px;color:var(--c-sub);cursor:pointer;}
-  #token-box .skip:hover{color:var(--c-accent);}
+  #auth-box button:disabled{opacity:0.5;}
+  #auth-err{color:var(--c-red);font-size:13px;min-height:18px;margin-bottom:8px;text-align:center;}
+  #auth-switch{margin-top:14px;font-size:13px;color:var(--c-sub);cursor:pointer;text-align:center;}
+  #auth-switch:hover{color:var(--c-accent);}
+  #btn-logout{background:none;border:none;color:var(--c-sub);font-size:13px;
+    padding:8px;cursor:pointer;min-height:44px;display:flex;align-items:center;}
+  #btn-logout:hover{color:var(--c-red);}
 
   /* ── Markdown 渲染 ── */
   .msg.ai h1,.msg.ai h2,.msg.ai h3{margin:0.6em 0 0.3em;font-weight:600;}
@@ -137,6 +142,7 @@
     <select id="model-sel" title="选择模型"></select>
     <div class="spacer"></div>
     <button id="btn-clear" title="新对话">新对话</button>
+    <button id="btn-logout" title="退出登录">退出</button>
   </header>
 
   <div id="messages">
@@ -155,12 +161,14 @@
     </button>
   </div>
 
-  <div id="token-overlay">
-    <div id="token-box">
-      <h3>连接灵犀</h3>
-      <input id="token-input" type="password" placeholder="API Token（可留空）" autocomplete="off">
-      <button id="token-ok">连接</button>
-      <div class="skip" id="token-skip">跳过，直接进入 →</div>
+  <div id="auth-overlay">
+    <div id="auth-box">
+      <h3 id="auth-title">登录灵犀</h3>
+      <input id="auth-user" type="text" placeholder="用户名" autocomplete="username">
+      <input id="auth-pass" type="password" placeholder="密码" autocomplete="current-password">
+      <div id="auth-err"></div>
+      <button id="auth-submit">登录</button>
+      <div id="auth-switch">没有账号?去注册 →</div>
     </div>
   </div>
 </div>
@@ -171,21 +179,9 @@
 
   // ── 状态 ──
   const history = [];   // [{role, content}]
-  // token 优先级:URL ?token= → localStorage。拿到后存 localStorage 并从地址栏抹掉(防泄露/分享误带)
-  let token = '';
-  try {
-    var _u = new URL(window.location.href);
-    var _t = _u.searchParams.get('token');
-    if (_t) {
-      token = _t;
-      localStorage.setItem('lingxi_token', _t);
-      _u.searchParams.delete('token');
-      history_replace(_u);
-    } else {
-      token = localStorage.getItem('lingxi_token') || '';
-    }
-  } catch (e) {}
-  function history_replace(u) { try { window.history.replaceState({}, '', u.pathname + u.search); } catch (e) {} }
+  // 多用户:token 由登录/注册获得,存 localStorage(每个账号数据隔离)
+  let token = localStorage.getItem('lingxi_token') || '';
+  let username = '';
   let generating = false;
 
   // ── DOM ──
@@ -194,10 +190,13 @@
   const $send     = document.getElementById('btn-send');
   const $clear    = document.getElementById('btn-clear');
   const $dot      = document.getElementById('status-dot');
-  const $overlay  = document.getElementById('token-overlay');
-  const $tokenIn  = document.getElementById('token-input');
-  const $tokenOk  = document.getElementById('token-ok');
-  const $tokenSkip = document.getElementById('token-skip');
+  const $overlay   = document.getElementById('auth-overlay');
+  const $authUser  = document.getElementById('auth-user');
+  const $authPass  = document.getElementById('auth-pass');
+  const $authErr   = document.getElementById('auth-err');
+  const $authSubmit= document.getElementById('auth-submit');
+  const $authSwitch= document.getElementById('auth-switch');
+  const $logout    = document.getElementById('btn-logout');
   const $modelSel = document.getElementById('model-sel');
 
   // ── 鉴权头 ──
@@ -236,23 +235,62 @@
     }).catch(function() {});
   });
 
-  // ── Token Modal ──
-  // 已从 URL / localStorage 拿到 token 就直接进;否则弹框要求输入(服务端强制鉴权)
-  if (token) {
-    $overlay.style.display = 'none';
+  // ── 登录 / 注册 ──
+  let authMode = 'login';   // login | register
+  function startApp() { $overlay.style.display = 'none'; $input.focus(); loadStatus(); loadHistory(); }
+  function showAuth() { $overlay.style.display = 'flex'; }
+  function setMode(m) {
+    authMode = m;
+    document.getElementById('auth-title').textContent = m === 'login' ? '登录灵犀' : '注册灵犀';
+    $authSubmit.textContent = m === 'login' ? '登录' : '注册';
+    $authSwitch.textContent = m === 'login' ? '没有账号?去注册 →' : '已有账号?去登录 →';
+    $authErr.textContent = '';
   }
-  $tokenOk.onclick = function() {
-    token = $tokenIn.value.trim();
-    if (token) { localStorage.setItem('lingxi_token', token); }
-    $overlay.style.display = 'none';
-    $input.focus();
-    loadStatus();
-    loadHistory();
-  };
-  if ($tokenSkip) { $tokenSkip.style.display = 'none'; }  // 服务端强制 token,去掉"跳过"
-  $tokenIn.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') { e.preventDefault(); $tokenOk.click(); }
-  });
+  function submitAuth() {
+    var u = $authUser.value.trim(), p = $authPass.value;
+    if (!u || !p) { $authErr.textContent = '请输入用户名和密码'; return; }
+    var url = authMode === 'login' ? '/api/login' : '/api/register';
+    $authSubmit.disabled = true; $authErr.textContent = '';
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ username: u, password: p }) })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+      .then(function(res) {
+        if (res.ok && res.d.token) {
+          token = res.d.token; username = res.d.username || u;
+          localStorage.setItem('lingxi_token', token);
+          $authPass.value = '';
+          startApp();
+        } else {
+          $authErr.textContent = (res.d && res.d.error) || '操作失败';
+        }
+      })
+      .catch(function() { $authErr.textContent = '网络错误'; })
+      .finally(function() { $authSubmit.disabled = false; });
+  }
+  function doLogout() {
+    fetch('/api/logout', { method: 'POST', headers: authHeaders() }).catch(function() {}).finally(function() {
+      token = ''; username = '';
+      localStorage.removeItem('lingxi_token');
+      $msgs.innerHTML = '';
+      $authUser.value = ''; $authPass.value = '';
+      setMode('login'); showAuth();
+    });
+  }
+  function boot() {
+    if (!token) { showAuth(); return; }
+    fetch('/api/me', { headers: authHeaders() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (d && d.username) { username = d.username; startApp(); }
+        else { token = ''; localStorage.removeItem('lingxi_token'); showAuth(); }
+      })
+      .catch(function() { showAuth(); });
+  }
+  $authSubmit.onclick = submitAuth;
+  $authSwitch.onclick = function() { setMode(authMode === 'login' ? 'register' : 'login'); };
+  $authPass.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); submitAuth(); } });
+  $authUser.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); $authPass.focus(); } });
+  if ($logout) $logout.addEventListener('click', doLogout);
 
   // ── 工具函数 ──
   function esc(s) {
@@ -426,7 +464,8 @@
     }).then(function(resp) {
       if (!resp.ok) {
         if (resp.status === 401 || resp.status === 403) {
-          throw new Error('鉴权失败，请检查 token');
+          token = ''; localStorage.removeItem('lingxi_token'); showAuth();
+          throw new Error('登录已失效，请重新登录');
         }
         throw new Error('请求失败: ' + resp.status);
       }
@@ -546,8 +585,7 @@
   // ── 初始化 ──
   setStatus('ok');
   autoResize();
-  loadStatus();    // 拉模型列表填下拉
-  loadHistory();   // 重开 App 恢复上次对话(服务器还存着;无 token 时静默失败)
+  boot();   // 有有效 token 直接进 App,否则弹登录/注册
 })();
 </script>
 </body>

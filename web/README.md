@@ -18,7 +18,7 @@ pip install fastapi uvicorn
 python web/serve.py
 ```
 
-只绑 `127.0.0.1:8787`,仅本机浏览器可访问。启动时会打印带 token 的访问链接,直接点开即用。
+只绑 `127.0.0.1:8787`,仅本机浏览器可访问。浏览器打开 `http://127.0.0.1:8787/`,首次用**注册账号**即可。
 
 ### ② 局域网 → 手机版灵犀(零服务器成本)
 
@@ -26,7 +26,7 @@ python web/serve.py
 python web/serve.py --host 0.0.0.0
 ```
 
-启动会打印 `http://<本机内网IP>:8787/?token=xxx`。**手机连同一个 WiFi**,浏览器打开这个链接即可;
+启动会打印 `http://<本机内网IP>:8787/`。**手机连同一个 WiFi**,浏览器打开这个链接、注册账号即可;
 在手机浏览器"添加到主屏幕"后就是一个 App。确保防火墙放行 8787。
 
 ### ③ 云服务器常驻
@@ -46,13 +46,16 @@ systemctl enable --now lingxi-web
 **公网部署务必**:① 上 HTTPS(套 nginx / caddy 反代 + 证书);② 防火墙只放 SSH 和该端口;
 ③ 见下方"工具权限"。
 
-## 鉴权 token
+## 账号(多用户 + 数据隔离)
 
-- **默认必有 token,绝不裸奔**。优先级:`--token` > 环境变量 `LINGXI_WEB_TOKEN` > `config.json` 的 `web.token`
-  > **自动生成**(持久化到 `chat_memory/web_token.json`,下次启动复用、链接不变)。
-- 携带方式:URL `?token=xxx`(首次点链接/扫码,前端会自动存下并从地址栏抹掉)、
-  请求头 `X-Auth-Token` 或 `Authorization: Bearer xxx`。
-- token 校验用 `secrets.compare_digest`(防时序攻击)。
+- **注册 / 登录拿 token**:首次在页面注册用户名 + 密码;登录返回的 token 存在浏览器 localStorage,
+  之后请求带 `X-Auth-Token`(或 `Authorization: Bearer xxx` / `?token=`)。
+- **密码**:`pbkdf2-hmac-sha256` 加盐哈希存盘(`web_users.json`),绝不存明文;校验用 `secrets.compare_digest`。
+- **数据隔离**:每个账号的对话历史 / 长期记忆 / 项目 / 角色配置各自存在
+  `APP_DIR/users/<用户名>/` 下,**互相看不到**(靠 `src/paths.py` 的 `set_data_dir` 按用户切数据根)。
+- **存储文件**(服务器数据根 `APP_DIR` 下):`web_users.json`(用户表)、`web_tokens.json`(token→用户,
+  重启不掉线、支持多设备)、`users/<用户名>/`(各用户数据)。
+- 想给朋友用:把服务跑起来(建议 ③ + HTTPS),发链接,各自注册即可。
 
 ## 工具权限(重要)
 
@@ -86,14 +89,16 @@ Web 会话默认打 `remote_session=True`,复用桌面端的"遥控安全分级"
 
 ```
 手机/浏览器 ──HTTP, NDJSON 流──▶ FastAPI(web/app.py)
+                                  │  UserStore(web/auth.py:注册/登录/token)
                                   │  HeadlessWebUI(无 Qt,confirm_* 一律拒绝)
-                                  │  ChatService(一个常驻 session.Session,remote_session=True)
+                                  │  每用户一个 ChatService(各自 session.Session + 数据目录,remote_session=True)
                                   ▼
                             src/agent.py  agent_loop(ui)  ← 与桌面完全同一套核心
 ```
 
+- `/api/register` `/api/login` `/api/logout` `/api/me`:账号。
 - `/api/chat`(POST):NDJSON 流式(`application/x-ndjson`,逐行 `{"type":...}`);事件 `msg`/`md`/`retry`/`done`/`error`/`ping`。
-- `/api/status` `/api/stop` `/api/history`:状态 / 停止 / 历史。
-- 单进程(uvicorn 默认 workers=1):多 worker 会各持一个会话,破坏单会话语义。
+- `/api/status` `/api/stop` `/api/history` `/api/new` `/api/model`:状态 / 停止 / 历史 / 新对话 / 切模型。
+- 单进程(uvicorn 默认 workers=1):多 worker 会各持一份用户→会话表,破坏会话语义。每个登录用户在进程内一个常驻会话。
 
-> M1 范围:流畅的手机聊天。**不含**:网页内联确认卡(放开写工具)、会话列表切换、语音/图片、原生 App——后续里程碑。
+> 范围:多用户手机聊天 + 数据隔离。**不含**:网页内联确认卡(放开写工具)、会话列表切换、语音/图片、原生 App——后续里程碑。

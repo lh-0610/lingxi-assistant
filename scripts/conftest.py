@@ -27,14 +27,18 @@ def _fresh_active_session():
     """
     from src import session as _session
     from src import state as _state
+    from src import paths as _paths
     # 中和全局 current_project：import src.agent 时会 state.current_project = projects.get_current()
     # 把【开发者 app 里当前打开的项目】恢复进来（如手动切到别的项目测试）。不清的话，不自己设
     # current_project 的测试（如 test_related_files 依赖项目根=本仓库）会被串到那个项目而失败。
     _state.current_project = None
+    # 清掉上个测试可能残留的"按用户数据根"线程本地上下文（多用户重构引入；线程本地跨测试不自动清）。
+    _paths.set_data_dir(None)
     _session.unbind_thread()
     _session.set_active(_session.Session())
     yield
     _session.unbind_thread()
+    _paths.set_data_dir(None)
 
 
 @pytest.fixture()
@@ -67,43 +71,21 @@ def project_dir(tmp_path):
 
 
 @pytest.fixture()
-def isolated_memory(tmp_path, monkeypatch):
-    """将 MEMORY_DIR 等路径全部重定向到 tmp_path，不污染真实数据。
+def isolated_memory(tmp_path):
+    """把数据根重定向到 tmp_path，不污染真实数据。
 
-    路径常量在 import 时就绑定了本地引用，所以不仅要 patch 源模块（paths），
-    还要 patch 所有 `from .paths import MEMORY_DIR` 的消费模块。
+    多用户重构后,路径走 paths.set_data_dir(<根>) 的线程本地上下文,
+    chat_memory / index / projects / long_term_memory / role_config 全部跟着落到
+    tmp_path/chat_memory 下——一处设置,无需再逐模块 patch 常量。
 
     用法：def test_xxx(isolated_memory): ...
     """
-    mem_dir = tmp_path / "chat_memory"
-    mem_dir.mkdir()
-    mem_dir_str = str(mem_dir)
-    index_str = str(mem_dir / "index.json")
-    role_str = str(mem_dir / "role_config.json")
-    ltm_str = str(mem_dir / "long_term_memory.json")
-    proj_str = str(mem_dir / "projects.json")
-
-    # 1) 源模块
     import src.paths as _paths
-    monkeypatch.setattr(_paths, "MEMORY_DIR", mem_dir_str)
-    monkeypatch.setattr(_paths, "MEMORY_INDEX", index_str)
-    monkeypatch.setattr(_paths, "ROLE_CONFIG", role_str)
-
-    # 2) memory_store（`from .paths import MEMORY_DIR` → 本地副本 + _MEMORY_FILE）
-    import src.memory_store as _ms
-    monkeypatch.setattr(_ms, "MEMORY_DIR", mem_dir_str)
-    monkeypatch.setattr(_ms, "_MEMORY_FILE", ltm_str)
-
-    # 3) memory（`from .paths import MEMORY_DIR, MEMORY_INDEX`）
-    import src.memory as _mem
-    monkeypatch.setattr(_mem, "MEMORY_DIR", mem_dir_str)
-    monkeypatch.setattr(_mem, "MEMORY_INDEX", index_str)
-
-    # 4) projects
-    import src.projects as _pj
-    monkeypatch.setattr(_pj, "PROJECTS_FILE", proj_str)
-
-    return mem_dir
+    _paths.set_data_dir(str(tmp_path))
+    mem_dir = tmp_path / "chat_memory"
+    mem_dir.mkdir(exist_ok=True)
+    yield mem_dir
+    _paths.set_data_dir(None)
 
 
 @pytest.fixture()

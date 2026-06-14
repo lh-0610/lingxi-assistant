@@ -15,16 +15,13 @@
 import json
 import os
 
-from .paths import MEMORY_DIR, logger
-
-
-PROJECTS_FILE = os.path.join(MEMORY_DIR, "projects.json")
+from .paths import logger, memory_dir, projects_file
 
 
 def _load() -> dict:
     try:
-        if os.path.exists(PROJECTS_FILE):
-            with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
+        if os.path.exists(projects_file()):
+            with open(projects_file(), "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
         logger.warning(f"读取 projects.json 失败: {e}")
@@ -33,8 +30,8 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     try:
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-        with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(memory_dir(), exist_ok=True)
+        with open(projects_file(), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.warning(f"保存 projects.json 失败: {e}")

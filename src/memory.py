@@ -15,7 +15,7 @@ from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 
 from . import state
-from .paths import MEMORY_DIR, MEMORY_INDEX, logger
+from .paths import logger, memory_dir, memory_index
 from .roles import get_system_prompt
 from .limits import SESSION_HISTORY_LIMIT
 
@@ -28,9 +28,9 @@ _LOCK = threading.RLock()
 
 def _ensure_memory_dir():
     with _LOCK:
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-        if not os.path.exists(MEMORY_INDEX):
-            with open(MEMORY_INDEX, "w", encoding="utf-8") as f:
+        os.makedirs(memory_dir(), exist_ok=True)
+        if not os.path.exists(memory_index()):
+            with open(memory_index(), "w", encoding="utf-8") as f:
                 json.dump([], f)
 
 
@@ -161,7 +161,7 @@ def save_session(*, session=None):
                 title = c[:30].replace("\n", " ")
             break
 
-    session_file = os.path.join(MEMORY_DIR, f"{current_session_id}.json")
+    session_file = os.path.join(memory_dir(), f"{current_session_id}.json")
     data = {
         "id": current_session_id,
         "title": title,
@@ -237,7 +237,7 @@ def _sanitize_title(title):
 
 def _write_session_title(session_id, title):
     """更新当前会话文件中的 title 字段。"""
-    session_file = os.path.join(MEMORY_DIR, f"{session_id}.json")
+    session_file = os.path.join(memory_dir(), f"{session_id}.json")
     with _LOCK:
         if not os.path.exists(session_file):
             return
@@ -309,7 +309,7 @@ def maybe_generate_session_title():
 
 def _update_index(session_id, title, project=None):
     with _LOCK:
-        with open(MEMORY_INDEX, "r", encoding="utf-8") as f:
+        with open(memory_index(), "r", encoding="utf-8") as f:
             index = json.load(f)
 
         for item in index:
@@ -329,7 +329,7 @@ def _update_index(session_id, title, project=None):
         kept_ids = {item["id"] for item in index[:SESSION_HISTORY_LIMIT]}
         dropped_ids = [item["id"] for item in index[SESSION_HISTORY_LIMIT:]]
         index = index[:SESSION_HISTORY_LIMIT]
-        with open(MEMORY_INDEX, "w", encoding="utf-8") as f:
+        with open(memory_index(), "w", encoding="utf-8") as f:
             json.dump(index, f, ensure_ascii=False, indent=2)
         for old_id in dropped_ids:
             if old_id in kept_ids or old_id == state.current_session_id:
@@ -342,7 +342,7 @@ def _update_index(session_id, title, project=None):
                     continue
             except Exception:
                 pass
-            old_file = os.path.join(MEMORY_DIR, f"{old_id}.json")
+            old_file = os.path.join(memory_dir(), f"{old_id}.json")
             try:
                 if os.path.exists(old_file):
                     os.remove(old_file)
@@ -356,7 +356,7 @@ def load_session(session_id, *, session=None):
     session=None → 写当前前台 Session（经 state 代理）；
     session=<Session> → 直接写目标 Session 对象（用于加载后台会话，避免污染前台）。
     """
-    session_file = os.path.join(MEMORY_DIR, f"{session_id}.json")
+    session_file = os.path.join(memory_dir(), f"{session_id}.json")
     with _LOCK:
         if not os.path.exists(session_file):
             return False
@@ -405,9 +405,9 @@ def list_sessions(project_filter="__current__"):
     """
     _ensure_memory_dir()
     with _LOCK:
-        if not os.path.exists(MEMORY_INDEX):
+        if not os.path.exists(memory_index()):
             return []
-        with open(MEMORY_INDEX, "r", encoding="utf-8") as f:
+        with open(memory_index(), "r", encoding="utf-8") as f:
             index = json.load(f)
 
     if project_filter == "__all__":
@@ -430,9 +430,9 @@ def move_sessions_to_no_project(old_path):
         return 0
     moved = 0
     with _LOCK:
-        if not os.path.exists(MEMORY_INDEX):
+        if not os.path.exists(memory_index()):
             return 0
-        with open(MEMORY_INDEX, "r", encoding="utf-8") as f:
+        with open(memory_index(), "r", encoding="utf-8") as f:
             index = json.load(f)
 
         affected_ids = []
@@ -443,12 +443,12 @@ def move_sessions_to_no_project(old_path):
                 moved += 1
 
         if moved:
-            with open(MEMORY_INDEX, "w", encoding="utf-8") as f:
+            with open(memory_index(), "w", encoding="utf-8") as f:
                 json.dump(index, f, ensure_ascii=False, indent=2)
 
             # 同步改每个会话文件里的 project 字段
             for sid in affected_ids:
-                session_file = os.path.join(MEMORY_DIR, f"{sid}.json")
+                session_file = os.path.join(memory_dir(), f"{sid}.json")
                 if not os.path.exists(session_file):
                     continue
                 try:
@@ -468,16 +468,16 @@ def move_sessions_to_no_project(old_path):
 def delete_session(session_id):
     from .session import drop as drop_session
 
-    session_file = os.path.join(MEMORY_DIR, f"{session_id}.json")
+    session_file = os.path.join(memory_dir(), f"{session_id}.json")
     with _LOCK:
         if os.path.exists(session_file):
             os.remove(session_file)
 
-        if os.path.exists(MEMORY_INDEX):
-            with open(MEMORY_INDEX, "r", encoding="utf-8") as f:
+        if os.path.exists(memory_index()):
+            with open(memory_index(), "r", encoding="utf-8") as f:
                 index = json.load(f)
             index = [i for i in index if i["id"] != session_id]
-            with open(MEMORY_INDEX, "w", encoding="utf-8") as f:
+            with open(memory_index(), "w", encoding="utf-8") as f:
                 json.dump(index, f, ensure_ascii=False, indent=2)
     # 同步清除会话注册表（不再持有该 Session 对象）
     drop_session(session_id)

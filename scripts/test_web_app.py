@@ -1,7 +1,8 @@
-"""web/app.py 测试。
+"""web/app.py 测试(多用户版)。
 
 关键:桩成【真签名 agent_loop(ui)】,用真 HeadlessWebUI 方法 + 真 session.Session,
 不再 mock 一个臆造签名的 agent_loop(那样测试全过但实际跑不起来)。
+鉴权改为注册/登录拿 token;数据根隔离到 tmp(APP_DIR 指 tmp,每用户子目录)。
 fastapi 未装则整文件跳过。
 """
 from __future__ import annotations
@@ -22,7 +23,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from web.app import create_app, HeadlessWebUI, ChatService, Busy  # noqa: E402
 
 
-TOKEN = "test-token-123"
+USER = "tester"
+PASS = "pw1234"
 
 
 @pytest.fixture()
@@ -35,7 +37,6 @@ def stub_core(monkeypatch):
     monkeypatch.setattr(_roles, "get_system_prompt", lambda *a, **k: "SYSTEM", raising=False)
 
     def fake_agent_loop(ui):
-        # 真 agent_loop 的最小忠实复刻:走真 ui 方法 + 往当前会话 append AIMessage
         ui.show_message("\n", "spacer")
         ui.show_message("mimo-v2.5-pro\n", "ai_label")
         ui.show_message("你好", "ai_msg")
@@ -47,118 +48,156 @@ def stub_core(monkeypatch):
 
 
 @pytest.fixture()
-def client(stub_core):
-    return TestClient(create_app(auth_token=TOKEN))
+def app_ctx(stub_core, monkeypatch, tmp_path):
+    """数据根隔离到 tmp(APP_DIR→tmp),建 app,注册一个测试用户。
 
-
-# ── 鉴权 ──
-def test_api_requires_token(client):
-    assert client.get("/api/status").status_code == 401                       # 无 token
-    assert client.get("/api/status", headers={"X-Auth-Token": "wrong"}).status_code == 401
-    assert client.get("/api/status", headers={"X-Auth-Token": TOKEN}).status_code == 200
-
-
-def test_token_via_query_param(client):
-    # 首次扫码/链接 ?token= 进入
-    assert client.get(f"/api/status?token={TOKEN}").status_code == 200
-
-
-def test_auto_token_when_unset(stub_core, monkeypatch, tmp_path):
-    # 不传 token 也必须有(自动生成),绝不裸奔
-    monkeypatch.delenv("LINGXI_WEB_TOKEN", raising=False)
-    monkeypatch.delenv("WEB_AUTH_TOKEN", raising=False)
+    返回 (client, app, token, username);client 默认带该用户 token 头。
+    """
     import src.paths as _paths
-    monkeypatch.setattr(_paths, "MEMORY_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(_paths, "APP_DIR", str(tmp_path), raising=False)
     app = create_app()
-    assert app.state.auth_token                       # 非空
     c = TestClient(app)
-    assert c.get("/api/status").status_code == 401    # 无 token 仍被拦
+    token = c.post("/api/register", json={"username": USER, "password": PASS}).json()["token"]
+    c.headers.update({"X-Auth-Token": token})   # 之后所有请求默认带 token
+    return c, app, token, USER
+
+
+@pytest.fixture()
+def client(app_ctx):
+    return app_ctx[0]
+
+
+def _sess(app_ctx):
+    """该测试用户的常驻会话对象。"""
+    c, app, token, user = app_ctx
+    svc = app.state.svc_for(user)
+    svc._init()
+    return svc.sess
+
+
+# ── 账号:注册 / 登录 / 登出 ──
+def test_register_login_logout(app_ctx):
+    c, app, token, user = app_ctx
+    # 重复注册 → 400
+    assert c.post("/api/register", json={"username": USER, "password": "x"}).status_code == 400
+    # 错误密码 → 401
+    assert c.post("/api/login", json={"username": USER, "password": "nope"}).status_code == 401
+    # 正确登录 → 拿到新 token
+    r = c.post("/api/login", json={"username": USER, "password": PASS})
+    assert r.status_code == 200 and r.json()["token"]
+    # 非法用户名 → 400
+    assert c.post("/api/register", json={"username": "a/b", "password": "1234"}).status_code == 400
+    # 短密码 → 400
+    assert c.post("/api/register", json={"username": "u2", "password": "1"}).status_code == 400
+
+
+def test_me_and_auth_required(app_ctx):
+    c, app, token, user = app_ctx
+    assert c.get("/api/me").json()["username"] == USER
+    # 无 token → 401
+    raw = TestClient(app)
+    assert raw.get("/api/me").status_code == 401
+    assert raw.get("/api/status", headers={"X-Auth-Token": "wrong"}).status_code == 401
+
+
+def test_token_via_query_param(app_ctx):
+    c, app, token, user = app_ctx
+    raw = TestClient(app)
+    assert raw.get(f"/api/status?token={token}").status_code == 200
+
+
+# ── 数据隔离 ──
+def test_user_isolation(app_ctx):
+    """两个用户各自独立会话/历史,互不可见。"""
+    c, app, token_a, user_a = app_ctx
+    # 注册第二个用户
+    raw = TestClient(app)
+    tb = raw.post("/api/register", json={"username": "other", "password": "pw1234"}).json()["token"]
+    raw.headers.update({"X-Auth-Token": tb})
+
+    c.post("/api/chat", json={"message": "甲的消息"})
+    raw.post("/api/chat", json={"message": "乙的消息"})
+
+    ha = c.get("/api/history").json()["messages"]
+    hb = raw.get("/api/history").json()["messages"]
+    a_texts = " ".join(m.get("text", "") for m in ha)
+    b_texts = " ".join(m.get("text", "") for m in hb)
+    assert "甲的消息" in a_texts and "乙的消息" not in a_texts
+    assert "乙的消息" in b_texts and "甲的消息" not in b_texts
 
 
 # ── 聊天流式(NDJSON)──
 def test_chat_streams_ndjson_events(client):
-    r = client.post("/api/chat", json={"message": "你好"}, headers={"X-Auth-Token": TOKEN})
+    r = client.post("/api/chat", json={"message": "你好"})
     assert r.status_code == 200
     assert "application/x-ndjson" in r.headers.get("content-type", "")
     assert r.headers.get("cache-control") == "no-store"
     events = [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
     types = [e["type"] for e in events]
     assert "msg" in types and "md" in types and "done" in types
-    # 中文不转义
     assert any(e.get("type") == "md" and "你好" in e.get("text", "") for e in events)
 
 
 def test_chat_empty_message_400(client):
-    r = client.post("/api/chat", json={"message": "  "}, headers={"X-Auth-Token": TOKEN})
-    assert r.status_code == 400
+    assert client.post("/api/chat", json={"message": "  "}).status_code == 400
 
 
-def test_chat_busy_409(client):
-    # HTTP 层:正在生成时再发一条 → 409。直接把会话标记为生成中再请求。
-    from src import session as _session
-    client.post("/api/chat", json={"message": "你好"}, headers={"X-Auth-Token": TOKEN})  # 建会话
-    _session.get_active().is_generating = True
+def test_chat_busy_409(app_ctx):
+    c, app, token, user = app_ctx
+    c.post("/api/chat", json={"message": "你好"})   # 建会话
+    _sess(app_ctx).is_generating = True
     try:
-        r = client.post("/api/chat", json={"message": "再来"}, headers={"X-Auth-Token": TOKEN})
-        assert r.status_code == 409
+        assert c.post("/api/chat", json={"message": "再来"}).status_code == 409
     finally:
-        _session.get_active().is_generating = False
+        _sess(app_ctx).is_generating = False
 
 
 # ── stop / history ──
-def test_stop_sets_flag(client, stub_core):
-    _agent, _session = stub_core
-    r = client.post("/api/stop", headers={"X-Auth-Token": TOKEN})
+def test_stop_sets_flag(client):
+    r = client.post("/api/stop")
     assert r.status_code == 200 and r.json().get("ok") is True
 
 
-def test_history_serializes_roles(client):
-    from src import session as _session
+def test_history_serializes_roles(app_ctx):
+    c, app, token, user = app_ctx
     from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
-    # 先发一轮把会话建起来
-    client.post("/api/chat", json={"message": "你好"}, headers={"X-Auth-Token": TOKEN})
-    sess = _session.get_active()
+    c.post("/api/chat", json={"message": "你好"})       # 建会话
+    sess = _sess(app_ctx)
     sess.chat_history = [
         SystemMessage(content="sys"),
         HumanMessage(content="问题"),
         AIMessage(content="回答"),
         ToolMessage(content="工具输出", tool_call_id="t1"),
     ]
-    r = client.get("/api/history", headers={"X-Auth-Token": TOKEN})
-    msgs = r.json()["messages"]
+    msgs = c.get("/api/history").json()["messages"]
     roles = [m["role"] for m in msgs]
-    assert "system" not in roles            # system 跳过
+    assert "system" not in roles
     assert roles == ["user", "assistant", "tool"]
 
 
-def test_new_chat_resets(client, isolated_memory):
-    from src import session as _session
+def test_new_chat_resets(app_ctx):
+    c, app, token, user = app_ctx
     from langchain_core.messages import HumanMessage
-    client.post("/api/chat", json={"message": "你好"}, headers={"X-Auth-Token": TOKEN})  # 建会话
-    _session.get_active().chat_history.append(HumanMessage(content="多一条"))
-    r = client.post("/api/new", headers={"X-Auth-Token": TOKEN})
+    c.post("/api/chat", json={"message": "你好"})        # 建会话
+    _sess(app_ctx).chat_history.append(HumanMessage(content="多一条"))
+    r = c.post("/api/new")
     assert r.status_code == 200 and r.json()["ok"] is True
-    # 重置后历史只剩 system(history() 跳过 system → 空)
-    h = client.get("/api/history", headers={"X-Auth-Token": TOKEN}).json()["messages"]
-    assert h == []
+    assert c.get("/api/history").json()["messages"] == []
 
 
 # ── 安全回归 ──
 def test_confirm_command_rejected():
-    ui = HeadlessWebUI()
-    allowed, reason = ui.confirm_command("rm -rf /")     # 真实 arity:1 个参数
+    allowed, reason = HeadlessWebUI().confirm_command("rm -rf /")
     assert allowed is False and reason
 
 
 def test_confirm_edit_rejected():
-    ui = HeadlessWebUI()
-    allowed, reason = ui.confirm_edit("a.py", "--- diff ---")  # 真实 arity:(full, diff)
+    allowed, reason = HeadlessWebUI().confirm_edit("a.py", "--- diff ---")
     assert allowed is False and reason
 
 
-def test_remote_session_flag(stub_core):
-    # 会话必须打 remote_session=True,否则 _execute_tool 的安全分级不生效
-    svc = ChatService()
+def test_remote_session_flag(stub_core, tmp_path):
+    svc = ChatService(data_dir=str(tmp_path / "u"))
     svc._init()
     assert svc.sess.remote_session is True
 
@@ -167,32 +206,34 @@ def test_remote_session_flag(stub_core):
 def test_model_switch(client):
     from src import agent
     target = 2 if len(agent.MODEL_LIST) > 2 else 0
-    r = client.post("/api/model", json={"index": target}, headers={"X-Auth-Token": TOKEN})
+    r = client.post("/api/model", json={"index": target})
     assert r.status_code == 200
     assert r.json()["model"] == agent.MODEL_LIST[target][0]
-    s = client.get("/api/status", headers={"X-Auth-Token": TOKEN}).json()
+    s = client.get("/api/status").json()
     assert s["model_index"] == target
-    # 越界 → 400
-    assert client.post("/api/model", json={"index": 99999}, headers={"X-Auth-Token": TOKEN}).status_code == 400
+    assert client.post("/api/model", json={"index": 99999}).status_code == 400
 
 
-def test_fixed_model_arg(stub_core):
-    # --model 指定的模型名应被解析并固定为会话默认
+def test_fixed_model_arg(stub_core, monkeypatch, tmp_path):
     from src import agent
     if len(agent.MODEL_LIST) < 2:
         pytest.skip("模型数不足")
+    import src.paths as _paths
+    monkeypatch.setattr(_paths, "APP_DIR", str(tmp_path), raising=False)
     name = agent.MODEL_LIST[1][0]
-    c = TestClient(create_app(auth_token=TOKEN, model=name))
-    s = c.get("/api/status", headers={"X-Auth-Token": TOKEN}).json()
+    c = TestClient(create_app(model=name))
+    tok = c.post("/api/register", json={"username": "fm", "password": "pw1234"}).json()["token"]
+    c.headers.update({"X-Auth-Token": tok})
+    s = c.get("/api/status").json()
     assert s["model"] == name and s["model_index"] == 1
 
 
 def test_resolve_model_index():
     from web.app import _resolve_model_index
     ml = [("Claude Code",), ("mimo-v2.5-pro",), ("deepseek-v4-pro",)]
-    assert _resolve_model_index("mimo-v2.5-pro", ml) == 1   # 精确名
-    assert _resolve_model_index("deepseek", ml) == 2        # 子串
-    assert _resolve_model_index(2, ml) == 2                 # 序号
+    assert _resolve_model_index("mimo-v2.5-pro", ml) == 1
+    assert _resolve_model_index("deepseek", ml) == 2
+    assert _resolve_model_index(2, ml) == 2
     assert _resolve_model_index("不存在的", ml) is None
     assert _resolve_model_index(None, ml) is None
 

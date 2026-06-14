@@ -12,7 +12,7 @@ import contextlib
 import threading
 from datetime import datetime
 
-from .paths import MEMORY_DIR, logger
+from .paths import logger, memory_dir, long_term_memory_file
 from .limits import MEMORY_FACT_MAX_LENGTH
 
 
@@ -20,16 +20,15 @@ from .limits import MEMORY_FACT_MAX_LENGTH
 # 用 RLock 是因为同一线程内可能嵌套调用。
 _LOCK = threading.RLock()
 
-# 存储文件路径
-_MEMORY_FILE = os.path.join(MEMORY_DIR, "long_term_memory.json")
+# 存储文件路径(按当前用户上下文动态解析)→ paths.long_term_memory_file()
 
 
 def _ensure_file():
     """确保存储文件存在，不存在则创建空结构。"""
     with _LOCK:
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-        if not os.path.exists(_MEMORY_FILE):
-            with open(_MEMORY_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(memory_dir(), exist_ok=True)
+        if not os.path.exists(long_term_memory_file()):
+            with open(long_term_memory_file(), "w", encoding="utf-8") as f:
                 json.dump({"memories": []}, f, ensure_ascii=False, indent=2)
 
 
@@ -51,7 +50,7 @@ def _load() -> dict:
     _ensure_file()
     with _LOCK:
         try:
-            with open(_MEMORY_FILE, "r", encoding="utf-8") as f:
+            with open(long_term_memory_file(), "r", encoding="utf-8") as f:
                 raw = f.read()
         except UnicodeDecodeError as e:
             # 字节级损坏（非法编码）= 真损坏，重置允许重建
@@ -79,11 +78,11 @@ def _save(data: dict):
     对"珍贵且不可重建"的长期记忆很重要。
     """
     with _LOCK:
-        tmp = _MEMORY_FILE + ".tmp"
+        tmp = long_term_memory_file() + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, _MEMORY_FILE)  # 原子替换
+            os.replace(tmp, long_term_memory_file())  # 原子替换
         except Exception as e:
             logger.error(f"保存长期记忆失败: {e}")
             with contextlib.suppress(Exception):
