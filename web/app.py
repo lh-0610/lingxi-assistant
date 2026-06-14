@@ -287,6 +287,16 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
     from src import paths
     store = UserStore(paths.APP_DIR)
 
+    # Web 全局角色卡(进程级,所有用户共用):启动即在默认数据根加载 role_config.json。
+    # Web 会话不设 role_snapshot,get_system_prompt 会回退读这里设的进程全局角色。
+    try:
+        from src import roles as _roles
+        _roles.load_saved_role_card()
+        if _roles.get_current_role_name():
+            logger.info("Web 全局角色卡: %s", _roles.get_current_role_name())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("加载全局角色卡失败: %s", e)
+
     app = FastAPI(title="灵犀 Web")
     app.state.user_store = store
 
