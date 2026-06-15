@@ -32,9 +32,10 @@
     animation:pulse 2s infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
   header .spacer{flex:1;}
-  #model-sel{background:var(--c-bg);color:var(--c-text);border:1px solid var(--c-border);
-    border-radius:8px;padding:5px 8px;font-size:12px;max-width:46vw;outline:none;}
-  #model-sel:disabled{opacity:0.5;}
+  #btn-search{background:var(--c-bg);color:var(--c-sub);border:1px solid var(--c-border);
+    border-radius:999px;padding:5px 12px;font-size:12px;outline:none;cursor:pointer;white-space:nowrap;}
+  #btn-search.on{color:#fff;background:var(--c-accent);border-color:var(--c-accent);}
+  #btn-search:disabled{opacity:0.5;cursor:default;}
   #btn-clear{background:none;border:none;color:var(--c-sub);font-size:14px;
     padding:8px 12px;cursor:pointer;min-height:44px;min-width:44px;
     display:flex;align-items:center;justify-content:center;}
@@ -139,7 +140,7 @@
   <header>
     <div class="dot" id="status-dot"></div>
     <span class="logo">灵犀</span>
-    <select id="model-sel" title="选择模型"></select>
+    <button id="btn-search" class="on" title="联网检索开关">🔍 联网 开</button>
     <div class="spacer"></div>
     <button id="btn-clear" title="新对话">新对话</button>
     <button id="btn-logout" title="退出登录">退出</button>
@@ -197,7 +198,7 @@
   const $authSubmit= document.getElementById('auth-submit');
   const $authSwitch= document.getElementById('auth-switch');
   const $logout    = document.getElementById('btn-logout');
-  const $modelSel = document.getElementById('model-sel');
+  const $search    = document.getElementById('btn-search');
 
   // ── 鉴权头 ──
   function authHeaders(extra) {
@@ -206,38 +207,22 @@
     return h;
   }
 
-  // ── 加载状态 + 填充模型下拉 ──
-  function loadStatus() {
-    fetch('/api/status', { headers: authHeaders() })
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(s) {
-        if (!s || !s.models) return;
-        $modelSel.innerHTML = '';
-        s.models.forEach(function(name, i) {
-          var opt = document.createElement('option');
-          opt.value = i; opt.textContent = name;
-          if (i === s.model_index) opt.selected = true;
-          $modelSel.appendChild(opt);
-        });
-      })
-      .catch(function() {});
+  // ── 联网检索开关(默认开)──
+  var webSearch = true;
+  function renderSearchBtn() {
+    $search.textContent = webSearch ? '🔍 联网 开' : '🔍 联网 关';
+    $search.classList.toggle('on', webSearch);
   }
-
-  $modelSel.addEventListener('change', function() {
+  $search.addEventListener('click', function() {
     if (generating) return;
-    var idx = parseInt($modelSel.value, 10);
-    fetch('/api/model', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ index: idx })
-    }).then(function(r) {
-      if (!r.ok) { addMsg('error', '⚠ 切换模型失败'); loadStatus(); }
-    }).catch(function() {});
+    webSearch = !webSearch;
+    renderSearchBtn();
   });
+  renderSearchBtn();
 
   // ── 登录 / 注册 ──
   let authMode = 'login';   // login | register
-  function startApp() { $overlay.style.display = 'none'; $input.focus(); loadStatus(); loadHistory(); }
+  function startApp() { $overlay.style.display = 'none'; $input.focus(); loadHistory(); }
   function showAuth() { $overlay.style.display = 'flex'; }
   function setMode(m) {
     authMode = m;
@@ -446,7 +431,7 @@
     generating = true;
     $send.innerHTML = STOP_ICON;     // 发送→停止(可点)
     $send.classList.add('is-stop');
-    $modelSel.disabled = true;
+    $search.disabled = true;
     setStatus('busy');
     var thinkEl = addThinking();
     var aiEl = null;
@@ -460,7 +445,7 @@
         {'Content-Type': 'application/json'},
         token ? {'Authorization': 'Bearer ' + token} : {}
       ),
-      body: JSON.stringify({message: text, history: history.slice(0, -1)})
+      body: JSON.stringify({message: text, history: history.slice(0, -1), web_search: webSearch})
     }).then(function(resp) {
       if (!resp.ok) {
         if (resp.status === 401 || resp.status === 403) {
@@ -499,7 +484,7 @@
       generating = false;
       $send.innerHTML = SEND_ICON;
       $send.classList.remove('is-stop');
-      $modelSel.disabled = false;
+      $search.disabled = false;
       setStatus('ok');
     });
 

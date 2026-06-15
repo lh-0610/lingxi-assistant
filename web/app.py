@@ -218,14 +218,18 @@ class ChatService:
                 out.append({"role": "tool", "text": str(m.content or "")[:300]})
         return out
 
-    def start(self, message: str) -> asyncio.Queue:
-        """追加用户消息并在后台线程跑 agent_loop;返回本轮事件队列。"""
+    def start(self, message: str, web_search: bool = True) -> asyncio.Queue:
+        """追加用户消息并在后台线程跑 agent_loop;返回本轮事件队列。
+
+        web_search:网页端"联网检索"开关。开=提示模型主动联网查证并附来源,关=不强制。
+        """
         self._init()
         if self.is_generating():
             raise Busy()
 
         from src import session as _session, agent as _agent
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from src.roles import get_system_prompt
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -241,6 +245,13 @@ class ChatService:
             from src import paths
             paths.set_data_dir(self._data_dir)   # ★ 本 worker 线程所有读写盘落到该用户目录
             _session.bind_thread(sess)
+            # 绑定后 current_session()=sess(remote_session=True),按本次联网开关重建 system prompt
+            #(网页端检索基底 + 全局角色卡 + 本用户长期记忆)
+            try:
+                if sess.chat_history and isinstance(sess.chat_history[0], SystemMessage):
+                    sess.chat_history[0] = SystemMessage(content=get_system_prompt(web_search=web_search))
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 _agent.agent_loop(ui)            # 收尾自带 save_session + 标题生成
             except Exception as exc:             # noqa: BLE001
@@ -421,8 +432,9 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
         message = (body.get("message") or "").strip()
         if not message:
             return JSONResponse({"error": "empty message"}, status_code=400)
+        web_search = body.get("web_search", True)
         try:
-            q = svc.start(message)
+            q = svc.start(message, web_search=bool(web_search))
         except Busy:
             return JSONResponse({"error": "正在生成中,请稍候"}, status_code=409)
 

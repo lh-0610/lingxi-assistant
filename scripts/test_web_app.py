@@ -238,6 +238,31 @@ def test_resolve_model_index():
     assert _resolve_model_index(None, ml) is None
 
 
+# ── 网页端系统提示:只做联网检索 + 开关指令 ──
+def test_web_system_prompt_search_only(isolated_memory):
+    from src import session as _session, roles
+    s = _session.Session()
+    s.remote_session = True                  # 模拟网页端会话
+    _session.bind_thread(s)
+    try:
+        sp_on = roles.get_system_prompt(web_search=True)
+        sp_off = roles.get_system_prompt(web_search=False)
+        # 桌面端(非远程)对照
+        d = _session.Session()
+        _session.bind_thread(d)
+        sp_desktop = roles.get_system_prompt()
+    finally:
+        _session.unbind_thread()
+    # 网页端用检索基底,强调联网
+    assert "联网检索助手" in sp_on
+    assert "web_search" in sp_on
+    # 开关指令
+    assert "主动用 web_search" in sp_on
+    assert "不要调用联网工具" in sp_off
+    # 桌面端不是检索基底(用全功能 SYSTEM_PROMPT,内容与网页端不同)
+    assert "联网检索助手" not in sp_desktop
+
+
 # ── 静态页 ──
 def test_index_served(client):
     r = client.get("/")

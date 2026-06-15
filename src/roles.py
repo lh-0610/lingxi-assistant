@@ -207,7 +207,21 @@ _role_card_name = None
 _role_card_path = None
 
 
-def get_system_prompt(include_painting: bool = False):
+# 网页端(remote_session)专用基底:只做联网检索,不提文件/命令,避免"我能改文件"的误导。
+WEB_SEARCH_SYSTEM_PROMPT = """你是一个【联网检索助手】，用户通过网页 / 手机访问你。你的核心能力是上网查资料：
+
+- `web_search`：用关键词搜索互联网，拿到最新信息（新闻、动态、数据、价格、教程、资料等）。
+- `fetch_url`：抓取某个网页的正文内容来阅读。
+
+回答要求：
+- 凡涉及『最新 / 最近 / 今年 / 现在 / 事实 / 数据 / 新闻 / 价格』等，先联网检索再回答，不要凭记忆杜撰。
+- 检索后，在回答末尾用简洁列表附上信息来源（标题 + 链接）。
+- 纯闲聊、常识、或明显不需要联网的问题，直接回答即可。
+
+注意：在网页/手机这个环境里，你**不能**读写文件、执行命令、操作用户的电脑——这些只在桌面端 / 手机 App 提供。如果用户让你改文件或跑命令，请说明这些操作需在桌面端进行。"""
+
+
+def get_system_prompt(include_painting: bool = False, web_search=None):
     """返回当前系统提示词。
 
     构成（按顺序拼接）：
@@ -228,12 +242,23 @@ def get_system_prompt(include_painting: bool = False):
     # 全局角色），让后台会话生成途中、前台换了角色卡，也不会把它的人格中途换掉；会话没有
     # 快照（前台空闲 / 启动 / 新建历史 / 子 Agent）时回退读全局，使前台换卡下一轮即生效。
     from . import session as _session
-    _snap = getattr(_session.current_session(), "role_snapshot", None)
+    _sess = _session.current_session()
+    # 远程(网页/手机浏览器)会话用"联网检索助手"基底,不提文件/命令;桌面端用全功能基底。
+    _is_web = getattr(_sess, "remote_session", False)
+    _base_caps = WEB_SEARCH_SYSTEM_PROMPT if _is_web else SYSTEM_PROMPT
+    _snap = getattr(_sess, "role_snapshot", None)
     role_content = _snap["content"] if _snap is not None else _role_card_content
     if role_content:
-        base = SYSTEM_PROMPT + "\n\n# 角色设定（必须严格遵守）\n\n" + role_content
+        base = _base_caps + "\n\n# 角色设定（必须严格遵守）\n\n" + role_content
     else:
-        base = SYSTEM_PROMPT
+        base = _base_caps
+    # 网页端联网开关(每轮按用户开关重建 system prompt):
+    if _is_web and web_search is not None:
+        base += (
+            "\n\n# 本次联网\n请主动用 web_search / fetch_url 联网查证后再回答，并在末尾附上来源。"
+            if web_search else
+            "\n\n# 本次联网\n用户已关闭联网：用你已有知识直接回答，不要调用联网工具，除非用户在本条消息里明确要求联网。"
+        )
 
     # 当前日期：模型不知道"今天几号"，不注入它会凭训练印象用过时年份
     # （如搜"2025 年最新…"）。每轮重渲染，跨天自动更新；同一天内容不变、不影响缓存命中。
