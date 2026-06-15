@@ -180,19 +180,27 @@ class SidebarMixin:
 
     def _render_project_group(self, project_path, project_name, sessions, is_active):
         """渲染一个项目分组：标题 + 该项目下的会话列表。"""
-        title_btn = QPushButton(project_name)
+        # 折叠状态(按项目,内存级,默认展开)。收起时标题带个数量,提示藏了几条会话。
+        if not hasattr(self, "_collapsed_projects"):
+            self._collapsed_projects = set()
+        collapsed = project_path in self._collapsed_projects
+
+        title_text = project_name + (f" ({len(sessions)})" if collapsed and sessions else "")
+        title_btn = QPushButton(title_text)
         title_btn.setObjectName("projectHeaderActive" if is_active else "projectHeader")
-        icon_file = "folder_lucide.svg" if project_path else "circle_lucide.svg"
+        # 图标:展开=打开的文件夹,收起=合上的文件夹;无项目用圆点
+        if project_path:
+            icon_file = "folder_lucide.svg" if collapsed else "folder-opened.svg"
+        else:
+            icon_file = "circle_lucide.svg"
         icon_color = self._t("new_chat_hover_text") if is_active else self._t("history_label")
         title_btn.setIcon(self._svg_icon(icon_file, icon_color))
         title_btn.setIconSize(QSize(15, 15))
         title_btn.setCursor(Qt.PointingHandCursor)
-        # tooltip 只放路径(一行,够用):之前多塞一行"点击切换…"的说明,撑成大黑框盖住下面的项目
         title_btn.setToolTip(project_path or "无项目（全局）")
 
-        def _on_header_click(checked=False, p=project_path):
-            self._switch_project(p)
-        title_btn.clicked.connect(_on_header_click)
+        # 点击项目名 = 折叠/展开它的会话(不再切换项目;切项目用顶栏的项目按钮)
+        title_btn.clicked.connect(lambda checked=False, p=project_path: self._toggle_project_fold(p))
 
         if project_path:
             # 项目标题右键菜单（移除项目）
@@ -201,34 +209,17 @@ class SidebarMixin:
                 self._show_project_header_menu(title_btn, p)
             title_btn.customContextMenuRequested.connect(_on_right)
 
-        # 折叠状态(按项目,内存级,默认展开)。收起时标题带个数量,提示藏了几条会话。
-        if not hasattr(self, "_collapsed_projects"):
-            self._collapsed_projects = set()
-        collapsed = project_path in self._collapsed_projects
-        if collapsed and sessions:
-            title_btn.setText(f"{project_name} ({len(sessions)})")
-
-        # 标题行:左侧折叠箭头(▾展开 / ▸收起) + 项目标题。
-        # caret/header_row 一律不单独 setStyleSheet——带自己样式表的控件 tooltip 会被 Qt
-        # 退回系统默认深底(跟主题不符)。caret 外观走主题表 projectCaret(objectName)。
-        header_row = QWidget()
-        hr_layout = QHBoxLayout(header_row)
-        hr_layout.setContentsMargins(0, 0, 0, 0)
-        hr_layout.setSpacing(2)
-
-        caret = QPushButton("▸" if collapsed else "▾")
-        caret.setObjectName("projectCaret")
-        caret.setFixedSize(18, 26)
-        caret.setCursor(Qt.PointingHandCursor)
-        caret.setToolTip("收起 / 展开此项目的会话")
-        caret.clicked.connect(lambda checked=False, p=project_path: self._toggle_project_fold(p))
-
-        hr_layout.addWidget(caret, 0, Qt.AlignVCenter)
-        hr_layout.addWidget(title_btn, 1)
-        self.history_layout.insertWidget(self.history_layout.count() - 1, header_row)
+        self.history_layout.insertWidget(self.history_layout.count() - 1, title_btn)
 
         # 收起 → 不渲染该项目的会话行
         if collapsed:
+            return
+
+        # 展开但没有会话 → "暂无对话"占位
+        if not sessions:
+            empty = QLabel("暂无对话")
+            empty.setObjectName("historyEmptyHint")
+            self.history_layout.insertWidget(self.history_layout.count() - 1, empty)
             return
 
         # 会话列表

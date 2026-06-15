@@ -545,18 +545,13 @@ QMainWindow, QDialog {{
     padding: 8px 10px 4px 10px;
     letter-spacing: 0.5px;
 }}
-#sidebar QPushButton#projectCaret {{
-    background: transparent;
-    border: none;
-    color: {p['history_label']};
-    font-size: 10px;
-    padding: 0;
-}}
-#sidebar QPushButton#projectCaret:hover {{
-    color: {p['new_chat_hover_text']};
-}}
 #sidebar #historyRow {{
     background: transparent;
+}}
+#sidebar #historyEmptyHint {{
+    color: {p['history_label']};
+    font-size: 11px;
+    padding: 2px 0 6px 22px;
 }}
 #historyLabel {{
     color: {p['history_label']};
