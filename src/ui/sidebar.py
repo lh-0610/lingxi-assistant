@@ -245,7 +245,9 @@ class SidebarMixin:
             is_done_unseen = bool(_so and not is_gen and getattr(_so, "needs_redraw", False))
 
             row = HistoryRow()
-            row.setStyleSheet("background: transparent;")
+            # 不用 row.setStyleSheet:直接父控件带样式表会让子按钮 tooltip 退回系统深底。
+            # 透明背景改走主题表 historyRow(objectName),保证会话标题 tooltip 吃主题色。
+            row.setObjectName("historyRow")
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(14, 0, 2, 0)   # 左缩进让会话视觉上"嵌"在项目下
             row_layout.setSpacing(4)

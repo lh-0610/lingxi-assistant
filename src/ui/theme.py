@@ -555,6 +555,9 @@ QMainWindow, QDialog {{
 #sidebar QPushButton#projectCaret:hover {{
     color: {p['new_chat_hover_text']};
 }}
+#sidebar #historyRow {{
+    background: transparent;
+}}
 #historyLabel {{
     color: {p['history_label']};
     font-size: 11px;
