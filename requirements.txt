@@ -54,3 +54,10 @@ tree-sitter-typescript>=0.23
 # 可选：MCP（Model Context Protocol）远程工具
 # ═══════════════════════════════════════════════════════
 mcp>=1.9
+
+# ═══════════════════════════════════════════════════════
+# 可选：代码导航（find_definition / find_references）
+# 装了语言服务器走 LSP（懂作用域/import/继承，最准）→ 没有则退 jedi → 都没有退回 search_files
+# ═══════════════════════════════════════════════════════
+jedi>=0.19
+python-lsp-server>=1.9   # 完整 LSP（纯 Python）；或 pip install pyright（需 Node）

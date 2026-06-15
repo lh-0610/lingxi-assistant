@@ -40,7 +40,7 @@
 - 🌐 **`search_files` 跨文件正则搜索**（ripgrep 风格，忽略噪声目录）+ `read_file` 行号分页
 - 📋 **任务计划面板**：≥3 步的任务，AI 先用 `update_plan` 列出完整步骤，**聊天区右上角浮层实时显示进度**（待办空心圆 / 进行中 loading / 完成勾选），长任务不漏步（对标 Codex / Claude Code）
 - ⚡ **并行工具调用**：同一轮里多个只读工具（读文件 / 搜索 / 导航）并行执行，多文件场景明显提速
-- 🧭 **jedi 代码导航**：`find_definition` 跳转定义、`find_references` 找全部引用，比纯文本搜索准
+- 🧭 **LSP 代码导航**：`find_definition` 跳转定义、`find_references` 找全部引用，优先用语言服务器（pyright/pylsp，懂作用域/import/继承）→ 自动降级 jedi → 退回正则搜，比纯文本搜索准
 - ✅ **自我校验闭环**：`edit_file` / `write_file` 成功后自动跑 ruff / 语法检查，把发现的问题**追加进同一条工具返回**，模型当轮就去修（不用你提醒）
 - 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`·`git_status`（只读）+ `git_stage`·`git_commit`（git 写，**执行前强制弹确认卡、无 push**）/ `fetch_url`·`web_search`（联网查资料）
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
@@ -137,6 +137,9 @@ pip install faster-whisper sounddevice soundfile av ctranslate2 huggingface-hub
 
 # MCP 客户端依赖（可选，没装则 MCP 功能静默跳过）
 pip install mcp
+
+# 代码导航依赖（可选，装语言服务器走 LSP 最准 → 没有退 jedi → 都没有退回 search_files）
+pip install jedi python-lsp-server   # 或 pip install pyright（需 Node）
 ```
 
 > Python 3.14 用户：faster-whisper 自动检测 CUDA，找不到就降到 CPU + int8。GPU 加速需要 cuDNN 9.x for CUDA 12。
@@ -426,7 +429,7 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 | `read_background_output` / `list_background_commands` / `stop_background_command` | 管理后台命令：读输出 / 列出 / 停止（read·list 只读，Plan 模式放行；退出时自动清理防端口残留） |
 | `search_in_file` | 单文件关键词搜索（offset/limit 分页） |
 | `search_files` | 跨文件正则搜索（ripgrep 风格） |
-| `find_definition` / `find_references` | jedi 代码导航：跳转符号定义 / 找全部引用 |
+| `find_definition` / `find_references` | 代码导航：跳转符号定义 / 找全部引用（LSP 优先 → jedi 降级 → 退回 search_files） |
 | `code_map` | 代码库符号地图（提取函数 / 类） |
 | `apply_patch` | 多文件原子补丁（Codex 风格 `*** Begin Patch`）：一次建/改/删多文件，全校验通过才落盘 |
 | `run_tests` | 跑 pytest（精炼失败定位 + 总耗时） |

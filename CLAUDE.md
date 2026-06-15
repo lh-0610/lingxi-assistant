@@ -90,6 +90,9 @@ pip install faster-whisper sounddevice soundfile av ctranslate2 huggingface-hub 
 # MCP 客户端（可选；没装则 MCP 功能静默跳过）
 pip install mcp
 
+# 代码导航（可选；装语言服务器走 LSP 最准 → 没有退 jedi → 都没有退回 search_files）
+pip install jedi python-lsp-server   # 或 pip install pyright（需 Node）
+
 # 配置
 cp config.example.json config.json   # 编辑填入密钥
 

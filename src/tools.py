@@ -1951,21 +1951,72 @@ def _fmt_jedi_name(n, root):
     return f"  {mp}:{n.line}  [{n.type}]  {(n.description or '').strip()[:80]}"
 
 
+def _pick_symbol_pos(src: str, name: str, line: int):
+    """在源码里定位符号 name 作为独立标识符的 (行 1-based, 列 0-based)。
+
+    line>0 时优先取该行上的出现；该行没有则退用文件里第一处出现。都没有 → (0, 0)。
+    给 LSP 传准确的列，避免旧版 col=0 去查错位置（如行首是别的符号）返回误命中。
+    """
+    positions = _locate_all_symbols(src, name) if src else []
+    if line:
+        for ln, lc in positions:
+            if ln == line:
+                return ln, lc
+    if positions:
+        return positions[0]
+    return 0, 0
+
+
 @tool
-def find_definition(name: str, path: str = "") -> str:
-    """跳到符号（函数/类/变量）的定义位置。比 search_files 正则准——jedi 懂作用域/import/继承。
+def find_definition(name: str, path: str = "", line: int = 0) -> str:
+    """跳到符号（函数/类/变量）的定义位置。比 search_files 正则准——LSP / jedi 懂作用域/import/继承。
     name: 符号名，如 "agent_loop" / "Session"。
     path: 指定某文件（相对项目根）里该符号的引用点去跟踪定义；留空则在整个项目搜该符号的定义。
-    """
+    line: 符号所在行号（1-based，配合 path 用，提高 LSP 精度；留空则自动扫描文件找 name）。
+    LSP 服务器未安装时静默降级到 jedi；jedi 也未装则给出安装提示。"""
+    proj_dir = _project_cwd()
+
+    # ── 优先尝试 LSP ──
+    _resolved = None
+    if path:
+        _resolved = _resolve_path(path)
+        reject = _subagent_path_rejection(_resolved, "文件")
+        if reject:
+            return reject
+        try:
+            with open(_resolved, encoding="utf-8") as _f:
+                src = _f.read()
+            file_ok = True
+        except Exception:
+            src = ""
+            file_ok = False
+        target_line, col = _pick_symbol_pos(src, name, line)
+        # 文件能读但符号根本不在里面 → 明确提示（别拿 col=0 去 LSP 瞎查）；
+        # 文件读不到（不存在）则不在此拦，落到 jedi 给"读取失败"/降级提示。
+        if file_ok and not target_line:
+            return (f"在 {path} 里未找到符号 `{name}`；"
+                    f"留空 path 可在整个项目搜该符号的定义。")
+        if target_line:
+            try:
+                from . import lsp_client
+                resp = lsp_client.definition(name, _resolved, target_line, col)
+                if resp:
+                    return f"🔎 {name} 的定义（LSP）：\n" + "\n".join(
+                        f"  • {loc['file']}:{loc['line']}" for loc in resp)
+            except Exception:
+                pass  # LSP 不可用，继续降级
+
+    # ── 降级到 jedi ──
     try:
         import jedi
     except ImportError:
-        return "未安装 jedi（pip install jedi 启用精准代码导航）；可改用 search_files 正则搜定义。"
-    root = _project_cwd()
+        return ("未安装 jedi（pip install jedi，或装 pyright/pylsp 启用精准代码导航）；"
+                "可改用 search_files 正则搜定义。")
+    root = proj_dir
     proj = jedi.Project(root)
     names = []
     if path:
-        full = _resolve_path(path)
+        full = _resolved if _resolved else _resolve_path(path)
         reject = _subagent_path_rejection(full, "文件")
         if reject:
             return reject
@@ -1974,12 +2025,9 @@ def find_definition(name: str, path: str = "") -> str:
                 src = f.read()
         except Exception as e:
             return f"读取 {path} 失败: {e}"
-        # 遍历该文件里符号的每处出现，逐个尝试跟踪定义——首处可能落在注释/字符串里
-        # jedi 解析不到，但真实绑定（def/赋值/调用）能解析。限定本文件：path 给定即
-        # 「找这个文件里的符号」，绝不 fallback 到全项目而返回别的文件的定义（那会误导）。
         script = jedi.Script(code=src, path=full, project=proj)
-        for line, col in _locate_all_symbols(src, name):
-            names = script.goto(line, col, follow_imports=True)
+        for ln, col in _locate_all_symbols(src, name):
+            names = script.goto(ln, col, follow_imports=True)
             if names:
                 break
         if not names:
@@ -1987,27 +2035,59 @@ def find_definition(name: str, path: str = "") -> str:
                     f"（可能只是注释/字符串里提到它，没有真实绑定）；"
                     f"留空 path 可在整个项目搜该符号定义。")
     else:
-        # path 没给 → 全项目搜该符号定义。Project.search 不依赖位置，最稳。
         names = list(proj.search(name))
         if not names:
             return f"没找到 `{name}` 的定义。"
-    return f"`{name}` 的定义：\n" + "\n".join(_fmt_jedi_name(n, root) for n in names[:10])
+    return f"`{name}` 的定义（jedi）：\n" + "\n".join(_fmt_jedi_name(n, root) for n in names[:10])
 
 
 @tool
-def find_references(name: str, path: str = "") -> str:
+def find_references(name: str, path: str = "", line: int = 0) -> str:
     """找符号的所有引用/调用处（谁用了它）。比 search_files 准——按真实绑定找、不误匹配同名。
     name: 符号名。path: 该符号出现的文件（相对项目根）；留空则先在项目里定位其定义再找引用。
-    """
+    line: 符号所在行号（1-based，配合 path 用，提高 LSP 精度；留空则自动扫描文件找 name）。
+    LSP 服务器未安装时静默降级到 jedi；jedi 也未装则给出安装提示。"""
+    proj_dir = _project_cwd()
+
+    # ── 优先尝试 LSP ──
+    _resolved = None
+    if path:
+        _resolved = _resolve_path(path)
+        reject = _subagent_path_rejection(_resolved, "文件")
+        if reject:
+            return reject
+        try:
+            with open(_resolved, encoding="utf-8") as _f:
+                src = _f.read()
+            file_ok = True
+        except Exception:
+            src = ""
+            file_ok = False
+        target_line, col = _pick_symbol_pos(src, name, line)
+        if file_ok and not target_line:
+            return (f"在 {path} 里未找到符号 `{name}`；"
+                    f"留空 path 可先在项目里定位定义再找引用。")
+        if target_line:
+            try:
+                from . import lsp_client
+                resp = lsp_client.references(name, _resolved, target_line, col)
+                if resp:
+                    return f"🔗 {name} 的引用（LSP，{len(resp)} 处）：\n" + "\n".join(
+                        f"  • {loc['file']}:{loc['line']}" for loc in resp)
+            except Exception:
+                pass  # LSP 不可用，继续降级
+
+    # ── 降级到 jedi ──
     try:
         import jedi
     except ImportError:
-        return "未安装 jedi（pip install jedi 启用）；可改用 search_files 正则搜引用。"
-    root = _project_cwd()
+        return ("未安装 jedi（pip install jedi，或装 pyright/pylsp 启用精准代码导航）；"
+                "可改用 search_files 正则搜引用。")
+    root = proj_dir
     proj = jedi.Project(root)
     refs = []
     if path:
-        full = _resolve_path(path)
+        full = _resolved if _resolved else _resolve_path(path)
         reject = _subagent_path_rejection(full, "文件")
         if reject:
             return reject
@@ -2016,11 +2096,9 @@ def find_references(name: str, path: str = "") -> str:
                 src = f.read()
         except Exception as e:
             return f"读取 {path} 失败: {e}"
-        # 遍历该文件里符号的每处出现，逐个尝试找引用；限定本文件，绝不跨到别的文件
-        # （否则注释里提到同名 API 时会退到全项目第一个定义，返回和 path 无关的引用）。
         script = jedi.Script(code=src, path=full, project=proj)
-        for line, col in _locate_all_symbols(src, name):
-            refs = script.get_references(line, col, include_builtins=False)
+        for ln, col in _locate_all_symbols(src, name):
+            refs = script.get_references(ln, col, include_builtins=False)
             if refs:
                 break
         if not refs:
@@ -2028,7 +2106,6 @@ def find_references(name: str, path: str = "") -> str:
                     f"（可能只是注释/字符串里提到它）；"
                     f"留空 path 可先在全项目定位定义再找引用。")
     else:
-        # path 没给 → 先全项目搜该符号定义，从定义处找引用
         defs = list(proj.search(name))
         if not defs:
             return f"项目里没找到符号 `{name}`，无引用可查。"
@@ -2037,7 +2114,7 @@ def find_references(name: str, path: str = "") -> str:
             d.line, d.column, include_builtins=False)
     if not refs:
         return f"没找到 `{name}` 的引用。"
-    return f"`{name}` 的引用（{len(refs)} 处）：\n" + "\n".join(_fmt_jedi_name(n, root) for n in refs[:50])
+    return f"`{name}` 的引用（jedi，{len(refs)} 处）：\n" + "\n".join(_fmt_jedi_name(n, root) for n in refs[:50])
 
 
 @tool
@@ -4166,5 +4243,3 @@ TOOL_DISPLAY_NAMES = {
 
 
 TOOL_MAP = get_tool_map()
-
-

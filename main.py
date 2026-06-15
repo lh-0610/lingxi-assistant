@@ -71,6 +71,12 @@ if __name__ == "__main__":
                 launcher.stop()
             except Exception:
                 pass
+        # 关闭 LSP 客户端（释放 pyright/pylsp 子进程）
+        try:
+            from src.lsp_client import shutdown as _lsp_shutdown
+            _lsp_shutdown()
+        except Exception:
+            pass
         # 关闭 MCP 守护线程（释放 Server-Process 子进程）
         try:
             from src.mcp_client import shutdown as _mcp_shutdown

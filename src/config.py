@@ -100,6 +100,11 @@ GPT_SOVITS_SOVITS_MODEL = _config.get("gpt_sovits_sovits_model", "")  # SoVITS �
 # 桌宠动画
 PET_ANIMATION_SPEED = _safe_float("pet_animation_speed", 1.0, min_val=0.1, max_val=5.0)  # 1.0=GIF 原速；0.5=慢 2 倍；2.0=快 2 倍
 
+# LSP 代码导航（find_definition / find_references 使用的后端列表，按优先级排序）
+LSP_SERVERS: list[str] = _config.get("lsp_servers", ["pyright-langserver", "pylsp"])
+if not isinstance(LSP_SERVERS, list) or not all(isinstance(s, str) for s in LSP_SERVERS):
+    LSP_SERVERS = ["pyright-langserver", "pylsp"]
+
 # 通知（Telegram 推送）
 _notify_cfg = _config.get("notify", {}) or {}
 NOTIFY_ENABLED: bool = _notify_cfg.get("enabled", False)
