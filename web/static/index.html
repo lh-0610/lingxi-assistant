@@ -130,9 +130,12 @@
   .msg.ai blockquote{border-left:3px solid var(--c-border);margin:0.5em 0;
     padding:0.2em 0 0.2em 0.8em;color:var(--c-sub);}
 
-  /* ── 滚动条 ── */
-  #messages::-webkit-scrollbar{width:4px;}
-  #messages::-webkit-scrollbar-thumb{background:var(--c-border);border-radius:4px;}
+  /* ── 滚动条(消息区 + 思考块内容区统一细样式;不然桌面端 .tc 显示粗默认条)── */
+  #messages::-webkit-scrollbar,.think-box .tc::-webkit-scrollbar{width:5px;}
+  #messages::-webkit-scrollbar-thumb,.think-box .tc::-webkit-scrollbar-thumb{
+    background:var(--c-border);border-radius:4px;}
+  #messages::-webkit-scrollbar-track,.think-box .tc::-webkit-scrollbar-track{background:transparent;}
+  .think-box .tc{scrollbar-width:thin;scrollbar-color:var(--c-border) transparent;}
 </style>
 </head>
 <body>
