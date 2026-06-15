@@ -187,9 +187,8 @@ class SidebarMixin:
         title_btn.setIcon(self._svg_icon(icon_file, icon_color))
         title_btn.setIconSize(QSize(15, 15))
         title_btn.setCursor(Qt.PointingHandCursor)
-        title_btn.setToolTip(
-            (project_path or "无项目（全局）") + "\n（点击切换到此项目，新对话会归属此项目）"
-        )
+        # tooltip 只放路径(一行,够用):之前多塞一行"点击切换…"的说明,撑成大黑框盖住下面的项目
+        title_btn.setToolTip(project_path or "无项目（全局）")
 
         def _on_header_click(checked=False, p=project_path):
             self._switch_project(p)
@@ -209,9 +208,10 @@ class SidebarMixin:
         if collapsed and sessions:
             title_btn.setText(f"{project_name} ({len(sessions)})")
 
-        # 标题行:左侧折叠箭头(▾展开 / ▸收起) + 项目标题
+        # 标题行:左侧折叠箭头(▾展开 / ▸收起) + 项目标题。
+        # caret/header_row 一律不单独 setStyleSheet——带自己样式表的控件 tooltip 会被 Qt
+        # 退回系统默认深底(跟主题不符)。caret 外观走主题表 projectCaret(objectName)。
         header_row = QWidget()
-        header_row.setStyleSheet("background: transparent;")
         hr_layout = QHBoxLayout(header_row)
         hr_layout.setContentsMargins(0, 0, 0, 0)
         hr_layout.setSpacing(2)
@@ -221,11 +221,6 @@ class SidebarMixin:
         caret.setFixedSize(18, 26)
         caret.setCursor(Qt.PointingHandCursor)
         caret.setToolTip("收起 / 展开此项目的会话")
-        caret.setStyleSheet(
-            f"QPushButton#projectCaret {{ background: transparent; border: none; "
-            f"color: {self._t('history_label')}; font-size: 10px; padding: 0; }}"
-            f"QPushButton#projectCaret:hover {{ color: {self._t('new_chat_hover_text')}; }}"
-        )
         caret.clicked.connect(lambda checked=False, p=project_path: self._toggle_project_fold(p))
 
         hr_layout.addWidget(caret, 0, Qt.AlignVCenter)
