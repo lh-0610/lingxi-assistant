@@ -202,7 +202,39 @@ class SidebarMixin:
                 self._show_project_header_menu(title_btn, p)
             title_btn.customContextMenuRequested.connect(_on_right)
 
-        self.history_layout.insertWidget(self.history_layout.count() - 1, title_btn)
+        # 折叠状态(按项目,内存级,默认展开)。收起时标题带个数量,提示藏了几条会话。
+        if not hasattr(self, "_collapsed_projects"):
+            self._collapsed_projects = set()
+        collapsed = project_path in self._collapsed_projects
+        if collapsed and sessions:
+            title_btn.setText(f"{project_name} ({len(sessions)})")
+
+        # 标题行:左侧折叠箭头(▾展开 / ▸收起) + 项目标题
+        header_row = QWidget()
+        header_row.setStyleSheet("background: transparent;")
+        hr_layout = QHBoxLayout(header_row)
+        hr_layout.setContentsMargins(0, 0, 0, 0)
+        hr_layout.setSpacing(2)
+
+        caret = QPushButton("▸" if collapsed else "▾")
+        caret.setObjectName("projectCaret")
+        caret.setFixedSize(18, 26)
+        caret.setCursor(Qt.PointingHandCursor)
+        caret.setToolTip("收起 / 展开此项目的会话")
+        caret.setStyleSheet(
+            f"QPushButton#projectCaret {{ background: transparent; border: none; "
+            f"color: {self._t('history_label')}; font-size: 10px; padding: 0; }}"
+            f"QPushButton#projectCaret:hover {{ color: {self._t('new_chat_hover_text')}; }}"
+        )
+        caret.clicked.connect(lambda checked=False, p=project_path: self._toggle_project_fold(p))
+
+        hr_layout.addWidget(caret, 0, Qt.AlignVCenter)
+        hr_layout.addWidget(title_btn, 1)
+        self.history_layout.insertWidget(self.history_layout.count() - 1, header_row)
+
+        # 收起 → 不渲染该项目的会话行
+        if collapsed:
+            return
 
         # 会话列表
         from .. import session as _session
@@ -265,6 +297,16 @@ class SidebarMixin:
                 del_btn.clicked.connect(lambda checked=False, s=sid: self._delete_session(s))
                 row_layout.addWidget(del_btn, 0, Qt.AlignVCenter)
             self.history_layout.insertWidget(self.history_layout.count() - 1, row)
+
+    def _toggle_project_fold(self, project_path):
+        """收起/展开某项目下的历史会话(内存级状态,重新渲染列表)。"""
+        if not hasattr(self, "_collapsed_projects"):
+            self._collapsed_projects = set()
+        if project_path in self._collapsed_projects:
+            self._collapsed_projects.discard(project_path)
+        else:
+            self._collapsed_projects.add(project_path)
+        self._refresh_session_list()
 
     def _make_loading_spinner(self):
         """侧栏会话行"生成中"指示：旋转的缺口圆环（widgets.LoadingSpinner）。"""
@@ -519,6 +561,9 @@ class SidebarMixin:
         _projects.set_current(path)
         state.current_project = path
         state.shell_cwd = None  # 切项目时 cd 上下文回新项目根
+        # 切到的项目自动展开（点项目名 = 切换并展开;折叠靠左侧 ▸ 箭头）
+        if hasattr(self, "_collapsed_projects"):
+            self._collapsed_projects.discard(path)
 
         # 3. 新建空会话切过去（它的 project 首次 save 时锚定为新项目）。旧会话留注册表，
         #    若正在后台跑则继续——不再 _force_stop_generation、也不清空它的 chat_history
