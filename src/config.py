@@ -74,6 +74,9 @@ AUTO_CHECK_AFTER_EDIT = _config.get("auto_check_after_edit", True)
 # 非 Python 项目可自定义检查命令，用 {file} 占位被检文件；
 # 留空 = 只对 Python 自动用 ruff（没装则退化到 py_compile 只查语法）
 CHECK_COMMAND = _config.get("check_command", "")
+# 编辑 Python 后额外跑 mypy 类型检查（只取 call-arg/name-defined 等高信号错误码，
+# 抓"臆造 API / 参数错"；动态属性噪声码已排除）。没装 mypy 时静默跳过。
+TYPE_CHECK_AFTER_EDIT = _config.get("type_check_after_edit", True)
 
 # 语音
 VOICE_STT_MODEL = _config.get("voice_stt_model", "small")            # whisper 模型 size

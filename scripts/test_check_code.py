@@ -85,6 +85,44 @@ class TestAutoCheckSuffix:
         assert "成功写入" in r and "自动校验" in r
 
 
+import importlib.util as _ilu
+_HAS_MYPY = _ilu.find_spec("mypy") is not None
+
+
+@pytest.mark.skipif(not _HAS_MYPY, reason="mypy 未安装")
+class TestTypeCheck:
+    """mypy 类型检查:抓 ruff 抓不到的"参数/签名错"(MiMo 臆造 API 的典型)。"""
+
+    def test_call_arg_caught(self, project_dir):
+        # 参数数量错——ruff 抓不到,mypy 的 call-arg 能抓
+        (project_dir / "t.py").write_text(
+            "def f(a, b):\n    return a + b\n\nf(1, 2, 3)\n", encoding="utf-8")
+        r = check_code.func("t.py")
+        assert "检查发现问题" in r
+        assert "call-arg" in r or "arguments" in r.lower()
+
+    def test_correct_call_passes(self, project_dir):
+        (project_dir / "t2.py").write_text(
+            "def f(a, b):\n    return a + b\n\nf(1, 2)\n", encoding="utf-8")
+        assert "通过" in check_code.func("t2.py")
+
+    def test_toggle_off_skips_type_check(self, project_dir, monkeypatch):
+        # 关掉类型检查后,只有 call-arg 错误(ruff 不报)的文件应通过
+        monkeypatch.setattr(config, "TYPE_CHECK_AFTER_EDIT", False)
+        (project_dir / "t3.py").write_text(
+            "def f(a, b):\n    return a + b\n\nf(1, 2, 3)\n", encoding="utf-8")
+        assert "通过" in check_code.func("t3.py")
+
+    def test_dynamic_attr_not_noisy(self, project_dir):
+        # attr-defined 已排除:对"动态属性"不该误报(否则模型追噪声)
+        (project_dir / "t4.py").write_text(
+            "import types\n"
+            "m = types.SimpleNamespace()\n"
+            "print(m.whatever_dynamic_attr)\n", encoding="utf-8")
+        # 不应因 attr-defined 报"检查发现问题"(ruff 也不报这个)
+        assert "通过" in check_code.func("t4.py")
+
+
 @pytest.mark.skipif(not shutil.which("ruff"), reason="ruff 未安装")
 class TestRuffSpecific:
     def test_undefined_name_caught(self, project_dir):

@@ -2843,13 +2843,21 @@ def _bundled_ruff():
     return None
 
 
+# 类型检查只保留这些高信号错误码：都是"用错了 API / 参数 / 名字"，几乎不误报。
+# 刻意排除 attr-defined / union-attr / var-annotated / index 等——它们在动态代码
+# （state 代理、langchain 动态属性等）上会狂误报，否则模型会去追一堆不存在的问题。
+_TYPE_ERROR_CODES = ("call-arg", "call-overload", "name-defined",
+                     "arg-type", "return-value", "valid-type")
+
+
 def _run_code_check(full_path: str):
     """对单个文件跑静态检查。返回 (issues, checker)：
     - checker=None → 没有可用检查器（不支持的语言且没配 check_command）
     - issues=""    → 检查通过、无问题
     - issues=非空  → 问题文本（file:line: 说明）
-    Python 优先 ruff（只选 F/E9 = pyflakes 正确性 + 语法错，避开风格噪声），
-    没装 ruff 退化到 py_compile（只查语法）。其它语言走 config 的 check_command。"""
+    Python：ruff（F/E9 正确性+语法）+ mypy 类型检查（高信号错误码，抓臆造 API/参数错），
+    两者结果合并。没装 ruff 退化到 py_compile；没装 mypy 则跳过类型检查。
+    其它语言走 config 的 check_command。"""
     from .config import CHECK_COMMAND
     ext = os.path.splitext(full_path)[1].lower()
     cwd = _shell_cwd()
@@ -2858,17 +2866,26 @@ def _run_code_check(full_path: str):
     if CHECK_COMMAND:
         return _run_check_subprocess(CHECK_COMMAND.replace("{file}", full_path), cwd, True, "check_command")
 
-    if ext != ".py":
+    if ext not in (".py", ".pyi"):
         return None, None
 
-    # Python：优先 ruff。打包后 sys.executable=exe，-m ruff 跑不了，所以 frozen 下只认
-    # 独立二进制（ruff 是自包含 exe）；开发期才用 sys.executable -m ruff（不看 PATH 最稳）。
+    ruff_issues, ruff_checker = _run_ruff_check(full_path, cwd)
+    type_issues, type_checker = _run_type_check(full_path, cwd)
+
+    parts = [p for p in (ruff_issues, type_issues) if p]
+    checkers = [c for c in (ruff_checker, type_checker) if c]
+    return "\n".join(parts), ("+".join(checkers) if checkers else None)
+
+
+def _run_ruff_check(full_path: str, cwd):
+    """ruff（F/E9）单文件检查，返回 (issues, checker)。
+    打包后 sys.executable=exe，-m ruff 跑不了，所以 frozen 下只认独立二进制（ruff 自包含 exe）；
+    开发期才用 sys.executable -m ruff（不看 PATH 最稳）。都没有 → 内置 compile() 查语法。"""
     import importlib.util
     frozen = getattr(sys, "frozen", False)
     bundled = _bundled_ruff()
     ruff_cmd = None
     if bundled:
-        # 最优先：随包发的 ruff.exe（打包产物开箱即用、版本可控）
         ruff_cmd = [bundled, "check", "--select", "F,E9", full_path]
     elif not frozen and importlib.util.find_spec("ruff") is not None:
         ruff_cmd = [sys.executable, "-m", "ruff", "check", "--select", "F,E9", full_path]
@@ -2876,10 +2893,46 @@ def _run_code_check(full_path: str):
         ruff_cmd = [shutil.which("ruff"), "check", "--select", "F,E9", full_path]
     if ruff_cmd:
         return _run_check_subprocess(ruff_cmd, cwd, False, "ruff")
-
-    # 兜底：内置 compile() 进程内查语法——不起子进程，打包后（sys.executable=exe）照样可用。
-    # 只查语法错（抓不到未定义名/未用导入），建议在应用 Python 里 pip install ruff 拿完整检查。
     return _py_syntax_check(full_path), "py_compile"
+
+
+def _run_type_check(full_path: str, cwd):
+    """mypy 单文件类型检查，只保留 _TYPE_ERROR_CODES 里的高信号错误码。
+    返回 (issues, "mypy")；无命中 → ("", "mypy")；没装 mypy / 开关关 → (None, None) 静默跳过。"""
+    from .config import TYPE_CHECK_AFTER_EDIT
+    if not TYPE_CHECK_AFTER_EDIT:
+        return None, None
+    import importlib.util
+    frozen = getattr(sys, "frozen", False)
+    base = None
+    if not frozen and importlib.util.find_spec("mypy") is not None:
+        base = [sys.executable, "-m", "mypy"]
+    elif shutil.which("mypy"):
+        base = [shutil.which("mypy")]
+    if not base:
+        return None, None     # 没装 mypy：跳过类型检查，不影响 ruff 结果
+    cmd = base + [
+        "--check-untyped-defs", "--ignore-missing-imports", "--follow-imports=silent",
+        "--no-error-summary", "--no-color-output", "--show-error-codes",
+        "--hide-error-context", "--no-pretty", full_path,
+    ]
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90)
+    except Exception:
+        return None, None
+    out = (r.stdout or "") + (r.stderr or "")
+    base_name = os.path.basename(full_path)
+    kept = []
+    for line in out.splitlines():
+        if " error:" not in line:
+            continue
+        if not any(f"[{c}]" in line for c in _TYPE_ERROR_CODES):
+            continue
+        kept.append(line.replace(full_path, base_name).strip())
+    if not kept:
+        return "", "mypy"
+    return "\n".join(kept[:15]), "mypy"
 
 
 def _run_check_subprocess(cmd, cwd, use_shell, checker):
@@ -3216,8 +3269,9 @@ def apply_patch(patch: str) -> str:
 
 @tool
 def check_code(path: str) -> str:
-    """静态检查单个代码文件（lint/语法），返回问题列表。Python 用 ruff（没装则
-    py_compile 只查语法）；其它语言用 config 的 check_command（{file} 占位）。
+    """静态检查单个代码文件（lint/语法/类型），返回问题列表。Python 用 ruff（F/E9 正确性）
+    + mypy 类型检查（抓参数数量/签名/未定义名等"用错 API"的错;没装则相应跳过）；
+    其它语言用 config 的 check_command（{file} 占位）。
     path: 要检查的文件（相对项目根）。注：编辑文件后已会自动校验，这个用于手动复查。"""
     if not path:
         return "请指定要检查的文件 path。"
