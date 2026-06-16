@@ -56,6 +56,10 @@ DEFAULT_MODEL_ID  = _config.get("default_model_id") or "mimo-v2.5-pro"
 # }
 CUSTOM_MODELS = _config.get("custom_models", [])
 
+# 按 model_id 覆盖模型的上下文窗口（token）。内置窗口（models.py _DEFAULT_CONTEXT_WINDOWS）
+# 估错时，在这里填 {"model_id": 窗口} 即可纠正，不用改代码。例：{"deepseek-v4-pro": 1048576}
+MODEL_CONTEXT_WINDOWS = _config.get("model_context_windows", {}) or {}
+
 # 自我校验闭环：编辑文件后自动跑静态检查（lint/语法），把错误回灌给模型自修
 AUTO_CHECK_AFTER_EDIT = _config.get("auto_check_after_edit", True)
 # 非 Python 项目可自定义检查命令，用 {file} 占位被检文件；

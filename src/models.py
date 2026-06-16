@@ -27,6 +27,7 @@ from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     CUSTOM_MODELS,
+    MODEL_CONTEXT_WINDOWS,
     MIMO_MODELS,
     QWEN_CLOUD_MODELS,
     OLLAMA_MODELS,
@@ -197,6 +198,51 @@ def _max_tokens_for(mtype, model_id):
     return 8192                           # 其它 / 自定义保守(不知道对方上限)
 
 
+# ── M3: 按模型上下文窗口设预算（独立查询函数，不改 MODEL_LIST 四元组结构）──
+
+# key = model_id 包含的子串（先匹配先得），value = 上下文窗口 token 数
+_DEFAULT_CONTEXT_WINDOWS = {
+    "deepseek": 1_048_576,          # DeepSeek-V4 Flash/Pro 默认 1M(2026-04 起官方全线 1M)
+    "claude-sonnet-4": 200_000,
+    "claude-sonnet-3.7": 200_000,
+    "claude-sonnet-3.6": 200_000,
+    "claude-sonnet-3.5": 200_000,
+    "claude-haiku": 200_000,
+    "gemini": 1_048_576,
+    "mimo-v2-omni": 131_072,        # V2 omni 窗口存疑,保守(预算有 MAX_HISTORY_BUDGET 上限兜底)
+    "mimo": 1_048_576,              # MiMo-V2.5/V2.5-Pro/V2-Pro 实测 1M(Token Plan 托管端点支持)
+    "qwen": 131_072,
+}
+_FALLBACK_CONTEXT_WINDOW = 65_536
+
+
+def context_window_for(mtype: str, model_id: str) -> int:
+    """返回模型的上下文窗口大小（token 数）。
+
+    查找顺序：config.json 的 model_context_windows 按 model_id 显式覆盖（最高优先，方便随时
+    纠正内置估值）→ custom_models 里配的 context_window → 内置 _DEFAULT_CONTEXT_WINDOWS 表按
+    model_id 子串匹配 → 保守默认值。绝不抛异常。
+    """
+    try:
+        # 0) config.json model_context_windows 按 model_id 显式覆盖（最高优先）
+        if model_id in MODEL_CONTEXT_WINDOWS:
+            return int(MODEL_CONTEXT_WINDOWS[model_id])
+        # 1) 用户在 config.json custom_models 显式覆盖
+        for cm in CUSTOM_MODELS:
+            if cm.get("model_id") == model_id:
+                val = cm.get("context_window")
+                if val is not None:
+                    return int(val)
+        # 2) 内置映射表（子串匹配）
+        mid = (model_id or "").lower()
+        for key, cwin in _DEFAULT_CONTEXT_WINDOWS.items():
+            if key in mid:
+                return cwin
+    except Exception:
+        pass
+    return _FALLBACK_CONTEXT_WINDOW
+
+
 def _create_llm(model_index=None, reasoning=None):
     """根据选择创建 LLM 实例"""
     if model_index is None:
@@ -215,14 +261,14 @@ def _create_llm(model_index=None, reasoning=None):
             kwargs["reasoning"] = True
         return ChatOllama(**kwargs)
     elif mtype == "anthropic":
-        return ChatAnthropic(
+        return ChatAnthropic(  # type: ignore[call-arg]  # langchain_anthropic pydantic 别名,mypy 桩误报 model/max_tokens
             model=model_id,
             api_key=ANTHROPIC_API_KEY,
             max_tokens=_max_tokens_for(mtype, model_id),
             default_request_timeout=LONG_TIMEOUT,
         )
     elif mtype == "mimo":
-        return ChatAnthropic(
+        return ChatAnthropic(  # type: ignore[call-arg]  # langchain_anthropic pydantic 别名,mypy 桩误报 model/max_tokens
             model=model_id,
             api_key=MIMO_API_KEY,
             base_url=MIMO_BASE_URL,
@@ -255,7 +301,7 @@ def _create_llm(model_index=None, reasoning=None):
         api_key = cm.get("api_key", "")
         base_url = cm.get("base_url", "")
         if protocol == "anthropic":
-            return ChatAnthropic(
+            return ChatAnthropic(  # type: ignore[call-arg]  # langchain_anthropic pydantic 别名,mypy 桩误报 model/max_tokens
                 model=model_id,
                 api_key=api_key,
                 base_url=base_url or None,

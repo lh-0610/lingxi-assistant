@@ -4,6 +4,10 @@
 SESSION_HISTORY_LIMIT = 50
 
 HISTORY_TOKEN_BUDGET = 80_000
+
+# M3: 按模型上下文窗口动态计算预算时的参数
+HISTORY_SAFETY_MARGIN = 8_000
+MAX_HISTORY_BUDGET = 200_000
 HISTORY_KEEP_RECENT = 20
 
 # 工具结果分级回收（M2）：超预算时先把"旧的大工具结果"截成存根，再走 LLM 压缩

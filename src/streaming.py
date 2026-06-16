@@ -19,7 +19,9 @@ from .tools import TOOL_DISPLAY_NAMES, build_git_write_confirmation, get_tool_ma
 from .limits import (
     COMPACTION_SUMMARY_MAX_CHARS,
     HISTORY_KEEP_RECENT,
+    HISTORY_SAFETY_MARGIN,
     HISTORY_TOKEN_BUDGET,
+    MAX_HISTORY_BUDGET,
     STREAM_RETRY_ATTEMPTS,
     TOOL_RESULT_EVICT_KEEP_RECENT,
     TOOL_RESULT_EVICT_MIN_CHARS,
@@ -104,11 +106,9 @@ def _hits_remote_blocklist(path: str) -> bool:
     return any(base.endswith(s) for s in _DEFAULT_REMOTE_BLOCK_SUFFIX)
 
 
-# 会话长度滑动窗口阈值。超过这个估算 token 数就裁掉中间的旧消息，只保留：
-#   - 首条 SystemMessage（角色卡 / 项目上下文 / .lingxirules 都在这里）
-#   - 最近 KEEP_RECENT 条（通常包含当前 user query 和最近几轮工具调用）
-# 默认 80K 是 Anthropic 200K / Gemini 128K / DeepSeek 64K 的保守公共下限——
-# 单独某模型 context 更大也无所谓，少发一点就少花点钱。
+# 会话长度阈值现在【按模型】算（见 _current_history_budget：窗口 − 输出预留 − 余量，再夹
+# MAX_HISTORY_BUDGET 上限）。超阈值先回收旧工具结果(M2)、再 LLM 压缩中段(保留首条 system +
+# 最近 KEEP_RECENT 条)。HISTORY_TOKEN_BUDGET(80K) 现仅作预算计算出错时的兜底默认。
 def _history_has_image_blocks(messages) -> bool:
     for msg in messages or []:
         content = getattr(msg, "content", None)
@@ -565,6 +565,23 @@ class _StreamState:
         self.tool_hb_thread = None    # 工具调用心跳线程
 
 
+def _current_history_budget() -> int:
+    """根据当前模型的上下文窗口动态计算历史预算。
+
+    公式: 窗口 - max_tokens - SAFETY_MARGIN，上限 MAX_HISTORY_BUDGET。
+    异常时回退到 HISTORY_TOKEN_BUDGET。
+    """
+    try:
+        from .models import context_window_for, _max_tokens_for
+        name, mtype, model_id, _think = MODEL_LIST[state.current_model_index]
+        cwin = context_window_for(mtype, model_id)
+        max_out = _max_tokens_for(mtype, model_id)
+        budget = cwin - max_out - HISTORY_SAFETY_MARGIN
+        return min(budget, MAX_HISTORY_BUDGET)
+    except Exception:
+        return HISTORY_TOKEN_BUDGET
+
+
 def _prepare_stream_history(ui):
     """构造本轮真正发给 LLM 的 history + 建 Debug record。
 
@@ -610,7 +627,8 @@ def _prepare_stream_history(ui):
 
     # 先做便宜的工具结果回收（超预算时把旧的大工具结果截成存根，模型要详情可重新调工具）。
     # 常常回收完就压回预算内，下面的 LLM 压缩自然 no-op，省钱省延迟。
-    history_for_send, _evicted = _evict_old_tool_results(history_for_send)
+    _budget = _current_history_budget()
+    history_for_send, _evicted = _evict_old_tool_results(history_for_send, budget=_budget)
     if _evicted > 0:
         logger.info(f"工具结果回收：本轮截断 {_evicted} 条旧的大工具结果为存根")
         try:
@@ -624,7 +642,7 @@ def _prepare_stream_history(ui):
 
     # 会话历史压缩：超过预算时用 LLM 压缩中段为摘要（滚动缓存，失败降级裁剪）。
     # state.chat_history 本身不改，UI 上保留完整历史，只是发给 LLM 的 history_for_send 被压缩。
-    history_for_send, _trimmed = _compact_history(history_for_send)
+    history_for_send, _trimmed = _compact_history(history_for_send, budget=_budget)
     if _trimmed > 0:
         logger.info(f"会话历史超阈值，本轮压缩裁剪 {_trimmed} 条旧消息")
         try:
