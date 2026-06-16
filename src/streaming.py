@@ -73,6 +73,7 @@ PLAN_MODE_READONLY_TOOLS = {
     "read_file", "list_directory", "search_in_file", "search_files",
     "remember", "forget",  # 记笔记不该被 Plan 拦
     "update_plan",  # 列计划是 Plan 模式的核心动作
+    "set_step_status",  # 更新单步状态是 Plan 模式的核心动作
     "notify_user",  # 通知用户不该被 Plan 拦
     "read_background_output", "list_background_commands",  # 读后台输出也算只读
     "code_map",  # 代码地图只读扫描

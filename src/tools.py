@@ -1699,21 +1699,16 @@ def spawn_agents(tasks: list[str]) -> str:
 
 @tool
 def update_plan(plan: str) -> str:
-    """创建或更新当前任务的执行计划（待办清单）。
+    """创建 / 重列当前任务的执行计划（待办清单，**整份覆盖**）。
 
-    **何时用**：任务需要 3 步以上、或要改多个文件时，动手前先调一次列出全部步骤；
-    之后每开始/完成一步就再调一次更新状态，直到所有步骤都 [x]。
+    任务需要 3 步以上、或要改多个文件时，动手前先调一次列出全部步骤。
+    **之后推进进度用 `set_step_status(步号, 状态)` 改单步，不要反复重发整份计划。**
+    仅当要大改结构（增删步骤、重排）时才再调本工具重列。
 
-    plan: 多行文本，每行一个步骤，行首用状态标记：
-      [ ] 未开始    [~] 进行中（同一时间只标一个）    [x] 已完成
-    每次传**完整的当前计划**（全量覆盖，不是增量追加）。
-
-    示例：
-      update_plan("[x] 读 config.py 看结构\n[~] 在 state.py 加状态\n[ ] 加 update_plan 工具")
+    plan: 多行文本，每行一个步骤，行首标记：[ ] 未开始  [~] 进行中  [x] 已完成
     """
     from . import state
-    # 历史压缩摘要曾被模型续接进 plan 参数；摘要不是计划的一部分，硬截断防止
-    # 它被宽松解析后撑成几十条假步骤。
+    # 历史压缩摘要曾被模型续接进 plan 参数；摘要不是计划的一部分，硬截断防污染。
     clean_plan = re.split(
         r"\s*\[(?:历史摘要|之前已有摘要|新增对话)\]\s*:?",
         plan or "",
@@ -1721,18 +1716,8 @@ def update_plan(plan: str) -> str:
     )[0]
     items = state.parse_plan(clean_plan)
     if plan and not items:
-        return "计划未更新：没有检测到合法 checklist 行，请使用 [ ] / [~] / [x] 标记。"
-    old_plan = getattr(state, "current_plan", None) or []
-    # 合并而非全量覆盖：已有步骤按模糊匹配认领新行，保留旧文字、只取新状态；新步骤追加。
-    # 这样模型每轮重传整份计划、"改写措辞/重排"时，面板文字不漂移（churn），只有状态推进。
-    # 真正被删掉的未完成步（认领不到）仍交给 _validate_plan_update 按规则拦（验证步永远保护）。
-    if old_plan and items:
-        items = _merge_plan_update(old_plan, items)
-    guard = _validate_plan_update(old_plan, items, clean_plan)
-    if guard:
-        return guard
-    state.current_plan = items
-    # 预留 UI 钩子：当前阶段 UI 没实现 show_plan，hasattr 判空安全跳过
+        return "计划未更新：没有检测到合法 checklist 行，请用 [ ] / [~] / [x] 标记。"
+    state.current_plan = items          # 整份替换——不再模糊合并(churn 根源)、不再拒绝
     _ui = getattr(state, "ui_ref", None)
     if _ui is not None and hasattr(_ui, "show_plan"):
         try:
@@ -1745,101 +1730,51 @@ def update_plan(plan: str) -> str:
     return f"计划已更新（{done}/{len(items)} 完成）：\n" + state.render_plan(items)
 
 
-_PLAN_CHANGE_REASON_RE = re.compile(
-    r"(调整说明|变更说明|合并说明|删除说明|结构调整|计划调整|合并原因|删除原因)"
-)
-_PLAN_VALIDATION_RE = re.compile(
-    r"(测试|全量|pytest|run_tests|git\s*diff|diff|验收|复核|检查改动)",
-    re.IGNORECASE,
-)
+# 模型传的状态词 → 内部状态。容忍中英 / checkbox 字符各种写法。
+_STEP_STATUS_ALIASES = {
+    "done": "done", "完成": "done", "已完成": "done", "完": "done", "x": "done", "✓": "done", "√": "done",
+    "in_progress": "in_progress", "进行中": "in_progress", "正在做": "in_progress", "doing": "in_progress",
+    "~": "in_progress", "-": "in_progress",
+    "pending": "pending", "待办": "pending", "未开始": "pending", "todo": "pending", "": "pending", " ": "pending",
+}
 
 
-def _plan_text_key(text: str) -> str:
-    """计划项稳定匹配 key：忽略空白和常见编号差异。"""
-    s = (text or "").strip()
-    s = re.sub(r"^\d+[.)、]\s*", "", s)
-    s = re.sub(r"\s+", "", s)
-    return s.lower()
+def _normalize_step_status(status: str):
+    """状态词 → 'done'/'in_progress'/'pending'；不认识返回 None。"""
+    return _STEP_STATUS_ALIASES.get(str(status).strip().lower())
 
 
-def _merge_plan_update(old_items: list, new_items: list) -> list:
-    """把新计划合并进旧计划，返回合并后的列表。
+@tool
+def set_step_status(step: int, status: str) -> str:
+    """更新计划中【某一步】的状态（增量更新，**不用重发整份计划**）。
 
-    旧步骤按模糊匹配认领一条新行 → **保留旧文字、只取新状态**；认领不到的旧步骤不进结果
-    （视为删除，由 _validate_plan_update 决定拦/放）；没被任何旧步骤认领的新行追加为新步骤。
-
-    目的：模型每轮重传整份计划时，"措辞改写 / 微调 / 重排"不再让面板文字漂移——只要还能
-    模糊对上（ratio≥0.6），就冻结原文字、只更新状态。真正的结构调整请带"调整说明"。"""
-    import difflib
-    THRESHOLD = 0.6
-    used = set()
-    merged = []
-    for old in old_items:
-        old_key = _plan_text_key(old.get("text", ""))
-        best_i, best_r = -1, 0.0
-        for i, nw in enumerate(new_items):
-            if i in used:
-                continue
-            nk = _plan_text_key(nw.get("text", ""))
-            if nk == old_key:               # 精确同 key 直接认领
-                best_i, best_r = i, 1.0
-                break
-            r = difflib.SequenceMatcher(None, old_key, nk).ratio()
-            if r > best_r:
-                best_i, best_r = i, r
-        if best_i >= 0 and best_r >= THRESHOLD:
-            used.add(best_i)
-            # 冻结旧文字，只取新状态
-            merged.append({"text": old["text"], "status": new_items[best_i].get("status", "pending")})
-        # else：旧步骤没被认领 → 不进 merged（视为删除，_validate_plan_update 按规则处理）
-    for i, nw in enumerate(new_items):       # 没被认领的新行 = 新增步骤，追加
-        if i not in used:
-            merged.append({"text": nw["text"], "status": nw.get("status", "pending")})
-    return merged
-
-
-def _validate_plan_update(old_items: list, new_items: list, raw_plan: str) -> str:
-    """防止模型执行中静默删除未完成计划项。
-
-    update_plan 是全量覆盖工具；没有这层保护时，模型会把 9 项计划随手改成 8 项，
-    让测试 / diff 等验收步骤悄悄消失。允许新增和状态更新；删除未完成项需有明确
-    调整说明，未完成的验收项始终不允许删除。
+    step: 步号（1 基，就是计划面板上看到的第几行）。
+    status: 完成 / 进行中 / 待办（也接受 done / in_progress / pending / x / ~）。
+    用法：开头用 update_plan 列全计划，之后每开始或完成一步就调本工具改那一步。
     """
-    if not old_items or not new_items:
-        return ""
-
-    new_keys = {_plan_text_key(it.get("text", "")) for it in new_items}
-    missing = []
-    missing_validation = []
-    for item in old_items:
-        text = item.get("text", "")
-        if item.get("status") == "done":
-            continue
-        if _plan_text_key(text) not in new_keys:
-            missing.append(text)
-            if _PLAN_VALIDATION_RE.search(text or ""):
-                missing_validation.append(text)
-
-    if not missing:
-        return ""
-
-    if missing_validation:
-        return (
-            "计划未更新：不能删除尚未完成的验收步骤。\n"
-            "被删除的验收项：\n"
-            + "\n".join(f"- {x}" for x in missing_validation)
-            + "\n\n请保留测试 / 全量测试 / git diff 等验收步骤，只更新状态。"
-        )
-
-    if not _PLAN_CHANGE_REASON_RE.search(raw_plan or ""):
-        return (
-            "计划未更新：新计划删除了尚未完成的步骤，但没有说明是合并、拆分还是取消。\n"
-            "被删除的未完成项：\n"
-            + "\n".join(f"- {x}" for x in missing)
-            + "\n\n默认请只更新 [ ]/[~]/[x] 状态；如确需调整结构，请在计划文本中加入“调整说明：...”。"
-        )
-
-    return ""
+    from . import state
+    plan = list(getattr(state, "current_plan", None) or [])
+    if not plan:
+        return "还没有计划。请先用 update_plan 列出完整步骤。"
+    try:
+        idx = int(step)
+    except (TypeError, ValueError):
+        return f"步号无效：{step}。请传 1 到 {len(plan)} 之间的整数。"
+    if idx < 1 or idx > len(plan):
+        return f"步号 {idx} 超出范围（当前计划共 {len(plan)} 步）。"
+    s = _normalize_step_status(status)
+    if s is None:
+        return f"状态无效：{status}。请用 完成 / 进行中 / 待办（或 done / in_progress / pending）。"
+    plan[idx - 1] = {"text": plan[idx - 1].get("text", ""), "status": s}
+    state.current_plan = plan
+    _ui = getattr(state, "ui_ref", None)
+    if _ui is not None and hasattr(_ui, "show_plan"):
+        try:
+            _ui.show_plan(list(plan))
+        except Exception:
+            pass
+    done = sum(1 for it in plan if it["status"] == "done")
+    return f"已把第 {idx} 步标为「{s}」（{done}/{len(plan)} 完成）：\n" + state.render_plan(plan)
 
 
 # ══════════════════════════════════════
@@ -3173,7 +3108,7 @@ def apply_patch(patch: str) -> str:
 
     # ── Phase 2: 校验 + 内存计算（不写盘）──
     root = _project_cwd()
-    resolved_ops = []       # (action, full_path, old_content, new_content, resolved_path)
+    resolved_ops: list = []  # (action, path, resolved, old/None, new/None) 异质 tuple,给 list 注解防 mypy 窄推断
     errors = []
 
     for op in operations:
@@ -4072,7 +4007,7 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
 
     # ① 创建任务
     try:
-        r = _requests.post(base, json=body, headers=headers, timeout=30)
+        r = _requests.post(base, json=body, headers=headers, timeout=30)  # type: ignore[arg-type]  # dict[str,object] 运行时是合法 JSON,requests 类型桩过严
     except Exception as e:
         _finrec(error=f"创建请求异常: {e}")
         return f"创建视频任务失败: {e}"
@@ -4163,6 +4098,7 @@ ALL_TOOLS = [
     remember, forget,
     spawn_agents,
     update_plan,
+    set_step_status,
     get_project_instructions,
     notify_user,
     read_background_output, list_background_commands, stop_background_command,
@@ -4223,6 +4159,7 @@ TOOL_DISPLAY_NAMES = {
     "forget": "🗑️ 遗忘记忆",
     "spawn_agents": "🤖 并行子 Agent",
     "update_plan": "📋 更新计划",
+    "set_step_status": "📍 更新步骤",
     "read_background_output": "📋 读取后台输出",
     "list_background_commands": "📋 列出后台命令",
     "stop_background_command": "⏹ 停止后台命令",
