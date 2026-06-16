@@ -355,6 +355,16 @@ def get_system_prompt(include_painting: bool = False, web_search=None):
             + _st.render_plan(plan)
         )
 
+    # 当前任务台账（自动记录的已改文件/已跑命令）——逐轮重新渲染注入，survive 压缩
+    ledger = getattr(_st, "task_ledger", None)
+    ledger_text = _st.render_task_ledger(ledger) if ledger else ""
+    if ledger_text:
+        base = base + (
+            "\n\n# 当前任务进度（自动记录，供你参考）\n"
+            "以下是本次任务里你已经改过的文件 / 跑过的命令，用来帮你记住进度、避免重复改或漏步。\n\n"
+            + ledger_text
+        )
+
     return base
 
 

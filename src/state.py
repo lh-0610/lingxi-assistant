@@ -110,6 +110,75 @@ def render_plan(plan: list) -> str:
 
 
 # ══════════════════════════════════════
+# 任务台账（自动记录"已改文件 / 已跑命令"，逐轮注入 system prompt，survive 压缩）
+# ══════════════════════════════════════
+
+_LEDGER_MAX_COMMANDS = 8  # 命令记录只留最近 N 条，防长任务无限堆积
+
+# 写盘类工具 → 台账里显示的动作词
+_LEDGER_FILE_OPS = {
+    "edit_file": "已编辑",
+    "write_file": "已创建/覆盖",
+    "append_file": "已追加",
+}
+
+
+def new_task_ledger() -> dict:
+    """空台账（单一事实源；session 默认值 / reset 都用它）。"""
+    return {"files": {}, "commands": []}
+
+
+def record_tool_in_ledger(ledger: dict, name: str, args: dict, result) -> None:
+    """把一次【成功】的工具调用记进台账。纯 dict 操作，不抛异常（调用方仍兜 try）。
+
+    - edit/write/append → **仅当结果以"成功"开头**（成功编辑/成功写入文件/成功追加到文件）才记
+      files[相对路径] = 动作词。用户拒绝（"已拒绝…"）、old_string 没匹配（"失败：…"）等都不记——
+      否则会把没真改的文件误记成已改、污染台账。（"工具执行失败"前缀只在 invoke 抛异常时才有，
+      盖不住工具自己返回的拒绝/失败串，所以这里用"成功"白名单而非失败黑名单。）
+    - run_tests / run_command → 只要真跑过就记 {cmd, brief}（哪怕测试没过，brief 里的失败信息也有用），
+      仅跳过 invoke 抛异常（result 以"工具执行失败"开头）。超 N 条丢最老。
+    """
+    if not isinstance(ledger, dict):
+        return
+    res = str(result)
+    if name in _LEDGER_FILE_OPS:
+        if not res.startswith("成功"):       # 只记真改成功的；拒绝/失败/没匹配都不记
+            return
+        path = (args or {}).get("path") or ""
+        if path:
+            ledger.setdefault("files", {})[str(path)] = _LEDGER_FILE_OPS[name]
+    elif name in ("run_tests", "run_command"):
+        if res.startswith("工具执行失败"):    # 命令只跳 invoke 异常；跑了没过仍记
+            return
+        cmd = "run_tests" if name == "run_tests" else str((args or {}).get("command", ""))[:60]
+        brief = " ".join(res.split())[:80]   # 压成单行 + 截断，台账只要个梗概
+        cmds = ledger.setdefault("commands", [])
+        cmds.append({"cmd": cmd, "brief": brief})
+        if len(cmds) > _LEDGER_MAX_COMMANDS:
+            del cmds[:-_LEDGER_MAX_COMMANDS]
+
+
+def render_task_ledger(ledger: dict) -> str:
+    """台账 → 注入文本；空台账返回空串（调用方据此决定要不要注入）。"""
+    if not isinstance(ledger, dict):
+        return ""
+    files = ledger.get("files") or {}
+    cmds = ledger.get("commands") or []
+    if not files and not cmds:
+        return ""
+    lines = []
+    if files:
+        lines.append("已改动的文件：")
+        for p, op in files.items():
+            lines.append(f"- {p}（{op}）")
+    if cmds:
+        lines.append("最近执行的命令：")
+        for c in cmds:
+            lines.append(f"- {c.get('cmd', '')} → {c.get('brief', '')}")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════
 # 会话级字段代理：把 state.X 读写转发到"当前线程的当前会话"
 # ══════════════════════════════════════
 # 模块本身不支持 property，所以用 sys.modules 把本模块替换成一个带 property 的

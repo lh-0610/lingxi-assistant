@@ -29,6 +29,7 @@ _SESSION_FIELDS = {
     "session_token_usage": lambda: {"input": 0, "output": 0, "total": 0},
     "compaction": lambda: {"summary": "", "covered_upto": 0},
     "current_plan": list,
+    "task_ledger": lambda: {"files": {}, "commands": []},   # ← 新增，自动任务台账（M1）
     "shell_cwd": lambda: None,
     "remote_session": lambda: False,
     # streaming.py 用 state._last_text_only_image_warning 记"本会话本模型是否已就
