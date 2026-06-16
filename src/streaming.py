@@ -21,6 +21,9 @@ from .limits import (
     HISTORY_KEEP_RECENT,
     HISTORY_TOKEN_BUDGET,
     STREAM_RETRY_ATTEMPTS,
+    TOOL_RESULT_EVICT_KEEP_RECENT,
+    TOOL_RESULT_EVICT_MIN_CHARS,
+    TOOL_RESULT_EVICT_PREVIEW_CHARS,
     TOOL_RESULT_PREVIEW_CHARS,
 )
 from .images import (
@@ -124,7 +127,7 @@ def _normalize_nonleading_system_messages(messages):
     再出现 system。旧会话可能已经保存过这种消息；这里只清洗发送副本，不修改
     state.chat_history。
     """
-    normalized = []
+    normalized: list = []   # 异质：SystemMessage / HumanMessage / 透传的原消息都进这里
     seen_non_system = False
     for msg in messages or []:
         if isinstance(msg, SystemMessage):
@@ -264,6 +267,44 @@ def _maybe_trim_history(messages, budget=HISTORY_TOKEN_BUDGET, keep_recent=HISTO
 
 # ── 会话历史压缩（Compaction）──
 # 超 token 预算时把中段旧消息总结成一条摘要，替代直接丢弃。
+
+
+def _evict_old_tool_results(
+    messages,
+    budget=HISTORY_TOKEN_BUDGET,
+    keep_recent=TOOL_RESULT_EVICT_KEEP_RECENT,
+    min_chars=TOOL_RESULT_EVICT_MIN_CHARS,
+):
+    """超预算时，把"最近 keep_recent 条之外、且内容超过 min_chars 的"工具结果截成存根。
+
+    存根 = 原内容前 PREVIEW 字符 + "[已回收，需要重新调用工具]"。保留 ToolMessage 本体和
+    tool_call_id（不破坏 tool_use/tool_result 配对）。只动发送副本，不碰 state.chat_history。
+    返回 (新 messages, evicted_count)。未超预算或没啥可回收 → 原样返回, 0。
+    """
+    if _estimate_tokens(messages) <= budget:
+        return messages, 0
+    # 所有 ToolMessage 的下标；最近 keep_recent 条保持完整，其余的算"旧"
+    tool_idx = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+    if len(tool_idx) <= keep_recent:
+        return messages, 0
+    evict_set = set(tool_idx[:-keep_recent])
+    out = []
+    evicted = 0
+    for i, m in enumerate(messages):
+        if i in evict_set and isinstance(m, ToolMessage):
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            if len(content) > min_chars:
+                preview = content[:TOOL_RESULT_EVICT_PREVIEW_CHARS].replace("\n", " ")
+                stub = (
+                    f"{preview}…\n"
+                    f"[旧工具结果已回收：原 {len(content)} 字符。需要完整内容请重新调用对应工具获取。]"
+                )
+                out.append(ToolMessage(content=stub, tool_call_id=m.tool_call_id))
+                evicted += 1
+                continue
+        out.append(m)
+    return out, evicted
+
 
 _COMPACT_SYSTEM_PROMPT = (
     "下面是一段较早的对话历史。请压缩成一段简洁摘要，保留对后续工作有用的信息：\n"
@@ -566,6 +607,20 @@ def _prepare_stream_history(ui):
         history_for_send = _wrap_system_for_cache(
             history_for_send, fresh_system, provider=MODEL_LIST[state.current_model_index][1],
         )
+
+    # 先做便宜的工具结果回收（超预算时把旧的大工具结果截成存根，模型要详情可重新调工具）。
+    # 常常回收完就压回预算内，下面的 LLM 压缩自然 no-op，省钱省延迟。
+    history_for_send, _evicted = _evict_old_tool_results(history_for_send)
+    if _evicted > 0:
+        logger.info(f"工具结果回收：本轮截断 {_evicted} 条旧的大工具结果为存根")
+        try:
+            ui.show_message(
+                f"\n♻️ 上下文偏长，本轮把 {_evicted} 条较早的大工具结果折叠为摘要存根"
+                f"（最近 {TOOL_RESULT_EVICT_KEEP_RECENT} 条保持完整；需要详情我会重新读）。\n",
+                "tool_result",
+            )
+        except Exception:
+            pass
 
     # 会话历史压缩：超过预算时用 LLM 压缩中段为摘要（滚动缓存，失败降级裁剪）。
     # state.chat_history 本身不改，UI 上保留完整历史，只是发给 LLM 的 history_for_send 被压缩。
