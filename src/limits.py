@@ -14,6 +14,13 @@ HISTORY_KEEP_RECENT = 20
 TOOL_RESULT_EVICT_KEEP_RECENT = 6      # 最近 N 条工具结果保持完整（不回收）
 TOOL_RESULT_EVICT_MIN_CHARS = 1000     # 只回收内容超过这个字符数的旧工具结果（小结果不值当）
 TOOL_RESULT_EVICT_PREVIEW_CHARS = 150  # 存根保留的开头预览长度
+
+# 单条工具结果硬上限（M4）：超预算时,任何工具结果(含最近的)超过 cap 就截成 头+尾,
+# 防一串大结果堆在最近、躲过回收和压缩、撑爆预算
+TOOL_RESULT_HARD_CAP_CHARS = 24_000    # 超过这个字符数就截断（≈17k token；600 行左右的文件以内不动）
+TOOL_RESULT_HARD_CAP_HEAD = 12_000     # 保留开头字符数
+TOOL_RESULT_HARD_CAP_TAIL = 6_000      # 保留结尾字符数
+
 STREAM_RETRY_ATTEMPTS = 3
 
 READ_FILE_DEFAULT_LIMIT = 2000

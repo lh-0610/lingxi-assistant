@@ -26,6 +26,9 @@ from .limits import (
     TOOL_RESULT_EVICT_KEEP_RECENT,
     TOOL_RESULT_EVICT_MIN_CHARS,
     TOOL_RESULT_EVICT_PREVIEW_CHARS,
+    TOOL_RESULT_HARD_CAP_CHARS,
+    TOOL_RESULT_HARD_CAP_HEAD,
+    TOOL_RESULT_HARD_CAP_TAIL,
     TOOL_RESULT_PREVIEW_CHARS,
 )
 from .images import (
@@ -267,6 +270,43 @@ def _maybe_trim_history(messages, budget=HISTORY_TOKEN_BUDGET, keep_recent=HISTO
 
 # ── 会话历史压缩（Compaction）──
 # 超 token 预算时把中段旧消息总结成一条摘要，替代直接丢弃。
+
+
+def _cap_oversized_tool_results(
+    messages,
+    budget=HISTORY_TOKEN_BUDGET,
+    cap=TOOL_RESULT_HARD_CAP_CHARS,
+    head=TOOL_RESULT_HARD_CAP_HEAD,
+    tail=TOOL_RESULT_HARD_CAP_TAIL,
+):
+    """超预算时,把【任何】内容超过 cap 字符的 ToolMessage(含最近的)截成 头 + 尾 + 标记。
+
+    与 M2 回收互补:回收只削"旧"结果(削成存根),这里管"巨无霸"(含最近的,削成头+尾)——
+    防一串大结果堆在受保护的最近区、躲过回收和压缩、撑爆预算。
+    只动发送副本,保留 ToolMessage 本体和 tool_call_id(不破坏配对)。
+    返回 (新 messages, capped_count)。未超预算 → 原样返回, 0。
+    """
+    from langchain_core.messages import ToolMessage
+    if _estimate_tokens(messages) <= budget:
+        return messages, 0
+    out = []
+    capped = 0
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            if len(content) > cap:
+                cut = len(content) - head - tail
+                trimmed = (
+                    content[:head]
+                    + f"\n\n…[工具结果过大,中段 {cut} 字符已截断;"
+                      f"需要这部分请重新调用对应工具读指定范围]…\n\n"
+                    + content[-tail:]
+                )
+                out.append(ToolMessage(content=trimmed, tool_call_id=m.tool_call_id))
+                capped += 1
+                continue
+        out.append(m)
+    return out, capped
 
 
 def _evict_old_tool_results(
@@ -628,6 +668,17 @@ def _prepare_stream_history(ui):
     # 先做便宜的工具结果回收（超预算时把旧的大工具结果截成存根，模型要详情可重新调工具）。
     # 常常回收完就压回预算内，下面的 LLM 压缩自然 no-op，省钱省延迟。
     _budget = _current_history_budget()
+    # M4: 先把单条巨无霸(含最近的)截成头+尾,防它躲过回收/压缩撑爆预算
+    history_for_send, _capped = _cap_oversized_tool_results(history_for_send, budget=_budget)
+    if _capped > 0:
+        logger.info(f"工具结果硬上限:本轮把 {_capped} 条过大结果截成头+尾")
+        try:
+            ui.show_message(
+                f"\n✂️ 有 {_capped} 条过大的工具结果被截断为首尾摘要(需要细节我会重新读指定范围)。\n",
+                "tool_result",
+            )
+        except Exception:
+            pass
     history_for_send, _evicted = _evict_old_tool_results(history_for_send, budget=_budget)
     if _evicted > 0:
         logger.info(f"工具结果回收：本轮截断 {_evicted} 条旧的大工具结果为存根")
