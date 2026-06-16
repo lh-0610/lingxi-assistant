@@ -13,7 +13,7 @@
 - streaming  全流式调用（_stream_with_tools）+ 工具执行
 - agent      主循环 agent_loop + switch_model + 启动初始化
 - tools      LangChain 工具集合（read_file / generate_image 等）
-- floating   桌面悬浮宠物 + 系统托盘
+- floating   系统托盘（关窗后维持后台 + 双击唤起）
 - voice      STT (faster-whisper) + TTS (GPT-SoVITS 流式)
 - ui         PySide6 桌面界面（包：chat_window / theme / widgets / settings_dialog / helpers / prefs）
 """

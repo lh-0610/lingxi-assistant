@@ -25,7 +25,7 @@ def _app_data_dir():
 
 
 def _resource_dir():
-    """**只读打包资源**根目录（icons / assets/desktop_pet / roles 等随包发布的文件）：
+    """**只读打包资源**根目录（icons / roles 等随包发布的文件）：
     - 开发期：项目根（同 APP_DIR）
     - PyInstaller 打包后：sys._MEIPASS（onefile 解压的临时目录 / onedir 的 _internal）
       —— 注意这跟 APP_DIR（exe 目录）**不是同一个**，打包资源必须从这里读。

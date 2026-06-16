@@ -496,7 +496,7 @@ class CloseConfirmDialog(QDialog):
         text_col.addWidget(title)
 
         desc = QLabel(
-            "最小化后，灵犀立绘与托盘图标会继续保留。"
+            "最小化后，灵犀会继续在系统托盘后台运行（双击托盘图标可再唤起）。"
             "退出软件将完全关闭灵犀。"
         )
         desc.setObjectName("closeDescription")

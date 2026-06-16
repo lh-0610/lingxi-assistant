@@ -1,13 +1,14 @@
 # 灵犀 AI 助手 (LingXi Assistant)
 
-基于 LangChain + PySide6 的 **多模型 AI 桌面助手 + 桌面宠物 + 语音对话**应用。
+基于 LangChain + PySide6 的 **多模型 AI 编码助手**（桌面 + Web，"Codex 体验、模型无关"）+ 语音对话应用。
 
-> 角色卡放 `roles/*.md` 加载（仓库附 `example.md` 模板，立绘/音色需自备）。桌宠 GIF 立绘走 PIL 预提取 + QTimer 帧切换。语音用 faster-whisper（本地 STT）+ GPT-SoVITS（本地流式 TTS）。
+> 专注代码助手；桌面宠物等娱乐属性已移除，以后另开独立应用。
+> 角色卡放 `roles/*.md` 加载（仓库附 `example.md` 模板，音色需自备）。语音用 faster-whisper（本地 STT）+ GPT-SoVITS（本地流式 TTS）。
 
 ## 项目结构
 
 ```
-main.py                  # 入口：高 DPI 配置 + 启动 Qt + 创建 ChatUI + 桌宠 + 托盘
+main.py                  # 入口：高 DPI 配置 + 启动 Qt + 创建 ChatUI + 系统托盘
 icon.ico
 config.json              # API 密钥 / 路径配置（已 .gitignore）
 config.example.json
@@ -35,7 +36,7 @@ src/                     # 主代码
   images.py              # 图片格式归一化（Anthropic/OpenAI/Gemini 协议差异）
   debug_log.py           # F12 调试：请求/响应 record 环形缓冲 + Qt Signal
   claude_code.py         # 通过 subprocess 调本地 Claude Code CLI
-  floating.py            # 桌面悬浮宠物 DesktopPet + create_tray（跨线程 set_thinking + 动画排队 + _restore_window 保留最大化）
+  floating.py            # 系统托盘 create_tray（关窗维持后台 + 双击唤起 + _restore_window 保留最大化）
   voice.py               # Recorder + STT (faster-whisper) + GPTSoVITSTTS (流式)
   gpt_sovits_launcher.py # subprocess 拉 api_v2.py + Windows Job Object 清理
 
@@ -55,24 +56,17 @@ src/                     # 主代码
     prefs.py             # UI 偏好持久化（关闭按钮选择等）
     _base.py             # 共享 BASE_DIR / CONFIG_PATH / THEME_CONFIG_PATH 常量
 
-scripts/                 # 一次性工具脚本
-  mp4_to_pet_gif.py      # 纯色背景 MP4 → 透明 GIF（cv2 chroma-key + PIL 写多帧）
+scripts/                 # pytest 测试套件 + conftest fixtures
 
 roles/                   # 角色卡 .md（启动自动恢复上次激活）
   example.md             # 角色卡模板
-
-assets/desktop_pet/      # 桌宠资源（仅 GIF + 静态 fallback；sprite 路径已废弃）
-  idle_desktop_pet_final.gif
-  thinking_desktop_pet_final.gif
-  wave_desktop_pet_final.gif
-  lingxi_pet.png         # 静态 fallback（GIF 全坏时用）
 
 icons/                   # SVG 图标（Lucide 风格）
   mic_lucide.svg
   speaker_on_lucide.svg / speaker_off_lucide.svg
   upload_lucide.svg / settings_lucide.svg / arrow_up.svg / pause.svg / ...
 
-chat_memory/             # 会话 JSON + index.json + projects.json + role_config.json + pet_config.json + ui_prefs.json + theme_config.json
+chat_memory/             # 会话 JSON + index.json + projects.json + role_config.json + ui_prefs.json + theme_config.json
 logs/                    # 按日期分文件的日志
 docs/                    # 项目文档（含 TODO.md）
 build/, dist/            # PyInstaller 产物（已 .gitignore）
@@ -152,16 +146,11 @@ python main.py
 - 激活的角色记录在 `chat_memory/role_config.json`，启动时 `load_saved_role_card()` 自动恢复
 - `_strip_markdown_for_tts` 在 TTS 路径上额外剥离 `*动作描写*` 和 emoji（防止 GPT-SoVITS 把 `*轻抚发梢*` 朗读出来，且 GBK 不支持的字符会让 GPT-SoVITS API 返 400）
 
-### 桌面宠物（src/floating.py）
-- `Qt.FramelessWindowHint | WindowStaysOnTopHint | SplashScreen | NoDropShadowWindowHint` + `WA_TranslucentBackground` + `WA_NoSystemBackground`
-- Windows 11 DWM 边框/圆角/阴影通过 ctypes 调 `DwmSetWindowAttribute` 关掉（`NCRENDERING_POLICY=DISABLED` + `WINDOW_CORNER_PREFERENCE=DONOTROUND` + `BORDER_COLOR=COLOR_NONE`）
-- **GIF 帧用 PIL 预提取成 QPixmap 序列**（QMovie 在 disposal_method=2 时偶尔返回局部 bbox 而非全 canvas，导致只显示底半身），QTimer 驱动播放
-- **跨线程 set_thinking**：DesktopPet 有 `_thinking_signal = Signal(bool)`，`set_thinking()` 直接 emit；同线程 = DirectConnection 立即调，跨线程 = QueuedConnection 自动投递到 UI 主线程。worker 线程**绝不能直接动 QTimer / widget.update()**，否则 timer 失活、动画卡死
-- **动画排队**（`play()` + `_pending_action`）：当前动画播完本轮再切，不会半路截断。`set_thinking(True/False)` 高频切换是 last-write-wins
-- `set_thinking(True/False)` 由 ChatUI 的 `show_message("thinking_indicator")` 钩子调用，AI 思考时自动切到 `think.gif`
-- 单击立绘 → 切换主聊天窗口显示 + 播一遍 wave（`once=True`）
-- 拖动 / 右键菜单 / 系统托盘 `QSystemTrayIcon` 都在这
-- **fallback 链已收窄成 2 层**：GIF → 静态 `lingxi_pet.png`（原 sprite 路径已删，相关常量 / `_load_sprites` / `QMovie` 引用都已清掉）
+### 系统托盘（src/floating.py）
+- `create_tray(app, chat_window, icon_path)`：`QSystemTrayIcon` + 右键菜单（打开对话 / 退出）+ 双击唤起窗口
+- `main.py` 设 `setQuitOnLastWindowClosed(False)`，关窗只隐藏、由托盘维持后台；托盘"退出"才真退
+- `_restore_window` 唤起时**保留最大化/全屏状态**（不用 `showNormal()`，否则会缩回默认尺寸）
+- 桌面宠物已移除（原 DesktopPet / GIF 动画 / `set_thinking` 钩子全部删除）；`thinking_indicator` 是聊天窗口自己的"思考中…"指示器，与托盘无关
 
 ### 语音模块
 - **STT**（`voice.py:STT`）：faster-whisper，懒加载模型；`ctranslate2.get_cuda_device_count() > 0` 才尝试 GPU，并做一次零样本 dry-run 验证 cublas 真能加载，失败立刻销毁 GPU 实例换 CPU/int8
@@ -203,7 +192,6 @@ python main.py
 | `chat_memory/<session_id>.json` | 会话消息历史（HumanMessage/AIMessage/ToolMessage 序列化）+ project 字段 |
 | `chat_memory/projects.json` | 注册的项目列表 + 当前激活项目（`{current, projects: [{path, name}]}`） |
 | `chat_memory/role_config.json` | 当前激活的角色卡名 |
-| `chat_memory/pet_config.json` | 桌宠最后位置 `{x, y}` |
 | `chat_memory/ui_prefs.json` | UI 偏好（如关闭按钮记住的选择） |
 | `chat_memory/theme_config.json` | 主题选择（light / dark） |
 | `logs/YYYYMMDD.log` | 按日期分的日志 |
@@ -262,7 +250,7 @@ python main.py
 - QTextBrowser **不支持 `<style>`**，Markdown HTML 必须 inline 样式
 - QTextBrowser 对 `<div margin>` / `<p padding>` 支持差；要给消息按钮留垂直空白用**表格 spacer**（`<table><tr><td style="height:14px">`），HTML 邮件时代的老套路最稳
 - Enter 发送、Shift+Enter 换行 通过 `eventFilter` 在 `self.entry` 上拦截
-- **跨线程 QObject 调用必须用 Signal**：worker 直接动 `QTimer.start/stop` / `widget.update()` 会让 timer 失去 thread affinity 永久失活。范式参考 `DesktopPet._thinking_signal` 和 `SignalBridge.confirm_request`
+- **跨线程 QObject 调用必须用 Signal**：worker 直接动 `QTimer.start/stop` / `widget.update()` 会让 timer 失去 thread affinity 永久失活。范式参考 `SignalBridge.confirm_request`
 - `QPixmap.setDevicePixelRatio(dpr)` 后拿物理像素尺寸要用 `deviceIndependentSize()` 否则在高 DPI 上偏移
 - 加载 `.ico` 当 widget icon 时**别直接 `QPixmap(path).scaled()`**——会从 .ico 多分辨率位图里随便挑一张可能拿到 16×16 那张。要用 `QIcon(path).pixmap(QSize(256,256)).scaled(...)`，QIcon 会挑最接近目标尺寸的内嵌位图
 

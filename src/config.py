@@ -8,19 +8,6 @@ import json
 from .paths import CONFIG_PATH, logger
 
 
-def _safe_float(key: str, default: float, min_val: float = 0.1, max_val: float = 10.0) -> float:
-    """安全读取浮点数配置，自动校验范围并回退默认值"""
-    try:
-        val = float(_config.get(key, default))
-        if val < min_val or val > max_val:
-            logger.warning(f"{key}={val} 超出合理范围 [{min_val}, {max_val}]，重置为 {default}")
-            return default
-        return val
-    except (ValueError, TypeError):
-        logger.warning(f"{key} 配置值无效，重置为 {default}")
-        return default
-
-
 try:
     with open(CONFIG_PATH, "r", encoding="utf-8-sig") as _f:
         _config = json.load(_f)
@@ -96,9 +83,6 @@ GPT_SOVITS_TEXT_SPLIT_METHOD = _config.get("gpt_sovits_text_split_method", "cut5
 GPT_SOVITS_INSTALL_DIR = _config.get("gpt_sovits_install_dir", "")    # GPT-SoVITS 整合包根目录
 GPT_SOVITS_GPT_MODEL = _config.get("gpt_sovits_gpt_model", "")        # GPT 权重相对路径，如 GPT_weights_v2/xxx.ckpt
 GPT_SOVITS_SOVITS_MODEL = _config.get("gpt_sovits_sovits_model", "")  # SoVITS 权重相对路径，如 SoVITS_weights_v2/xxx.pth
-
-# 桌宠动画
-PET_ANIMATION_SPEED = _safe_float("pet_animation_speed", 1.0, min_val=0.1, max_val=5.0)  # 1.0=GIF 原速；0.5=慢 2 倍；2.0=快 2 倍
 
 # LSP 代码导航（find_definition / find_references 使用的后端列表，按优先级排序）
 LSP_SERVERS: list[str] = _config.get("lsp_servers", ["pyright-langserver", "pylsp"])

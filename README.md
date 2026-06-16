@@ -1,8 +1,8 @@
 # 灵犀 AI 助手
 
-> **桌面 Agent + 桌宠立绘 + 本地中文 TTS** —— 一个 Windows 原生 PySide6 应用里完成"模型对话 / 工具调用 / 看见小姐姐 / 听她说话"。
+> **桌面 + Web 的多模型 AI 编码助手** —— 模型对话 / 工具调用 / 代码导航 / 改完自检的验证闭环 / 本地中文 TTS，一个 Windows 原生 PySide6 应用里完成。"Codex 体验、模型无关"。
 
-<!-- 演示 GIF / 截图位 —— 用 ScreenToGif 录一段 20s 的"发消息 → 桌宠思考 → 工具调用确认卡 → AI 朗读" 放这里，效果比文字强 10 倍 -->
+<!-- 演示 GIF / 截图位 —— 用 ScreenToGif 录一段 20s 的"发消息 → AI 规划 → 工具调用确认卡 → 改代码 → 自动校验" 放这里，效果比文字强 10 倍 -->
 
 ## 为什么不用现有工具？
 
@@ -14,10 +14,10 @@
 | 同类项目 | 灵犀的不同 |
 |---|---|
 | 多模型 chat（Electron / Web） | **Windows 原生 PySide6**，启动 1 秒，不带 Chromium 内核 |
-| Live2D 桌宠（仅 chat） | 桌宠 + **完整 Agent 工具调用**（文件 / 命令 / ComfyUI 生图）；命令执行前**输入框上方弹内联确认卡** + 危险命令检测 |
-| Edge-TTS / 在线 TTS | **本地 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 流式合成**：一键拉子进程 + Job Object 防漏 + RTX 50 系 cu128 踩坑笔记齐 |
+| 纯聊天 / 角色卡 App | **完整 Agent 工具调用**（文件 / 命令 / 代码导航 / 跑测试 / ComfyUI 生图）；写盘/命令执行前**输入框上方弹内联确认卡** + 危险命令检测 |
+| Cursor / Cline（绑定某家模型） | **模型无关**：MiMo / Qwen / DeepSeek-V4 / Claude / 自定义 OpenAI·Anthropic 协议任意切；含改完自检的**验证闭环** + LSP 代码导航 |
 | OpenAI / Claude 海外模型 | MiMo / Qwen / DeepSeek-V4 思考块解析 / 本地 **Claude Code CLI** 子进程模式 |
-| SillyTavern 角色卡（Web） | 同款 .md 角色卡格式，但**桌面 + 本地 TTS + 桌宠立绘**一体 |
+| Edge-TTS / 在线 TTS | **本地 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 流式合成**：一键拉子进程 + Job Object 防漏 + RTX 50 系 cu128 踩坑笔记齐 |
 
 如果你**只**想要其中一项，用更专业的工具更好；如果想要**所有这些**装在一起、Windows 原生、能本地跑，灵犀是个还行的选择。
 
@@ -71,14 +71,11 @@
 - 🎭 内置一份角色卡模板（`roles/example.md`），照着结构填写即可
 - 🔁 启动时自动恢复上次激活的角色
 
-### 桌面宠物
-- 🎀 **GIF 动画立绘**：idle 待机 / think 思考 / wave 挥手 三套动作（PIL 预提取成 QPixmap 序列 + QTimer 驱动）
-- 🖱️ **拖动**移动位置，**单击**切换主对话窗口显示/隐藏
-- 📌 **始终置顶 + 无边框 + 透明** —— Windows 11 DWM 边框已用 ctypes API 关掉
-- 🍿 **AI 思考时自动切动画**，回答完恢复 idle（跨线程 Signal 投递，worker 不动 UI 对象）
-- ⏯️ **动画排队**：当前动画播完本轮再切，不会半路截断显得抽搐
-- 🪟 **系统托盘** + **右键菜单**（含"隐藏桌宠"/"退出"）
-- 🎬 **配套 MP4→GIF 转换脚本**（[scripts/mp4_to_pet_gif.py](scripts/mp4_to_pet_gif.py)）：把即梦/Runway 等 AI 视频生成的白/黑/绿背景 MP4 一键抠成透明 GIF
+### 系统托盘
+- 🪟 关闭主窗口只**隐藏到系统托盘**、后台常驻；托盘**双击**唤起对话，**右键菜单**（打开对话 / 退出）
+- 🗔 唤起时**保留最大化/全屏状态**（不会缩回默认尺寸）
+
+> 桌面宠物（GIF 立绘 / 动画）已移除——本应用专注代码助手，娱乐属性以后另开独立应用。
 
 ### 语音模块
 - 🎤 **语音输入**：本地 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（GPU 优先，CPU 自动降级）
@@ -192,7 +189,7 @@ from typing import Callable, List, Optional, Tuple, Union
 python main.py
 ```
 
-预期：桌面右下角弹出灵犀的桌宠立绘（仓库自带一套默认动画）+ 主聊天窗口。想换成自己的立绘见 `assets/desktop_pet/README.md`。
+预期：弹出主聊天窗口；关闭窗口会隐藏到系统托盘（双击托盘图标可再唤起）。
 
 ### 6.（可选）配置 MCP 工具扩展
 
@@ -255,7 +252,7 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 
 ```
 .
-├── main.py                 # 主入口（高 DPI 配置 + 启动 Qt App + 桌宠 + 托盘）
+├── main.py                 # 主入口（高 DPI 配置 + 启动 Qt App + 系统托盘）
 ├── icon.ico                # 应用图标
 ├── config.json             # 配置（已 .gitignore）
 ├── config.example.json     # 配置模板
@@ -279,7 +276,7 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 │   ├── claude_code.py      # Claude Code CLI 调用
 │   ├── config.py           # config.json 解析
 │   ├── paths.py            # 路径常量 + logger
-│   ├── floating.py         # 桌面悬浮宠物 + 托盘（动画排队 + 跨线程 set_thinking）
+│   ├── floating.py         # 系统托盘（关窗维持后台 + 双击唤起 + 保留最大化）
 │   ├── voice.py            # STT (faster-whisper) + TTS (GPT-SoVITS 流式)
 │   ├── gpt_sovits_launcher.py  # subprocess 拉起 api_v2.py + Job Object
 │   │
@@ -299,17 +296,10 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 │       ├── prefs.py        # UI 偏好持久化（关闭按钮选择等）
 │       └── _base.py        # 共享 BASE_DIR / CONFIG_PATH 常量
 │
-├── scripts/                # 一次性工具脚本
-│   └── mp4_to_pet_gif.py   # 纯色背景 MP4 → 透明 GIF（桌宠素材转换）
+├── scripts/                # pytest 测试套件 + conftest fixtures
 │
 ├── roles/                  # 角色卡 .md
 │   └── example.md          # 角色卡模板（照着填）
-│
-├── assets/desktop_pet/     # 桌宠资源（GIF + 静态 fallback）
-│   ├── idle_desktop_pet_final.gif
-│   ├── thinking_desktop_pet_final.gif
-│   ├── wave_desktop_pet_final.gif
-│   └── lingxi_pet.png      # 静态 fallback（GIF 全坏时用）
 │
 ├── icons/                  # SVG 图标（Lucide 风格）
 │   ├── mic_lucide.svg
@@ -349,15 +339,13 @@ MCP（Model Context Protocol）让灵犀连接**外部工具服务器**，把它
 3. 选「是」→ 后台拉起 api_v2.py（约 30-60 秒，状态实时显示）→ 启动后 🔊 自动变绿
 4. 之后 AI 每次回复都会朗读（剥离 markdown / 动作描写 / emoji）
 
-### 桌宠
+### 系统托盘
 
 | 操作 | 反应 |
 |------|------|
-| 拖动 | 移动位置（释放时保存） |
-| 左键单击 | 切换主聊天窗口 + 播一遍挥手动画 |
-| 右键 | 菜单（显示对话 / 挥手 / 重置位置 / 隐藏桌宠 / 退出） |
-| 系统托盘左键 | 唤起主对话 |
-| 系统托盘右键 | 菜单（打开对话 / 显示桌宠 / 退出） |
+| 关闭主窗口 | 隐藏到系统托盘、后台常驻（不退出） |
+| 托盘双击 | 唤起主对话窗口（保留最大化/全屏状态） |
+| 托盘右键 | 菜单（打开对话 / 退出） |
 
 ### 角色卡
 

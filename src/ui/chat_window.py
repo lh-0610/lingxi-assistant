@@ -2386,7 +2386,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._release_pending_confirm()
         self._release_pending_edit()
 
-        # main.py 在挂上桌宠+托盘后会把 _hide_on_close 置 True
+        # main.py 在挂上系统托盘后会把 _hide_on_close 置 True
         if not getattr(self, "_hide_on_close", False):
             super().closeEvent(event)
             return
@@ -2545,11 +2545,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if _sess is not _session.get_active():
             _sess.needs_redraw = True
             return
-        # 桌宠思考动画：thinking_indicator 出现时切 think
-        if tag == "thinking_indicator":
-            pet = getattr(self, "pet", None)
-            if pet is not None:
-                pet.set_thinking(True)
         self.bridge.append_signal.emit(text, tag)
 
     def show_plan(self, items):
@@ -2667,9 +2662,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if _sess is not _session.get_active():
             _sess.needs_redraw = True
             return
-        pet = getattr(self, "pet", None)
-        if pet is not None:
-            pet.set_thinking(False)
         self.bridge.show_retry.emit(error_msg)
 
     def remove_thinking_indicator(self):
@@ -2678,9 +2670,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if _sess is not _session.get_active():
             _sess.needs_redraw = True
             return
-        pet = getattr(self, "pet", None)
-        if pet is not None:
-            pet.set_thinking(False)
         self.bridge.remove_thinking.emit()
 
     def update_thinking_indicator(self, text):

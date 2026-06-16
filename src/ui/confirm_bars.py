@@ -453,7 +453,7 @@ class ConfirmBarsMixin:
         - 危险命令（rm -rf / format / sudo 等）会隐藏"允许并记住"行，避免被
           AI 永久授权后造成数据损失
         - 旧请求未解时新请求会"取代"旧请求：deny 解阻塞旧 worker，再显示新卡
-        - 卡片显示后强制 raise + activateWindow，避免被桌宠遮
+        - 卡片显示后强制 raise + activateWindow，避免被其它窗口遮
         """
         if not hasattr(self, "command_confirm_bar"):
             result_holder["allow"] = False

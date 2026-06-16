@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
 from src.ui import ChatUI
-from src.floating import DesktopPet, create_tray
+from src.floating import create_tray
 
 # 兼容 PyInstaller 打包：打包后资源位于 sys._MEIPASS
 if getattr(sys, "frozen", False):
@@ -40,18 +40,15 @@ if __name__ == "__main__":
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    # 不让最后一个可见窗口关闭时整个 app 退出，由托盘+桌宠维持后台
+    # 不让最后一个可见窗口关闭时整个 app 退出，由系统托盘维持后台
     app.setQuitOnLastWindowClosed(False)
 
     window = ChatUI()
     window._hide_on_close = True  # 关闭按钮 → 隐藏而非退出
     window.show()
 
-    # 桌面悬浮宠物 + 系统托盘
-    pet = DesktopPet(chat_window=window)
-    window.pet = pet  # 让 ChatUI 的 thinking_indicator 钩子能切 think 动画
-    pet.show()
-    tray = create_tray(app, pet, window, icon_path=icon_path if os.path.exists(icon_path) else None)
+    # 系统托盘（关窗后维持后台，双击唤起）
+    tray = create_tray(app, window, icon_path=icon_path if os.path.exists(icon_path) else None)
 
     # 启动 Telegram 遥控轮询（config 启用 + bot token 齐备时自动生效）
     from src.telegram_poll import start as _tg_poll_start, shutdown as _tg_poll_shutdown

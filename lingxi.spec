@@ -56,7 +56,6 @@ a = Analysis(
     datas=[
         ('icon.ico', '.'),                  # 应用图标
         ('icons', 'icons'),                 # SVG 按钮图标（顶栏/设置/搜索等，走 BASE_DIR/_MEIPASS 读）
-        ('assets', 'assets'),               # 桌宠 GIF + 静态立绘（走 RESOURCE_DIR/_MEIPASS 读）
         ('roles', 'roles'),                 # 默认角色卡目录
         ('config.example.json', '.'),       # 配置模板，首次启动时复制成 config.json
     ] + _ruff_datas + _mcp_datas + _jedi_datas + _ts_datas,
