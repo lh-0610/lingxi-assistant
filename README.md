@@ -38,10 +38,10 @@
 ### 编码能力
 - 🪄 **`edit_file` 智能容错替换**：改大文件局部，比全量覆盖安全省 token；**写盘前弹蓝色 diff 预览卡**让你审改动。**分层匹配 L1-L4**(精确 → 行尾空白 → 缩进重对齐 → difflib 模糊),模型缩进风格不一致、tab/空格混用都能自动修正;实在匹配不上时**返回最接近片段+行号让模型自纠重试**——弱模型也能稳定改文件
 - 🌐 **`search_files` 跨文件正则搜索**（ripgrep 风格，忽略噪声目录）+ `read_file` 行号分页
-- 📋 **任务计划面板**：≥3 步的任务，AI 先用 `update_plan` 列出完整步骤，**聊天区右上角浮层实时显示进度**（待办空心圆 / 进行中 loading / 完成勾选），长任务不漏步（对标 Codex / Claude Code）
+- 📋 **任务计划面板**：≥3 步的任务，AI 先用 `update_plan` 列出完整步骤、之后用 `set_step_status` **按序号增量推进状态**（不重发整份、计划面板不漂移），**聊天区右上角浮层实时显示进度**（待办空心圆 / 进行中 loading / 完成勾选），长任务不漏步（对标 Codex / Claude Code）
 - ⚡ **并行工具调用**：同一轮里多个只读工具（读文件 / 搜索 / 导航）并行执行，多文件场景明显提速
 - 🧭 **LSP 代码导航**：`find_definition` 跳转定义、`find_references` 找全部引用，优先用语言服务器（pyright/pylsp，懂作用域/import/继承）→ 自动降级 jedi → 退回正则搜，比纯文本搜索准
-- ✅ **自我校验闭环**：`edit_file` / `write_file` 成功后自动跑 ruff / 语法检查，把发现的问题**追加进同一条工具返回**，模型当轮就去修（不用你提醒）
+- ✅ **自我校验闭环**：`edit_file` / `write_file` 成功后自动跑 ruff（正确性）/ mypy（类型，抓臆造 API/参数错）/ 语法检查，把发现的问题**追加进同一条工具返回**，模型当轮就去修（不用你提醒）；长任务还有**上下文管理**（任务台账 + 按模型预算 + 大工具结果回收，长对话不丢"改过哪些文件/跑过什么测试"）
 - 🧪 **更多编码工具**：`run_tests`（pytest）/ `check_code`（静态检查）/ `apply_patch`（多文件原子补丁）/ `git_diff`·`git_log`·`git_status`（只读）+ `git_stage`·`git_commit`（git 写，**执行前强制弹确认卡、无 push**）/ `fetch_url`·`web_search`（联网查资料）
 - 🧭 **Plan / Act 双模式**：Plan 模式 AI 只调研给方案、不动手（只读工具白名单 + 强制提示双保护）
 - ↶ **Checkpoint / 撤销**：edit/write/append 写盘前自动 git stash 快照，顶栏一键撤销 AI 上一轮改动（路径级恢复）
@@ -141,13 +141,13 @@ pip install jedi python-lsp-server   # 或 pip install pyright（需 Node）
 
 > Python 3.14 用户：faster-whisper 自动检测 CUDA，找不到就降到 CPU + int8。GPU 加速需要 cuDNN 9.x for CUDA 12。
 
-### 2. 配置 API 密钥
+### 2. 填一个模型的 API Key
 
-```bash
-cp config.example.json config.json
-```
+**最省事的方式**：先直接启动（见第 5 步）。没填 key 时主界面会提示「👋 还没配置模型」并给一个
+**「⚙ 打开设置」按钮** → 在设置面板里填你手头某个模型的 key → 保存 → 点「立即重启」即可开始。
+**不必填全**，只填你有的那一个就够用（没填的模型切过去才会提示，不影响别的）。
 
-打开 `config.json` 填好你有的 API Key（不必填全，没填的模型在切换时会报错但不影响其他模型）。
+> 嫌点界面麻烦也可以手动：`cp config.example.json config.json`，在 `config.json` 里填 key（密钥改动重启生效）。
 
 ### 3. （可选）启动 Ollama
 
@@ -189,7 +189,7 @@ from typing import Callable, List, Optional, Tuple, Union
 python main.py
 ```
 
-预期：弹出主聊天窗口；关闭窗口会隐藏到系统托盘（双击托盘图标可再唤起）。
+预期：弹出主聊天窗口。**首次没填 key 时**会显示「填个 API key 就能开始」引导 + 「打开设置」按钮，照着填完重启即可。关闭窗口会隐藏到系统托盘（双击托盘图标可再唤起）。
 
 ### 6.（可选）配置 MCP 工具扩展
 

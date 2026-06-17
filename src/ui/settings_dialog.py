@@ -949,11 +949,25 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
-        QMessageBox.information(
-            self, "已保存",
-            "配置已写入 config.json\n密钥 / Base URL 改动需要重启应用才能生效。",
-        )
+        # 密钥 / Base URL 是启动时加载的模块常量，改完要重启才生效。给个一键重启，
+        # 省掉小白"怎么重启"的困惑;重启失败则退回手动(不会把用户卡死)。
+        box = QMessageBox(self)
+        box.setWindowTitle("已保存")
+        box.setText("配置已写入 config.json。\n密钥 / Base URL 改动需要重启应用才能生效。")
+        restart_btn = box.addButton("立即重启", QMessageBox.AcceptRole)
+        box.addButton("稍后", QMessageBox.RejectRole)
+        box.exec()
         self.accept()
+        if box.clickedButton() is restart_btn:
+            import sys
+            from PySide6.QtCore import QProcess
+            from PySide6.QtWidgets import QApplication
+            try:
+                args = [] if getattr(sys, "frozen", False) else list(sys.argv)
+                if QProcess.startDetached(sys.executable, args):
+                    QApplication.quit()
+            except Exception:
+                pass  # 重启失败 → 维持现状，用户手动重启即可
 
     def _open_path(self, path):
         import subprocess
@@ -1205,7 +1219,6 @@ class _CustomModelEditor(QDialog):
                        and getattr(pw._parent_window, "theme", "light") == "dark")
         bg = "#0f1318" if is_dark else "#ffffff"
         fg = "#e6eaf2" if is_dark else "#1f2329"
-        muted = "#7a8794" if is_dark else "#6b7280"
         border = "#1f2937" if is_dark else "#e5e7eb"
         accent = "#3b82f6"
         accent_hover = "#2563eb"

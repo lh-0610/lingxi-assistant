@@ -117,7 +117,7 @@ def get_model_config_issues(model_index=None):
 
     def require_key(label, key):
         if _looks_like_placeholder(key):
-            issues.append(f"{name} 需要在 config.json 配置 {label}。")
+            issues.append(f"{name} 需要先在 ⚙ 设置里填 {label}。")
 
     if mtype == "cloud":
         require_key("qwen_api_key", CLOUD_API_KEY)
@@ -131,12 +131,30 @@ def get_model_config_issues(model_index=None):
         require_key("deepseek_api_key", DEEPSEEK_API_KEY)
     elif mtype == "custom":
         cm = _lookup_custom_model(model_id) or {}
-        require_key(f"custom_models 中 {name} 的 api_key", cm.get("api_key", ""))
+        require_key(f"{name} 的 api_key（设置 → 自定义模型）", cm.get("api_key", ""))
         protocol = (cm.get("protocol") or "openai").lower()
         if protocol not in {"openai", "anthropic"}:
             issues.append(f"{name} 的 custom protocol 暂不支持：{protocol}")
 
     return issues
+
+
+# 这些模型类型靠 API key 直接可用（新用户只要填 key 就能聊）。
+# 排除 ollama（要本机起服务+拉模型）、claude-code（要本机装 claude CLI）——
+# 新用户多半没搭这些，不该算作"已有可用模型"。
+_KEYED_MODEL_TYPES = {"cloud", "anthropic", "mimo", "gemini", "deepseek", "custom"}
+
+
+def has_usable_model() -> bool:
+    """是否已有至少一个【填好 key 的云模型】可直接用。
+
+    新用户首次上手引导用：全无 → 欢迎态提示去设置填 key。
+    只认 key 型云模型；ollama / claude-code 需本机额外搭建，不计入。
+    """
+    for i, (_, mtype, _, _) in enumerate(MODEL_LIST):
+        if mtype in _KEYED_MODEL_TYPES and not get_model_config_issues(i):
+            return True
+    return False
 
 
 _LLM_CACHE = {}

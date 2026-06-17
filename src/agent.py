@@ -23,6 +23,7 @@ from .models import (
     check_ollama,
     _create_llm,
     get_model_config_issues,        # noqa: F401  facade 出口 → chat_window
+    has_usable_model,               # noqa: F401  facade 出口 → chat_window 首次上手引导
     current_model_supports_vision,  # noqa: F401  facade 出口 → chat_window 视觉桥接
     get_vision_model_index,         # noqa: F401  facade 出口 → chat_window 视觉桥接
     describe_images_with_vision,    # noqa: F401  facade 出口 → chat_window 视觉桥接

@@ -254,6 +254,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._style_settings_btn()
         if hasattr(self, "chat_area"):
             self._style_chat_area()
+        if hasattr(self, "empty_state"):
+            self._refresh_empty_state_layout()
+            self._position_empty_state()
         if hasattr(self, "model_combo"):
             self._style_model_combo()
         if hasattr(self, "think_btn"):
@@ -506,6 +509,17 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.chat_area.style().unpolish(self.chat_area)
         self.chat_area.style().polish(self.chat_area)
         self.chat_area.clear()
+        # 首次上手：一个可用模型都没有 → 显示"填 key"引导，藏掉点了会报错的建议 chips
+        try:
+            no_key = not agent.has_usable_model()
+        except Exception:
+            no_key = False
+        if hasattr(self, "_empty_onboarding"):
+            self._empty_onboarding.setVisible(no_key)
+        for attr in ("_empty_title", "_empty_subtitle", "_empty_suggestions"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(not no_key)
         self._position_empty_state()
         self.empty_state.show()
         self.empty_state.raise_()
@@ -821,14 +835,41 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         title = QLabel("今天想聊点什么？")
         title.setObjectName("emptyTitle")
         title.setAlignment(Qt.AlignCenter)
+        self._empty_title = title
 
         subtitle = QLabel("灵犀时刻准备为你提供帮助")
         subtitle.setObjectName("emptySubtitle")
         subtitle.setAlignment(Qt.AlignCenter)
+        self._empty_subtitle = subtitle
 
         layout.addWidget(logo)
         layout.addWidget(title)
         layout.addWidget(subtitle)
+
+        # 首次上手引导：一个可用模型都没有时显示（默认隐藏，_show_empty_state 按 has_usable_model 切换）。
+        # 复用 emptyTitle/emptySubtitle/emptySuggestion 的 objectName → 直接套用主题样式，无需改 theme。
+        self._empty_onboarding = QWidget()
+        ob_layout = QVBoxLayout(self._empty_onboarding)
+        ob_layout.setContentsMargins(0, 4, 0, 0)
+        ob_layout.setSpacing(12)
+        ob_hint = QLabel("还没有可用模型")
+        ob_hint.setObjectName("emptyTitle")
+        ob_hint.setAlignment(Qt.AlignCenter)
+        ob_btn = QPushButton("打开设置")
+        ob_btn.setObjectName("emptySuggestion")
+        ob_btn.setIcon(self._svg_icon("settings_lucide.svg", self._t("brand_color")))
+        ob_btn.setIconSize(QSize(16, 16))
+        ob_btn.setCursor(Qt.PointingHandCursor)
+        ob_btn.clicked.connect(self._open_settings_menu)
+        ob_note = QLabel("配置一个 API Key 后重启应用即可开始")
+        ob_note.setObjectName("emptySubtitle")
+        ob_note.setAlignment(Qt.AlignCenter)
+        ob_layout.addWidget(ob_hint)
+        ob_layout.addWidget(ob_btn, 0, Qt.AlignHCenter)
+        ob_layout.addWidget(ob_note)
+        layout.addWidget(self._empty_onboarding, 0, Qt.AlignHCenter)
+        self._empty_onboarding.hide()
+        self._empty_onboarding_btn = ob_btn
 
         # 建议按钮（chips）：副标题下方水平排一行，引导用户点选
         suggestions = QWidget()
@@ -837,30 +878,57 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         sug_layout.setContentsMargins(0, 20, 0, 0)
         sug_layout.setSpacing(12)
         sug_layout.setAlignment(Qt.AlignHCenter)
-        for icon_file, text in [
-            ("sparkles_lucide.svg", "帮我生成一张插画"),
-            ("file_text_lucide.svg", "总结一下这篇文档"),
-            ("code_lucide.svg", "解释这段代码的逻辑"),
+        self._empty_suggestions_layout = sug_layout
+        self._empty_suggestion_buttons = []
+        for icon_file, text, compact_text in [
+            ("sparkles_lucide.svg", "帮我生成一张插画", "生成插画"),
+            ("file_text_lucide.svg", "总结一下这篇文档", "总结文档"),
+            ("code_lucide.svg", "解释这段代码的逻辑", "解释代码"),
         ]:
             btn = QPushButton(text)
             btn.setIcon(self._svg_icon(icon_file, self._t("text_dim")))
             btn.setIconSize(QSize(16, 16))
             btn.setObjectName("emptySuggestion")
             btn.setCursor(Qt.PointingHandCursor)
+            btn.setMinimumWidth(0)
             btn.clicked.connect(lambda checked=False, t=text: self._use_suggestion(t))
             sug_layout.addWidget(btn)
+            self._empty_suggestion_buttons.append((btn, icon_file, text, compact_text))
         layout.addWidget(suggestions, 0, Qt.AlignHCenter)
+        self._empty_suggestions = suggestions
 
         self.empty_state.hide()
+
+    def _refresh_empty_state_layout(self, viewport_width=None):
+        """刷新空状态的图标色与窄屏文案，避免首屏 chip 在小窗口里挤出视口。"""
+        if viewport_width is None and hasattr(self, "chat_area"):
+            viewport_width = self.chat_area.viewport().width()
+        compact = bool(viewport_width and viewport_width < 620)
+        if hasattr(self, "_empty_suggestions_layout"):
+            self._empty_suggestions_layout.setSpacing(8 if compact else 12)
+
+        btn = getattr(self, "_empty_onboarding_btn", None)
+        if btn is not None:
+            btn.setIcon(self._svg_icon("settings_lucide.svg", self._t("brand_color")))
+            btn.setIconSize(QSize(16, 16))
+
+        for item in getattr(self, "_empty_suggestion_buttons", []):
+            btn, icon_file, full_text, compact_text = item
+            btn.setText(compact_text if compact else full_text)
+            btn.setIcon(self._svg_icon(icon_file, self._t("text_dim")))
+            btn.setIconSize(QSize(15 if compact else 16, 15 if compact else 16))
+            btn.setMinimumHeight(36 if compact else 40)
+            btn.setMaximumWidth(116 if compact else 240)
 
     def _position_empty_state(self):
         if not hasattr(self, "empty_state"):
             return
+        vp = self.chat_area.viewport()
+        self._refresh_empty_state_layout(vp.width())
         # 让 widget 自然 sizeToContent
         self.empty_state.adjustSize()
         sh = self.empty_state.sizeHint()
         w, h = sh.width(), sh.height()
-        vp = self.chat_area.viewport()
 
         # chat_area 的 CSS padding 是 28/28/18/52（左右不对称），
         # 直接用 viewport 中心居中会偏右。
@@ -960,6 +1028,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         wrapper = QWidget()
         wrapper_layout = QVBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(48, 8, 48, 12)
+        self.input_wrapper = wrapper
+        self.input_wrapper_layout = wrapper_layout
 
         # 图片预览区
         self.image_preview_area = QWidget()
@@ -992,7 +1062,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         # 输入框（左侧留 padding 给加号按钮）
         self.entry = DragDropTextEdit()
         self.entry.setObjectName("inputEdit")
-        self.entry.setPlaceholderText("Send a message")
+        self.entry.setPlaceholderText("向灵犀提问…")
         entry_font = QFont("Microsoft YaHei")
         entry_font.setPixelSize(16)
         entry_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
@@ -1071,12 +1141,22 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
         wrapper_layout.addWidget(container, 0, Qt.AlignHCenter)
         parent_layout.addWidget(wrapper)
+        QTimer.singleShot(0, self._resize_input_container)
 
     def _resize_input_container(self):
         if not hasattr(self, "input_container") or not hasattr(self, "chat_area"):
             return
-        available = max(0, self.chat_area.viewport().width() - 180)
-        width = max(620, min(980, available))
+        viewport_width = self.chat_area.viewport().width()
+        if viewport_width < 520:
+            side_margin = 16
+        elif viewport_width < 760:
+            side_margin = 28
+        else:
+            side_margin = 48
+        if hasattr(self, "input_wrapper_layout"):
+            self.input_wrapper_layout.setContentsMargins(side_margin, 8, side_margin, 12)
+        available = max(260, viewport_width - side_margin * 2)
+        width = max(260, min(980, available))
         self.input_container.setFixedWidth(width)
         if hasattr(self, "command_confirm_bar"):
             self.command_confirm_bar.setFixedWidth(width)
@@ -1394,12 +1474,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def _apply_completer_theme(self):
         """按当前主题给文件补全器涂色：外框 + hover 走 QSS，文字/选中色交给 delegate
         （delegate 自绘文字，所以颜色不能只靠 QSS 的 item color）。"""
-        if self.theme == "dark":
-            frame_bg, frame_border = "#1e1e2e", "#45475a"
-            hover_bg, text_color, sel_bg = "#313244", "#cdd6f4", "#585b70"
-        else:
-            frame_bg, frame_border = "#ffffff", "#dddddd"
-            hover_bg, text_color, sel_bg = "#e6f0ff", "#333333", "#cfe3ff"
+        frame_bg = self._t("input_bg")
+        frame_border = self._t("input_border")
+        hover_bg = self._t("history_hover_bg")
+        text_color = self._t("input_text")
+        sel_bg = self._t("history_active_bg")
+        icon_color = self._t("brand_color")
         self._file_completer.setStyleSheet(
             f"FileCompleter {{ background: {frame_bg}; border: 1px solid {frame_border}; "
             f"border-radius: 12px; padding: 4px; }}")
@@ -1411,7 +1491,8 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if dlg is not None and hasattr(dlg, "text_color"):
             dlg.text_color = text_color
             dlg.sel_bg = sel_bg
-            dlg.folder_icon = self._svg_icon("folder_lucide.svg", "#3b82f6").pixmap(16, 16)
+            dlg.highlight_color = self._t("brand_color")
+            dlg.folder_icon = self._svg_icon("folder_lucide.svg", icon_color).pixmap(16, 16)
             dlg.file_icon = self._svg_icon("file_text_lucide.svg", text_color).pixmap(16, 16)
 
     def _on_file_completer_selected(self, relative_path: str):

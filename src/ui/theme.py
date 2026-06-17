@@ -48,6 +48,7 @@ THEMES = {
         "del_btn_hover":     "#d45d4c",
         "del_btn_hover_bg":  "#fff0ed",
         # New chat 按钮
+        "new_chat_bg":           "#ffffff",
         "new_chat_text":         "#1f2430",
         "new_chat_border":       "#dfe4ee",
         "new_chat_hover_bg":     "#e8ecff",
@@ -250,6 +251,7 @@ THEMES = {
         "del_btn_hover":     "#e07a5f",
         "del_btn_hover_bg":  "#2a1812",
         # New chat 按钮
+        "new_chat_bg":           "#111820",
         "new_chat_text":         "#e8e2d4",
         "new_chat_border":       "#2a3440",
         "new_chat_hover_bg":     "#161c24",
@@ -508,7 +510,7 @@ QMainWindow, QDialog {{
     background: {p['history_active_bg']};
 }}
 #sidebar QPushButton#newChatBtn {{
-    background: #ffffff;
+    background: {p['new_chat_bg']};
     border: 1px solid {p['new_chat_border']};
     color: {p['new_chat_text']};
     font-size: 14px;
@@ -638,9 +640,9 @@ QPushButton[class="historyItemDone"]:hover {{
     font-size: 14px;
 }}
 #emptySuggestion {{
-    background: {p['chat_bg']};
-    border: 1px solid {p['sidebar_border']};
-    border-radius: 12px;
+    background: {p['input_bg']};
+    border: 1px solid {p['input_border']};
+    border-radius: 10px;
     padding: 12px 20px;
     color: {p['text']};
     font-size: 13px;
@@ -648,7 +650,7 @@ QPushButton[class="historyItemDone"]:hover {{
     text-align: left;
 }}
 #emptySuggestion:hover {{
-    background: {p['sidebar_bg']};
+    background: {p['history_hover_bg']};
     border-color: {p['brand_color']};
     color: {p['brand_color']};
 }}
