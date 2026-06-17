@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import secrets
 import sys
 import threading
 from contextlib import contextmanager

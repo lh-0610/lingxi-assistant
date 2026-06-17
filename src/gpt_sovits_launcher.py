@@ -304,7 +304,7 @@ class GPTSoVITSLauncher(QObject):
 
     def _ping(self) -> bool:
         try:
-            with urllib.request.urlopen(self.url + "/", timeout=1.5) as r:
+            with urllib.request.urlopen(self.url + "/", timeout=1.5):
                 return True
         except urllib.error.HTTPError:
             # 4xx/5xx 也算存活：服务器有响应，只是 / 路径未注册

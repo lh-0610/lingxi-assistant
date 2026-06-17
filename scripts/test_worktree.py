@@ -57,7 +57,6 @@ def non_git_dir(tmp_path):
 def clean_worktrees():
     """每个测试前后确保 _WORKTREES 字典干净。"""
     import src.worktree as wt
-    old = wt._WORKTREES.copy()
     wt._WORKTREES.clear()
     yield
     # 尝试清理残留 worktree（避免 git 目录锁）

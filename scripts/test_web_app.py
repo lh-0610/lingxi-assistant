@@ -20,7 +20,7 @@ if PROJECT_ROOT not in sys.path:
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from web.app import create_app, HeadlessWebUI, ChatService, Busy  # noqa: E402
+from web.app import create_app, HeadlessWebUI, ChatService  # noqa: E402
 
 
 USER = "tester"

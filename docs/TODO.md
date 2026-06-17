@@ -19,15 +19,10 @@
 - ~~**#20 浮动"回到底部"按钮**~~ — 聊天区右下角浮动按钮已实现，离开底部显示，点击回到底部（[src/ui/chat_window.py `_scroll_to_bottom()`](../src/ui/chat_window.py)）
 - ~~**`memory.py` 并发写入风险**~~ — `index.json` / 各会话文件的读-改-写原子化（`threading.RLock`），`save_session` / `_update_index` / `delete_session` / `move_sessions_to_no_project` 都串行化（[src/memory.py](../src/memory.py)）
 - ~~**项目切换器 + 项目指示条**~~ — 启动恢复上次项目；输入框下方显示当前项目路径（点击弹切换菜单）；新对话沿用当前项目；删项目时把它的会话批量改成"无项目"（[src/ui/chat_window.py `_build_project_indicator`](../src/ui/chat_window.py)）
-- ~~**所有文件工具用项目根作为相对路径基准**~~ — `read_file` / `write_file` / `list_directory` / `search_in_file` / `run_command` 都通过 `_project_cwd()` / `_resolve_path()` 解析；不再永远走 D:\langchain（[src/tools.py](../src/tools.py)）
-- ~~**桌宠跨线程 set_thinking 卡死**~~ — worker 线程曾直调 QTimer 让动画卡死；改为 Signal 投递到主线程（[src/floating.py `_thinking_signal`](../src/floating.py)）
-- ~~**桌宠动画排队**~~ — 当前动画播完本轮再切，不会半路被打断（[src/floating.py `play()` `_pending_action`](../src/floating.py)）
-- ~~**#11 魔法数字提取为常量**~~ — 新增 [src/limits.py](../src/limits.py)，集中管理会话上限、流式重试、历史裁剪、工具输出截断、搜索分页和 Debug Inspector 预览长度等高频限制值。
+- ~~**所有文件工具用项目根作为相对路径基准**~~ — `read_file` / `write_file` / `list_directory` / `search_in_file` / `run_command` 都通过 `_project_cwd()` / `_resolve_path()` 解析；不再永远走 D:\langchain（[src/tools.py](../src/tools.py)）- ~~**#11 魔法数字提取为常量**~~ — 新增 [src/limits.py](../src/limits.py)，集中管理会话上限、流式重试、历史裁剪、工具输出截断、搜索分页和 Debug Inspector 预览长度等高频限制值。
 - ~~**#15 多轮工具调用 Markdown 渲染**~~ — 发现 tool_calls 后、执行工具前会先渲染当前轮 AI 文本，避免中间轮回复长期停留为纯文本（[src/agent.py `agent_loop`](../src/agent.py)）。
 - ~~**#21 多角色卡管理**~~ — 角色按钮菜单会扫描 `roles/*.md` 并直接列出可切换角色，仍保留外部导入和恢复默认（[src/ui/header.py `_load_role_card`](../src/ui/header.py)）。
 - ~~**ui.py 4400 行职责过载**~~ — 拆成 `src/ui/` 包：chat_window / theme / widgets / settings_dialog / helpers / prefs / _base
-- ~~**MP4 → 桌宠 GIF 转换工具**~~ — [scripts/mp4_to_pet_gif.py](../scripts/mp4_to_pet_gif.py) 支持白/黑/绿背景 chroma-key 自动抠图
-
 ---
 
 ## 🔴 P0 — 必须修（潜在 bug / 数据风险）
