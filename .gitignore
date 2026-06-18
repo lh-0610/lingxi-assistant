@@ -78,6 +78,10 @@ tmp/
 # 官网源码（部署在服务器，不进仓库 —— 用户决定）
 website/
 
+# 设计稿 handoff（HTML 设计参考，不进仓库）
+design_handoff_lingxi_chat/
+design_handoff*/
+
 # Web 多用户：账号表 / token / 各用户数据（含密码哈希，绝不进仓库）
 web_users.json
 web_tokens.json
