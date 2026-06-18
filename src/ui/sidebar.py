@@ -99,7 +99,8 @@ class SidebarMixin:
 
         self.history_widget = QWidget()
         self.history_layout = QVBoxLayout(self.history_widget)
-        self.history_layout.setContentsMargins(0, 6, 0, 0)
+        # 右边留 8px：让会话行内容（× / 状态徽章）和滚动条之间有间距，不贴一起
+        self.history_layout.setContentsMargins(0, 6, 8, 0)
         self.history_layout.setSpacing(3)
         self.history_layout.addStretch()
 
@@ -162,6 +163,14 @@ class SidebarMixin:
 
         active_project = _projects.get_current()
 
+        # 启动后首次渲染：除当前项目外的项目分组默认折叠（少干扰）。只做一次——之后
+        # 用户手动展开/折叠的状态在本次会话里保留，不被后续刷新重置。
+        if not getattr(self, "_collapsed_init_done", False):
+            self._collapsed_init_done = True
+            self._collapsed_projects = {
+                p for p in (registered_paths + orphan_paths) if p != active_project
+            }
+
         # 渲染顺序：注册项目 → 游离项目 → 无项目
         for p in registered:
             self._render_project_group(p["path"], p["name"], grouped.get(p["path"], []),
@@ -223,13 +232,16 @@ class SidebarMixin:
             return
 
         # 会话列表
+        import time as _time
         from .. import session as _session
+        if not hasattr(self, "_gen_started"):
+            self._gen_started = {}        # sid → 生成开始 monotonic 时间戳（侧栏秒表用）
+        _seen_gen = set()                 # 本轮仍在生成的 sid，循环后据此清理 _gen_started
         for s in sessions[:30]:
             sid = s["id"]
             title = s["title"]
             is_current = (sid == agent.current_session_id)
-            # 运行态：待确认（后台积压的命令/编辑确认）→ ⚠ 前缀；生成中 → loading 转圈；
-            # 后台完成、尚未查看（needs_redraw）→ 绿点绿字
+            # 运行态徽章：生成中（转圈 + 秒表）/ 待确认（后台积压确认）/ 已完成（后台跑完未查看）。
             _so = _session.get(sid)
             is_pending = bool(_so and getattr(_so, "pending_confirm", None))
             is_gen = bool(_so and _so.is_generating)
@@ -237,24 +249,27 @@ class SidebarMixin:
 
             row = HistoryRow()
             # 不用 row.setStyleSheet:直接父控件带样式表会让子按钮 tooltip 退回系统深底。
-            # 透明背景改走主题表 historyRow(objectName),保证会话标题 tooltip 吃主题色。
+            # 透明背景 + 运行态行底色都走主题表 historyRow(objectName + rowstate 属性),
+            # 保证会话标题 tooltip 吃主题色。
             row.setObjectName("historyRow")
+            row.setProperty("rowstate",
+                            "generating" if is_gen else
+                            "pending" if is_pending else
+                            "done" if is_done_unseen else "")
+            row.setProperty("current", "true" if is_current else "false")  # 选中会话整行底色
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(14, 0, 2, 0)   # 左缩进让会话视觉上"嵌"在项目下
+            row_layout.setContentsMargins(10, 0, 2, 0)   # 左缩进让会话视觉上"嵌"在项目下
             row_layout.setSpacing(4)
 
+            # 左侧状态标记：! 待确认 / ● 已完成（生成中/idle 不放标记，留空位对齐）
+            row_layout.addWidget(self._make_row_marker(
+                "pending" if is_pending else
+                "done" if is_done_unseen else "",
+            ), 0, Qt.AlignVCenter)
+
             display_title = title if len(title) <= 12 else title[:12] + "..."
-            if is_pending:
-                display_title = "⚠ " + display_title   # 待确认：切过去处理
-            elif is_done_unseen:
-                display_title = "● " + display_title   # 绿点（颜色由 historyItemDone class 给）
             btn = QPushButton(display_title)
-            if is_current:
-                _cls = "historyItemActive"
-            elif is_done_unseen:
-                _cls = "historyItemDone"
-            else:
-                _cls = "historyItem"
+            _cls = "historyItemActive" if is_current else "historyItem"
             btn.setProperty("class", _cls)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(title)
@@ -267,9 +282,25 @@ class SidebarMixin:
 
             row_layout.addWidget(btn, 1)
             if is_gen:
-                # 生成中：删除位置改放 loading 转圈（不显示删除，避免误删正在跑的会话）
-                row_layout.addWidget(self._make_loading_spinner(), 0, Qt.AlignVCenter)
+                # 生成中：右侧带底色秒表徽章「生成中 MM:SS」（无 spinner、无删除，避免误删正在跑的会话）。
+                _seen_gen.add(sid)
+                start_ts = self._gen_started.get(sid)
+                if start_ts is None:
+                    start_ts = _time.monotonic()
+                    self._gen_started[sid] = start_ts
+                from .widgets import GeneratingBadge
+                row_layout.addWidget(
+                    GeneratingBadge(
+                        start_ts, text_color=self._t("badge_run_text"), show_spinner=False,
+                        bg=self._t("badge_run_bg"), border=self._t("badge_run_border"),
+                    ),
+                    0, Qt.AlignVCenter,
+                )
             else:
+                if is_pending:
+                    row_layout.addWidget(self._make_state_badge("待确认", "warn"), 0, Qt.AlignVCenter)
+                elif is_done_unseen:
+                    row_layout.addWidget(self._make_state_badge("已完成", "done"), 0, Qt.AlignVCenter)
                 del_btn = QPushButton("×")
                 del_btn.setObjectName("historyDeleteBtn")
                 del_btn.setFixedSize(22, 22)
@@ -285,6 +316,9 @@ class SidebarMixin:
                 del_btn.clicked.connect(lambda checked=False, s=sid: self._delete_session(s))
                 row_layout.addWidget(del_btn, 0, Qt.AlignVCenter)
             self.history_layout.insertWidget(self.history_layout.count() - 1, row)
+
+        # 清掉已不再生成的会话的秒表起点（下次再生成重新计时）
+        self._gen_started = {k: v for k, v in self._gen_started.items() if k in _seen_gen}
 
     def _toggle_project_fold(self, project_path):
         """收起/展开某项目下的历史会话(内存级状态,重新渲染列表)。"""
@@ -302,6 +336,43 @@ class SidebarMixin:
         spin = LoadingSpinner(size=16, color="#3b82f6")
         spin.setToolTip("生成中…")
         return spin
+
+    def _make_row_marker(self, kind):
+        """会话行左侧状态标记：generating=⟳ 转圈 / pending=! 琥珀 / done=● 绿 / 其它=空位对齐。"""
+        from PySide6.QtWidgets import QLabel
+        if kind == "generating":
+            from .widgets import LoadingSpinner
+            spin = LoadingSpinner(size=14, color="#3b82f6")
+            return spin
+        lbl = QLabel()
+        lbl.setFixedWidth(14)
+        lbl.setAlignment(Qt.AlignCenter)
+        if kind == "pending":
+            lbl.setText("!")
+            lbl.setStyleSheet(f"color:{self._t('badge_warn_text')}; font-weight:bold; font-size:14px; background:transparent;")
+        elif kind == "done":
+            lbl.setText("●")
+            lbl.setStyleSheet(f"color:{self._t('badge_done_text')}; font-size:10px; background:transparent;")
+        else:
+            lbl.setStyleSheet("background:transparent;")   # idle：空占位，保持标题对齐
+        return lbl
+
+    def _make_state_badge(self, text, kind):
+        """侧栏会话行右侧的运行态徽章：warn=待确认（琥珀）/ done=已完成（绿）。"""
+        from PySide6.QtWidgets import QLabel
+        bg = self._t(f"badge_{kind}_bg")
+        fg = self._t(f"badge_{kind}_text")
+        bd = self._t(f"badge_{kind}_border")
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"QLabel {{ background:{bg}; color:{fg}; border:1px solid {bd}; "
+            f"border-radius:9px; padding:1px 8px; font-size:10px; }}"
+        )
+        if kind == "warn":
+            lbl.setToolTip("有待确认的命令/编辑，切到该会话处理")
+        elif kind == "done":
+            lbl.setToolTip("后台已跑完，切过去查看")
+        return lbl
 
     def _show_project_header_menu(self, anchor_widget, project_path):
         """项目标题右键菜单：移除项目（仅注册项目可移除）。"""

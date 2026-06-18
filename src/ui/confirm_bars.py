@@ -26,7 +26,7 @@ from .. import config as _config  # 运行时读 _config.REMOTE_TELEGRAM_CONFIRM
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout,
 )
 
 
@@ -116,29 +116,34 @@ class ConfirmBarsMixin:
         bar.setFixedWidth(920)  # _resize_input_container 会同步
 
         v = QVBoxLayout(bar)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(10)
 
-        # ── 顶部：标题 + 命令预览（同一块 padding） ──
-        top = QWidget()
-        top_v = QVBoxLayout(top)
-        top_v.setContentsMargins(18, 14, 18, 14)
-        top_v.setSpacing(10)
-
+        # ── 标题行：图标 + 标题 +「需要确认」徽章 ──
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
         self._cmd_confirm_icon = QLabel()
         self._cmd_confirm_icon.setFixedSize(16, 16)
-        self._cmd_confirm_title = QLabel("允许执行此命令？")
+        self._cmd_confirm_title = QLabel("确认执行命令")
         self._cmd_confirm_title.setObjectName("commandConfirmTitle")
+        self._cmd_confirm_badge = QLabel("需要确认")
+        self._cmd_confirm_badge.setObjectName("commandConfirmBadge")
         title_row.addWidget(self._cmd_confirm_icon)
         title_row.addWidget(self._cmd_confirm_title, 1)
-        top_v.addLayout(title_row)
+        title_row.addWidget(self._cmd_confirm_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
+        v.addLayout(title_row)
 
+        # ── 描述行（_on_confirm_request 按命令类型设具体文案） ──
+        self._cmd_confirm_desc = QLabel("灵犀想运行下面的命令，确认后执行。")
+        self._cmd_confirm_desc.setObjectName("commandConfirmDesc")
+        self._cmd_confirm_desc.setWordWrap(True)
+        v.addWidget(self._cmd_confirm_desc)
+
+        # ── 命令预览（等宽 + 内嵌灰底盒子） ──
         self.command_confirm_text = QTextBrowser()
         self.command_confirm_text.setObjectName("commandConfirmText")
-        self.command_confirm_text.setMinimumHeight(120)
+        self.command_confirm_text.setMinimumHeight(96)
         self.command_confirm_text.setMaximumHeight(280)
         self.command_confirm_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.command_confirm_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -146,9 +151,13 @@ class ConfirmBarsMixin:
         cmd_font = QFont("Consolas")
         cmd_font.setPixelSize(12)
         self.command_confirm_text.setFont(cmd_font)
-        top_v.addWidget(self.command_confirm_text)
+        v.addWidget(self.command_confirm_text)
 
-        v.addWidget(top)
+        # ── 工作目录行 ──
+        self._cmd_confirm_cwd = QLabel("")
+        self._cmd_confirm_cwd.setObjectName("commandConfirmCwd")
+        self._cmd_confirm_cwd.setWordWrap(True)
+        v.addWidget(self._cmd_confirm_cwd)
 
         # ── 反馈输入框（拒绝时说明原因，AI 据此调整） ──
         self.command_confirm_feedback = QLineEdit()
@@ -161,54 +170,32 @@ class ConfirmBarsMixin:
             lambda: self._resolve_command_confirm(False))
         v.addWidget(self.command_confirm_feedback)
 
-        # ── 选项行：每行一个全宽按钮 ──
-        def _make_option_row(num: str, label: str, object_name: str, on_click):
-            btn = QPushButton()
+        # ── 按钮行（水平，右对齐）：1 允许 / 2 拒绝 / 3 允许并记住 ──
+        def _make_btn(num: str, label: str, object_name: str, on_click):
+            btn = QPushButton(f"{num}  {label}")
             btn.setObjectName(object_name)
             btn.setCursor(Qt.PointingHandCursor)
-            # 用 layout 把"序号 + 文字"排进按钮，比 setText 灵活
-            btn.setMinimumHeight(40)
-            row = QHBoxLayout(btn)
-            row.setContentsMargins(20, 0, 20, 0)
-            row.setSpacing(14)
-            num_lbl = QLabel(num)
-            num_lbl.setObjectName("commandConfirmOptNum")
-            num_lbl.setFixedWidth(14)
-            text_lbl = QLabel(label)
-            text_lbl.setObjectName("commandConfirmOptText")
-            row.addWidget(num_lbl)
-            row.addWidget(text_lbl, 1)
+            btn.setMinimumHeight(34)
             btn.clicked.connect(on_click)
-            return btn, text_lbl
+            return btn
 
-        self._cmd_allow_btn, self._cmd_allow_label = _make_option_row(
-            "1", "允许执行", "commandConfirmAllowRow",
-            lambda: self._resolve_command_confirm(True, remember=False),
-        )
-        # 第 2 项的文案是模板，_on_confirm_request 时会按实际命令的 base 替换占位
-        # （比如 "信任所有 `git` 类命令（本次会话）"）
-        self._cmd_remember_btn, self._cmd_remember_label = _make_option_row(
-            "2", "信任所有同类命令（本次会话不再询问）", "commandConfirmRememberRow",
-            lambda: self._resolve_command_confirm(True, remember=True),
-        )
-        self._cmd_deny_btn, self._cmd_deny_label = _make_option_row(
-            "3", "拒绝", "commandConfirmDenyRow",
-            lambda: self._resolve_command_confirm(False),
-        )
-
-        v.addWidget(self._cmd_allow_btn)
-        v.addWidget(self._cmd_remember_btn)
-        v.addWidget(self._cmd_deny_btn)
-
-        # ── 底部提示行 ──
-        self._cmd_confirm_hint = QLabel("1 / 2 / 3 选择 · Esc 取消")
-        self._cmd_confirm_hint.setObjectName("commandConfirmHint")
-        self._cmd_confirm_hint.setAlignment(Qt.AlignCenter)
-        hint_wrap = QWidget()
-        hint_wrap_l = QVBoxLayout(hint_wrap)
-        hint_wrap_l.setContentsMargins(0, 8, 0, 10)
-        hint_wrap_l.addWidget(self._cmd_confirm_hint)
-        v.addWidget(hint_wrap)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 2, 0, 0)
+        btn_row.setSpacing(10)
+        btn_row.addStretch(1)
+        self._cmd_allow_btn = _make_btn(
+            "1", "允许", "commandConfirmAllowBtn",
+            lambda: self._resolve_command_confirm(True, remember=False))
+        self._cmd_deny_btn = _make_btn(
+            "2", "拒绝", "commandConfirmDenyBtn",
+            lambda: self._resolve_command_confirm(False))
+        self._cmd_remember_btn = _make_btn(
+            "3", "允许并记住", "commandConfirmRememberBtn",
+            lambda: self._resolve_command_confirm(True, remember=True))
+        btn_row.addWidget(self._cmd_allow_btn)
+        btn_row.addWidget(self._cmd_deny_btn)
+        btn_row.addWidget(self._cmd_remember_btn)
+        v.addLayout(btn_row)
 
         # 等待回调的状态
         self._command_confirm_result_holder = None
@@ -235,17 +222,35 @@ class ConfirmBarsMixin:
         # 选项 hover 背景：在 input_bg 和 history_hover_bg 之间挑个能看出来的
         hover_bg = self._t("history_hover_bg")
 
+        primary = self._t("send_active_bg")          # 主按钮(允许)蓝填充
+        primary_hover = self._t("send_active_hover")
+        primary_text = self._t("send_text")
+        warn = self._t("warn")                        # 拒绝红
+        deny_hover = self._t("del_btn_hover_bg")      # 拒绝 hover 浅红底
+        badge_bg = self._t("badge_warn_bg")
+        badge_fg = self._t("badge_warn_text")
+        badge_bd = self._t("badge_warn_border")
+
         self.command_confirm_bar.setStyleSheet(
-            # 卡片整体：圆角 + 单边框
+            # 卡片整体：圆角 + 中性边框（强调色留给徽章/危险态）
             f"QFrame#commandConfirmBar {{"
             f"  background: {self._t('input_bg')};"
-            f"  border: 1px solid {accent};"
+            f"  border: 1px solid {divider};"
             f"  border-radius: 12px;"
             f"}}"
             # 标题
             f"QLabel#commandConfirmTitle {{"
-            f"  color: {accent}; font-size: 14px; font-weight: 600;"
+            f"  color: {text}; font-size: 14px; font-weight: 600;"
             f"  letter-spacing: 0.3px; background: transparent;"
+            f"}}"
+            # 「需要确认」徽章
+            f"QLabel#commandConfirmBadge {{"
+            f"  background: {badge_bg}; color: {badge_fg}; border: 1px solid {badge_bd};"
+            f"  border-radius: 9px; padding: 1px 9px; font-size: 11px;"
+            f"}}"
+            # 描述
+            f"QLabel#commandConfirmDesc {{"
+            f"  color: {text_dim}; font-size: 12px; background: transparent;"
             f"}}"
             # 命令预览（等宽 + 内嵌灰底盒子）
             f"QTextBrowser#commandConfirmText {{"
@@ -257,39 +262,29 @@ class ConfirmBarsMixin:
             f"  font-size: 13px;"
             f"  white-space: pre-wrap;"
             f"}}"
-            # 选项行：QPushButton 做全宽行，无 border、靠 hover bg 区分
-            # 上方用 top border 当分隔线，营造"一体卡片"感
-            f"QPushButton#commandConfirmAllowRow,"
-            f"QPushButton#commandConfirmRememberRow,"
-            f"QPushButton#commandConfirmDenyRow {{"
-            f"  background: transparent;"
-            f"  border: none;"
-            f"  border-top: 1px solid {divider};"
-            f"  border-radius: 0;"
-            f"  text-align: left;"
-            f"  padding: 0;"
+            # 工作目录
+            f"QLabel#commandConfirmCwd {{"
+            f"  color: {text_dim}; font-size: 11px; background: transparent;"
+            f"  font-family: Consolas, 'Microsoft YaHei UI';"
             f"}}"
-            f"QPushButton#commandConfirmAllowRow:hover,"
-            f"QPushButton#commandConfirmRememberRow:hover,"
-            f"QPushButton#commandConfirmDenyRow:hover {{"
-            f"  background: {hover_bg};"
+            # 主按钮(允许)：蓝填充
+            f"QPushButton#commandConfirmAllowBtn {{"
+            f"  background: {primary}; color: {primary_text}; border: none;"
+            f"  border-radius: 8px; padding: 6px 18px; font-size: 13px; font-weight: 600;"
             f"}}"
-            # 序号小 chip
-            f"QLabel#commandConfirmOptNum {{"
-            f"  color: {text_dim}; font-size: 12px; font-weight: 600;"
-            f"  background: transparent;"
+            f"QPushButton#commandConfirmAllowBtn:hover {{ background: {primary_hover}; }}"
+            # 拒绝：红描边
+            f"QPushButton#commandConfirmDenyBtn {{"
+            f"  background: transparent; color: {warn}; border: 1px solid {warn};"
+            f"  border-radius: 8px; padding: 6px 16px; font-size: 13px;"
             f"}}"
-            f"QLabel#commandConfirmOptText {{"
-            f"  color: {text}; font-size: 13px;"
-            f"  background: transparent;"
+            f"QPushButton#commandConfirmDenyBtn:hover {{ background: {deny_hover}; }}"
+            # 允许并记住：素描边
+            f"QPushButton#commandConfirmRememberBtn {{"
+            f"  background: transparent; color: {text_dim}; border: 1px solid {divider};"
+            f"  border-radius: 8px; padding: 6px 16px; font-size: 13px;"
             f"}}"
-            # 底部 hint
-            f"QLabel#commandConfirmHint {{"
-            f"  color: {text_dim}; font-size: 11px;"
-            f"  background: transparent;"
-            f"  border-top: 1px solid {divider};"
-            f"  padding-top: 8px;"
-            f"}}"
+            f"QPushButton#commandConfirmRememberBtn:hover {{ background: {hover_bg}; color: {text}; }}"
             # 反馈输入框：跟命令预览框同底色，聚焦时强调色描边
             f"QLineEdit#commandConfirmFeedback {{"
             f"  background: {self._t('md_pre_bg')};"
@@ -489,11 +484,9 @@ class ConfirmBarsMixin:
         )
 
         # 检测是不是 MCP / JSON dump 类的消息，用 <pre> 纯文本渲染，不走 shell 高亮
-        if (
-            command.startswith("将调用 MCP")
-            or command.startswith("将调用 mcp_")
-            or command.startswith("将执行 Git 写操作")
-        ):
+        is_mcp = command.startswith("将调用 MCP") or command.startswith("将调用 mcp_")
+        is_gitwrite = command.startswith("将执行 Git 写操作")
+        if is_mcp or is_gitwrite:
             import html as _html
             body_html = (
                 '<pre style="font-family: Consolas, monospace; '
@@ -509,22 +502,41 @@ class ConfirmBarsMixin:
                 + '</div>'
             )
         self.command_confirm_text.setHtml(body_html)
-        # 危险命令：标题加警告 + 隐藏"信任所有同类命令"行
-        if self._command_confirm_destructive:
-            self._cmd_confirm_title.setText("危险命令 · 是否允许？")
-            self._cmd_remember_btn.setVisible(False)
-            self._cmd_confirm_hint.setText("1 选择 · 3 拒绝 · Esc 取消")
+
+        # 标题 / 描述 / 徽章按命令类型设
+        if is_mcp:
+            self._cmd_confirm_title.setText("确认调用外部工具")
+            self._cmd_confirm_desc.setText("灵犀想调用一个 MCP 外部工具，确认后执行。")
+        elif is_gitwrite:
+            self._cmd_confirm_title.setText("确认 Git 写操作")
+            self._cmd_confirm_desc.setText("灵犀想执行下面的 Git 写操作，确认后执行。")
         else:
-            self._cmd_confirm_title.setText("允许执行此命令？")
-            # 根据 base 命令动态拼文案，例如 "信任所有 `git` 类命令（本次会话）"
-            base = self._extract_base_command(command)
-            label = (
-                f"信任所有 `{base}` 类命令（本次会话不再询问）"
-                if base else "信任所有同类命令（本次会话不再询问）"
-            )
-            self._cmd_remember_label.setText(label)
+            self._cmd_confirm_title.setText("确认执行命令")
+            self._cmd_confirm_desc.setText("灵犀想运行下面的命令，确认后执行。")
+
+        # 危险命令：标题标红警示 + 隐藏「允许并记住」（不给永久授权）+ 徽章改「危险操作」
+        if self._command_confirm_destructive:
+            self._cmd_confirm_title.setText(self._cmd_confirm_title.text() + " · 危险")
+            self._cmd_confirm_badge.setText("危险操作")
+            self._cmd_remember_btn.setVisible(False)
+        else:
+            self._cmd_confirm_badge.setText("需要确认")
             self._cmd_remember_btn.setVisible(True)
-            self._cmd_confirm_hint.setText("1 / 2 / 3 选择 · Esc 取消")
+            # base 命令放进「允许并记住」的 tooltip（如"信任所有 git 类命令（本次会话）"）
+            base = self._extract_base_command(command)
+            self._cmd_remember_btn.setToolTip(
+                f"信任所有 `{base}` 类命令，本次会话不再询问" if base
+                else "信任所有同类命令，本次会话不再询问"
+            )
+
+        # 工作目录行
+        try:
+            from .. import state as _st
+            cwd = _st.current_project or "（无项目 · 全局工作区）"
+        except Exception:
+            cwd = ""
+        self._cmd_confirm_cwd.setText(f"工作目录  {cwd}" if cwd else "")
+        self._cmd_confirm_cwd.setVisible(bool(cwd))
 
         self.command_confirm_bar.setVisible(True)
         if hasattr(self, "_schedule_plan_panel_reflow"):
@@ -613,31 +625,30 @@ class ConfirmBarsMixin:
         bar.setFixedWidth(920)
 
         v = QVBoxLayout(bar)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(10)
 
-        # 顶部：标题 + 路径 + diff 预览
-        top = QWidget()
-        top_v = QVBoxLayout(top)
-        top_v.setContentsMargins(18, 14, 18, 14)
-        top_v.setSpacing(10)
-
+        # ── 标题行：图标 + 标题 +「需要确认」徽章 ──
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
         self._edit_confirm_icon = QLabel()
         self._edit_confirm_icon.setFixedSize(16, 16)
-        self._edit_confirm_title = QLabel("准备修改文件")
+        self._edit_confirm_title = QLabel("确认应用修改")
         self._edit_confirm_title.setObjectName("editConfirmTitle")
+        self._edit_confirm_badge = QLabel("需要确认")
+        self._edit_confirm_badge.setObjectName("editConfirmBadge")
         title_row.addWidget(self._edit_confirm_icon)
         title_row.addWidget(self._edit_confirm_title, 1)
-        top_v.addLayout(title_row)
+        title_row.addWidget(self._edit_confirm_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
+        v.addLayout(title_row)
 
+        # ── 文件路径 ──
         self.edit_confirm_path = QLabel("")
         self.edit_confirm_path.setObjectName("editConfirmPath")
         self.edit_confirm_path.setWordWrap(True)
         self.edit_confirm_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        top_v.addWidget(self.edit_confirm_path)
+        v.addWidget(self.edit_confirm_path)
 
         # diff 用 QTextBrowser 渲染（带行颜色）。
         # 给固定的最小/最大高度 + 强制竖向滚动条：否则在底部窄条里会被挤成几行、
@@ -652,9 +663,7 @@ class ConfirmBarsMixin:
         diff_font = QFont("Consolas")
         diff_font.setPixelSize(12)
         self.edit_confirm_diff.setFont(diff_font)
-        top_v.addWidget(self.edit_confirm_diff)
-
-        v.addWidget(top)
+        v.addWidget(self.edit_confirm_diff)
 
         # ── 反馈输入框（拒绝时说明原因，AI 据此调整） ──
         self.edit_confirm_feedback = QLineEdit()
@@ -667,49 +676,33 @@ class ConfirmBarsMixin:
             lambda: self._resolve_edit_confirm(False))
         v.addWidget(self.edit_confirm_feedback)
 
-        # 选项行：复用命令卡的"全宽行"工厂
-        def _row(num, label, obj_name, on_click):
-            btn = QPushButton()
+        # ── 按钮行（水平，右对齐）：1 接受并写入 / 2 拒绝 / 3 接受并信任此文件 ──
+        def _make_btn(num, label, obj_name, on_click):
+            btn = QPushButton(f"{num}  {label}")
             btn.setObjectName(obj_name)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setMinimumHeight(40)
-            row_lo = QHBoxLayout(btn)
-            row_lo.setContentsMargins(20, 0, 20, 0)
-            row_lo.setSpacing(14)
-            num_lbl = QLabel(num)
-            num_lbl.setObjectName("editConfirmOptNum")
-            num_lbl.setFixedWidth(14)
-            text_lbl = QLabel(label)
-            text_lbl.setObjectName("editConfirmOptText")
-            row_lo.addWidget(num_lbl)
-            row_lo.addWidget(text_lbl, 1)
+            btn.setMinimumHeight(34)
             btn.clicked.connect(on_click)
             return btn
 
-        self._edit_allow_btn = _row(
-            "1", "允许此次修改", "editConfirmAllowRow",
-            lambda: self._resolve_edit_confirm(True, remember=False),
-        )
-        self._edit_trust_btn = _row(
-            "2", "信任对此文件的所有后续修改（本次会话）", "editConfirmTrustRow",
-            lambda: self._resolve_edit_confirm(True, remember=True),
-        )
-        self._edit_deny_btn = _row(
-            "3", "拒绝", "editConfirmDenyRow",
-            lambda: self._resolve_edit_confirm(False),
-        )
-        v.addWidget(self._edit_allow_btn)
-        v.addWidget(self._edit_trust_btn)
-        v.addWidget(self._edit_deny_btn)
-
-        self._edit_confirm_hint = QLabel("1 / 2 / 3 选择 · Esc 取消")
-        self._edit_confirm_hint.setObjectName("editConfirmHint")
-        self._edit_confirm_hint.setAlignment(Qt.AlignCenter)
-        hint_wrap = QWidget()
-        hint_wrap_l = QVBoxLayout(hint_wrap)
-        hint_wrap_l.setContentsMargins(0, 8, 0, 10)
-        hint_wrap_l.addWidget(self._edit_confirm_hint)
-        v.addWidget(hint_wrap)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 2, 0, 0)
+        btn_row.setSpacing(10)
+        btn_row.addStretch(1)
+        self._edit_allow_btn = _make_btn(
+            "1", "接受并写入", "editConfirmAllowBtn",
+            lambda: self._resolve_edit_confirm(True, remember=False))
+        self._edit_deny_btn = _make_btn(
+            "2", "拒绝", "editConfirmDenyBtn",
+            lambda: self._resolve_edit_confirm(False))
+        self._edit_trust_btn = _make_btn(
+            "3", "接受所有", "editConfirmTrustBtn",
+            lambda: self._resolve_edit_confirm(True, remember=True))
+        self._edit_trust_btn.setToolTip("信任对此文件的所有后续修改（本次会话不再询问）")
+        btn_row.addWidget(self._edit_allow_btn)
+        btn_row.addWidget(self._edit_deny_btn)
+        btn_row.addWidget(self._edit_trust_btn)
+        v.addLayout(btn_row)
 
         # 等待回调的状态（worker 阻塞用的 Event 和结果 dict）
         self._edit_confirm_result_holder = None
@@ -733,15 +726,28 @@ class ConfirmBarsMixin:
         text_dim = self._t("text_dim")
         hover_bg = self._t("history_hover_bg")
 
+        primary = self._t("send_active_bg")
+        primary_hover = self._t("send_active_hover")
+        primary_text = self._t("send_text")
+        warn = self._t("warn")
+        deny_hover = self._t("del_btn_hover_bg")
+        badge_bg = self._t("badge_warn_bg")
+        badge_fg = self._t("badge_warn_text")
+        badge_bd = self._t("badge_warn_border")
+
         self.edit_confirm_bar.setStyleSheet(
             f"QFrame#editConfirmBar {{"
             f"  background: {self._t('input_bg')};"
-            f"  border: 1px solid {accent};"
+            f"  border: 1px solid {divider};"
             f"  border-radius: 12px;"
             f"}}"
             f"QLabel#editConfirmTitle {{"
-            f"  color: {accent}; font-size: 14px; font-weight: 600;"
+            f"  color: {text}; font-size: 14px; font-weight: 600;"
             f"  background: transparent;"
+            f"}}"
+            f"QLabel#editConfirmBadge {{"
+            f"  background: {badge_bg}; color: {badge_fg}; border: 1px solid {badge_bd};"
+            f"  border-radius: 9px; padding: 1px 9px; font-size: 11px;"
             f"}}"
             f"QLabel#editConfirmPath {{"
             f"  color: {text_dim}; font-size: 12px;"
@@ -754,31 +760,24 @@ class ConfirmBarsMixin:
             f"  border: 1px solid {divider};"
             f"  border-radius: 8px; padding: 8px 10px;"
             f"}}"
-            f"QPushButton#editConfirmAllowRow,"
-            f"QPushButton#editConfirmTrustRow,"
-            f"QPushButton#editConfirmDenyRow {{"
-            f"  background: transparent; border: none;"
-            f"  border-top: 1px solid {divider};"
-            f"  border-radius: 0; text-align: left; padding: 0;"
+            # 主按钮(接受并写入)：蓝填充
+            f"QPushButton#editConfirmAllowBtn {{"
+            f"  background: {primary}; color: {primary_text}; border: none;"
+            f"  border-radius: 8px; padding: 6px 18px; font-size: 13px; font-weight: 600;"
             f"}}"
-            f"QPushButton#editConfirmAllowRow:hover,"
-            f"QPushButton#editConfirmTrustRow:hover,"
-            f"QPushButton#editConfirmDenyRow:hover {{"
-            f"  background: {hover_bg};"
+            f"QPushButton#editConfirmAllowBtn:hover {{ background: {primary_hover}; }}"
+            # 拒绝：红描边
+            f"QPushButton#editConfirmDenyBtn {{"
+            f"  background: transparent; color: {warn}; border: 1px solid {warn};"
+            f"  border-radius: 8px; padding: 6px 16px; font-size: 13px;"
             f"}}"
-            f"QLabel#editConfirmOptNum {{"
-            f"  color: {text_dim}; font-size: 12px; font-weight: 600;"
-            f"  background: transparent;"
+            f"QPushButton#editConfirmDenyBtn:hover {{ background: {deny_hover}; }}"
+            # 接受所有(信任此文件)：素描边
+            f"QPushButton#editConfirmTrustBtn {{"
+            f"  background: transparent; color: {text_dim}; border: 1px solid {divider};"
+            f"  border-radius: 8px; padding: 6px 16px; font-size: 13px;"
             f"}}"
-            f"QLabel#editConfirmOptText {{"
-            f"  color: {text}; font-size: 13px; background: transparent;"
-            f"}}"
-            f"QLabel#editConfirmHint {{"
-            f"  color: {text_dim}; font-size: 11px;"
-            f"  background: transparent;"
-            f"  border-top: 1px solid {divider};"
-            f"  padding-top: 8px;"
-            f"}}"
+            f"QPushButton#editConfirmTrustBtn:hover {{ background: {hover_bg}; color: {text}; }}"
             # 反馈输入框：跟 diff 预览框同底色，聚焦时强调色描边
             f"QLineEdit#editConfirmFeedback {{"
             f"  background: {self._t('md_pre_bg')};"
@@ -1163,11 +1162,11 @@ class ConfirmBarsMixin:
             if key == Qt.Key_1:
                 self._cmd_allow_btn.click()
                 return True
-            if key == Qt.Key_2 and self._cmd_remember_btn.isVisible():
-                self._cmd_remember_btn.click()
-                return True
-            if key == Qt.Key_3:
+            if key == Qt.Key_2:
                 self._cmd_deny_btn.click()
+                return True
+            if key == Qt.Key_3 and self._cmd_remember_btn.isVisible():
+                self._cmd_remember_btn.click()
                 return True
             if key == Qt.Key_Escape:
                 self._cmd_deny_btn.click()
@@ -1181,9 +1180,12 @@ class ConfirmBarsMixin:
                 self._edit_allow_btn.click()
                 return True
             if key == Qt.Key_2:
+                self._edit_deny_btn.click()
+                return True
+            if key == Qt.Key_3:
                 self._edit_trust_btn.click()
                 return True
-            if key == Qt.Key_3 or key == Qt.Key_Escape:
+            if key == Qt.Key_Escape:
                 self._edit_deny_btn.click()
                 return True
         return False

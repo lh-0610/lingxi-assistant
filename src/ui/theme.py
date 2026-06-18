@@ -59,7 +59,7 @@ THEMES = {
         "toggle_hover":      "#343b4c",
         "toggle_hover_bg":   "#edf0f6",
         # 品牌字符
-        "brand_visible":     "true",
+        "brand_visible":     "false",
         "brand_color":       "#4c57c8",
         "brand_dot":         "#d87755",
         "brand_letter_sp":   "2px",
@@ -98,6 +98,27 @@ THEMES = {
         "think_off_text":  "#8b94a3",
         "think_off_hover_border":"#c8d0de",
         "think_off_hover_text":  "#697386",
+        # Segmented 计划|执行（pill 容器 + 选中态白底）
+        "seg_bg":            "#eceef4",
+        "seg_border":        "#e0e4ee",
+        "seg_active_bg":     "#ffffff",
+        "seg_active_border": "#d7dcfb",
+        "seg_active_text":   "#3842b8",
+        "seg_idle_text":     "#8b94a3",
+        "seg_hover_text":    "#5b66d6",
+        # 侧栏会话运行态徽章（待确认=琥珀 / 已完成=绿 / 生成中文字=蓝）
+        "badge_warn_bg":     "#fdf0d5",
+        "badge_warn_text":   "#9a6700",
+        "badge_warn_border": "#f0d28a",
+        "badge_done_bg":     "#e6f4ea",
+        "badge_done_text":   "#1a7f37",
+        "badge_done_border": "#c3e6cd",
+        "badge_run_text":    "#3b6fd4",
+        "badge_run_bg":      "#e8eefc",
+        "badge_run_border":  "#c5d4f5",
+        # 会话行运行态底色（生成中浅灰蓝 / 待确认浅琥珀）
+        "row_gen_bg":        "#eaeef7",
+        "row_pending_bg":    "#fbf2e0",
         # Role btn idle
         "role_bg":            "#ffffff",
         "role_border":        "#dfe4ee",
@@ -262,7 +283,7 @@ THEMES = {
         "toggle_hover":      "#e8e2d4",
         "toggle_hover_bg":   "#161c24",
         # 品牌字符
-        "brand_visible":     "true",
+        "brand_visible":     "false",
         "brand_color":       "#6fa090",
         "brand_dot":         "#b87a52",
         "brand_letter_sp":   "6px",
@@ -301,6 +322,27 @@ THEMES = {
         "think_off_text":  "#5a6470",
         "think_off_hover_border":"#4a5560",
         "think_off_hover_text":  "#b8b1a3",
+        # Segmented 计划|执行
+        "seg_bg":            "#10151c",
+        "seg_border":        "#2a3440",
+        "seg_active_bg":     "#18221c",
+        "seg_active_border": "#2a4a3c",
+        "seg_active_text":   "#b9d4c5",
+        "seg_idle_text":     "#5a6470",
+        "seg_hover_text":    "#b9d4c5",
+        # 侧栏会话运行态徽章
+        "badge_warn_bg":     "#2a2012",
+        "badge_warn_text":   "#e0b070",
+        "badge_warn_border": "#4a3820",
+        "badge_done_bg":     "#15241a",
+        "badge_done_text":   "#5fd08a",
+        "badge_done_border": "#244a34",
+        "badge_run_text":    "#7aa6d8",
+        "badge_run_bg":      "#16202c",
+        "badge_run_border":  "#2a3a4e",
+        # 会话行运行态底色
+        "row_gen_bg":        "#141b25",
+        "row_pending_bg":    "#231a0f",
         # Role btn idle
         "role_bg":            "transparent",
         "role_border":        "#2a3440",
@@ -550,6 +592,20 @@ QMainWindow, QDialog {{
 #sidebar #historyRow {{
     background: transparent;
 }}
+/* 运行态会话行底色（生成中 / 待确认）——属性选择器,不污染 tooltip 继承 */
+#sidebar #historyRow[rowstate="generating"] {{
+    background: {p['row_gen_bg']};
+    border-radius: 8px;
+}}
+#sidebar #historyRow[rowstate="pending"] {{
+    background: {p['row_pending_bg']};
+    border-radius: 8px;
+}}
+/* 选中(当前)会话整行底色——放在 rowstate 之后,选中态优先于运行态底色 */
+#sidebar #historyRow[current="true"] {{
+    background: {p['history_active_bg']};
+    border-radius: 8px;
+}}
 #sidebar #historyEmptyHint {{
     color: {p['history_label']};
     font-size: 11px;
@@ -581,15 +637,16 @@ QPushButton[class="historyItem"]:hover {{
     background-color: {p['history_hover_bg']};
     color: {p['history_hover_text']};
 }}
+/* 选中态：按钮本身透明,整行底色由 #historyRow[current="true"] 提供(整行高亮)；
+ * 这里只保留加粗 + 选中文字色,避免按钮底色和整行底色叠成"嵌套块"。*/
 QPushButton[class="historyItemActive"] {{
-    background-color: {p['history_active_bg']};
+    background-color: transparent;
     border: none;
-    border-left: 2px solid {p['history_active_border']};
     color: {p['history_active_text']};
     font-size: 13px;
     font-weight: 600;
     text-align: left;
-    padding: 9px 0 9px {p['history_active_pad_left']};
+    padding: 9px 0 9px 12px;
     border-radius: 8px;
 }}
 /* 后台会话完成、尚未查看：绿点 + 绿字（切回该会话查看后恢复普通样式）。
@@ -722,16 +779,41 @@ QPushButton[class="historyItemDone"]:hover {{
     background: {p['toggle_hover_bg']};
 }}
 #themeBtn {{
-    background: transparent;
-    border: none;
-    font-size: 16px;
-    color: {p['toggle']};
-    padding: 4px 8px;
-    border-radius: 6px;
+    background: {p['role_bg']};
+    border: 1px solid {p['role_border']};
+    border-radius: 8px;
+    font-size: 12px;
+    color: {p['role_text']};
+    padding: 6px 14px;
 }}
 #themeBtn:hover {{
-    color: {p['toggle_hover']};
-    background: {p['toggle_hover_bg']};
+    background: {p['role_hover_bg']};
+    border-color: {p['role_hover_border']};
+    color: {p['role_hover_text']};
+}}
+
+/* 计划|执行 段控（pill 容器 + 选中态高亮） */
+#modeSeg {{
+    background: {p['seg_bg']};
+    border: 1px solid {p['seg_border']};
+    border-radius: 9px;
+}}
+#modeSeg QPushButton[class="segBtn"] {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 5px 13px;
+    font-size: 12px;
+    color: {p['seg_idle_text']};
+}}
+#modeSeg QPushButton[class="segBtn"]:hover {{
+    color: {p['seg_hover_text']};
+}}
+#modeSeg QPushButton[class="segBtn"]:checked {{
+    background: {p['seg_active_bg']};
+    border: 1px solid {p['seg_active_border']};
+    color: {p['seg_active_text']};
+    font-weight: 600;
 }}
 #headerTitle {{
     font-family: "{p['header_title_font']}", "Microsoft YaHei", "Microsoft YaHei UI";

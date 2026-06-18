@@ -1530,6 +1530,19 @@ def spawn_agents(tasks: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _auto_advance_plan(plan: list) -> None:
+    """兜底高亮"当前这一步"：若没有任何步骤在 in_progress 且还有待办，把第一个待办自动
+    提升为 in_progress（原地改）。模型常只标 done、跳过 in_progress，导致计划面板永远看不到
+    "进行中"高亮、看着像静态清单。这里在单步更新后兜底，保证执行期间总有一步高亮，对齐设计图。
+    全部完成（无待办）时不提升——面板如实显示 N/N 完成。模型显式设了某步 in_progress 时也不动。"""
+    if any(it.get("status") == "in_progress" for it in plan):
+        return
+    for it in plan:
+        if it.get("status") == "pending":
+            it["status"] = "in_progress"
+            break
+
+
 @tool
 def update_plan(plan: str) -> str:
     """创建 / 重列当前任务的执行计划（待办清单，**整份覆盖**）。
@@ -1599,6 +1612,7 @@ def set_step_status(step: int, status: str) -> str:
     if s is None:
         return f"状态无效：{status}。请用 完成 / 进行中 / 待办（或 done / in_progress / pending）。"
     plan[idx - 1] = {"text": plan[idx - 1].get("text", ""), "status": s}
+    _auto_advance_plan(plan)   # 标完 done 后，自动把下一个待办提为进行中（保证面板始终高亮当前步）
     state.current_plan = plan
     _ui = getattr(state, "ui_ref", None)
     if _ui is not None and hasattr(_ui, "show_plan"):

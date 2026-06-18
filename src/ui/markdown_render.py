@@ -12,7 +12,7 @@
 self._inline_svg_img / self._svg_icon / self._ai_reply_start /
 self._msg_buffers / self._code_blocks / self._thinking_* / self._tts*
 """
-from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont
+from PySide6.QtGui import QTextCursor
 
 from .helpers import _strip_markdown_for_tts
 
@@ -208,21 +208,14 @@ class MarkdownRenderMixin:
         self._thinking_end = None
 
     def _update_thinking(self, text):
-        """更新等待指示器文本（原地替换）"""
+        """更新等待指示器（原地替换为转圈 pill，每次推进转角让它转起来）"""
         if not hasattr(self, '_thinking_start') or self._thinking_start is None:
             return
+        self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
         cursor = self.chat_area.textCursor()
         cursor.setPosition(self._thinking_start)
         cursor.setPosition(self._thinking_end, QTextCursor.KeepAnchor)
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(self._t("thinking")))
-        thinking_font = QFont("Microsoft YaHei")
-        thinking_font.setPixelSize(14)
-        thinking_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        thinking_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-        fmt.setFont(thinking_font)
-        fmt.setBackground(QColor(self._t("thinking_bg")))
-        cursor.insertText(text, fmt)
+        cursor.insertHtml(self._thinking_chip_html(text))
         self._thinking_end = cursor.position()
 
     def _show_thinking_dialog(self, think_id):

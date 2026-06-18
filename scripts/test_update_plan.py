@@ -199,3 +199,26 @@ class TestSetStepStatus:
         set_step_status.func(3, "进行中")
         set_step_status.func(3, "完成")
         assert all(it["status"] == "done" for it in state.current_plan)
+
+    def test_done_auto_advances_next_to_in_progress(self):
+        """标完一步 done、且没有别的进行中步骤时，自动把下一个待办提为 in_progress——
+        保证计划面板执行期间始终高亮"当前这一步"（修"模型只标 done、面板永远看不到进行中"）。"""
+        self._setup_three_steps()                 # [ ]A [ ]B [ ]C
+        set_step_status.func(1, "完成")            # A done → 自动把 B 提为进行中
+        assert state.current_plan[0]["status"] == "done"
+        assert state.current_plan[1]["status"] == "in_progress"
+        assert state.current_plan[2]["status"] == "pending"
+        set_step_status.func(2, "完成")            # B done → 自动把 C 提为进行中
+        assert state.current_plan[1]["status"] == "done"
+        assert state.current_plan[2]["status"] == "in_progress"
+        set_step_status.func(3, "完成")            # 全部 done → 没有待办可提，如实 3/3
+        assert all(it["status"] == "done" for it in state.current_plan)
+
+    def test_done_does_not_override_explicit_in_progress(self):
+        """模型已显式把某步设为进行中时，标另一步 done 不抢它的高亮（不重复提升）。"""
+        self._setup_three_steps()
+        set_step_status.func(3, "进行中")          # 显式把 C 设为进行中
+        set_step_status.func(1, "完成")            # A done —— 已有进行中(C)，不该再提 B
+        assert state.current_plan[0]["status"] == "done"
+        assert state.current_plan[1]["status"] == "pending"      # B 不被自动提升
+        assert state.current_plan[2]["status"] == "in_progress"  # C 保持

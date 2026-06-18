@@ -427,6 +427,9 @@ class HistoryRow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 纯 QWidget 默认不画样式表背景；要让 #historyRow[rowstate]/[current] 的整行底色
+        # 真正绘制出来，必须开 WA_StyledBackground（否则属性选择器只生效在能自绘背景的控件上）。
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
     def watch_hover(self, widget):
         # 兼容旧调用，无操作
@@ -465,6 +468,46 @@ class LoadingSpinner(QWidget):
         painter.setPen(pen)
         # Qt drawArc 角度单位 = 1/16 度；负号让它顺时针转，270° 留个缺口
         painter.drawArc(rect, int(-self._angle * 16), int(270 * 16))
+
+
+class GeneratingBadge(QWidget):
+    """侧栏会话"生成中"徽章：转圈 + 自走秒表「生成中 MM:SS」。
+
+    自带 QTimer 每秒刷新文字；控件随会话行重建被 deleteLater 时，timer 一并回收。
+    start_ts 用 time.monotonic()（不受系统时钟回拨影响）。"""
+
+    def __init__(self, start_ts, spin_color="#3b82f6", text_color="#3b82f6",
+                 show_spinner=True, bg="transparent", border="transparent", parent=None):
+        super().__init__(parent)
+        self._start_ts = start_ts
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(5)
+        if show_spinner:
+            self._spin = LoadingSpinner(size=14, color=spin_color)
+            lay.addWidget(self._spin, 0, Qt.AlignVCenter)
+        self._label = QLabel()
+        # 有 bg 时做成药丸徽章（跟待确认/已完成一致），否则纯文字
+        if bg != "transparent":
+            self._label.setStyleSheet(
+                f"color:{text_color}; font-size:10px; background:{bg}; "
+                f"border:1px solid {border}; border-radius:9px; padding:1px 8px;"
+            )
+        else:
+            self._label.setStyleSheet(
+                f"color:{text_color}; font-size:11px; background:transparent; border:none;"
+            )
+        lay.addWidget(self._label, 0, Qt.AlignVCenter)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
+        self._tick()
+
+    def _tick(self):
+        import time
+        elapsed = max(0, int(time.monotonic() - self._start_ts))
+        mm, ss = divmod(elapsed, 60)
+        self._label.setText(f"生成中 {mm:02d}:{ss:02d}")
 
 
 class CloseConfirmDialog(QDialog):

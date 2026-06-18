@@ -238,10 +238,10 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """重新生成全局 QSS，并刷新所有用 setStyleSheet 直接设置的 chrome。"""
         self.setStyleSheet(build_stylesheet(self.theme))
         self._apply_tooltip_style()  # 切主题时 tooltip 也跟着刷
-        # 主题按钮图标
+        # 主题按钮：文字显示当前主题（浅色 / 深色）
         if hasattr(self, "theme_btn"):
-            self.theme_btn.setText("☀" if self.theme == "dark" else "☾")
-            self.theme_btn.setToolTip("切到白天模式" if self.theme == "dark" else "切到夜间模式")
+            self.theme_btn.setText("浅色" if self.theme == "light" else "深色")
+            self.theme_btn.setToolTip("切到夜间模式" if self.theme == "light" else "切到白天模式")
         # 品牌字符在白天主题里隐藏，夜间显示
         if hasattr(self, "header_brand"):
             visible = self._t("brand_visible") == "true"
@@ -261,8 +261,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._style_model_combo()
         if hasattr(self, "think_btn"):
             self._style_think_btn()
-        if hasattr(self, "mode_btn"):
-            self._style_mode_btn()
+        # 段控（计划|执行）样式走全局 QSS，setStyleSheet 重建即生效，无需单独刷
         if hasattr(self, "undo_btn"):
             self._style_undo_btn()
         if hasattr(self, "role_btn"):
@@ -332,7 +331,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._build_chat_area(right_layout)
         self._build_plan_panel(right_layout)
         self._build_input_area(right_layout)
-        self._build_project_indicator(right_layout)
         self._build_footer(right_layout)
 
         main_layout.addWidget(right, 1)
@@ -357,7 +355,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if hasattr(self, "chat_area"):
             self.chat_area.document().clear()
         if hasattr(self, 'token_usage_label'):
-            self.token_usage_label.setText('Token: -')
+            self.token_usage_label.setVisible(False)
         # 计划面板跟着当前会话刷新。_reset_render_state 是新建/切换/切项目三条路径的
         # 共同漏斗，且都在 set_active(新会话) 之后才调——current_plan 已是新会话的计划。
         # （hasattr 守卫：本方法可能在 build_ui 建好 plan_panel 之前被调到）
@@ -1169,37 +1167,10 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             _QTimer.singleShot(0, self._position_completer)
 
 
-    def _build_project_indicator(self, parent_layout):
-        """输入框下方显示当前项目路径，点击可切换。
-
-        - 有项目时显示 "📁 D:/path/to/project"
-        - 无项目时显示 "无项目 · 全局工作区"
-        - 路径过长会做中部省略，鼠标 hover 看完整路径
-        - 单击：弹出项目切换菜单（与侧栏右键的菜单一致）
-        """
-        wrap = QWidget()
-        wrap.setObjectName("projectIndicatorWrap")
-        h = QHBoxLayout(wrap)
-        h.setContentsMargins(20, 4, 20, 0)
-        h.setSpacing(0)
-
-        # 用 QPushButton 是因为它天然支持 hover / cursor / clicked，比 QLabel 干净
-        self.project_btn = QPushButton()
-        self.project_btn.setObjectName("projectIndicatorBtn")
-        self.project_btn.setCursor(Qt.PointingHandCursor)
-        self.project_btn.setIconSize(QSize(14, 14))
-        self.project_btn.clicked.connect(self._show_project_menu)
-        h.addStretch()
-        h.addWidget(self.project_btn)
-        h.addStretch()
-
-        parent_layout.addWidget(wrap)
-        self._refresh_project_indicator()
-
     def _refresh_project_indicator(self):
-        """根据当前项目刷新指示条的文本、图标、tooltip。
+        """根据当前项目刷新底栏项目按钮的文本、图标、tooltip。
         在以下时机调用：__init__、_switch_project、_remove_current_project、_apply_theme、
-        切换隔离模式。
+        切换隔离模式。project_btn 现在位于底栏状态条左侧（见 _build_footer）。
         """
         if not hasattr(self, "project_btn"):
             return
@@ -1212,18 +1183,16 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if current:
             display = self._abbreviate_path(current, max_chars=60)
             if is_isolated:
-                self.project_btn.setText(f"  🔒 {display}  ▾")
+                self.project_btn.setText(f"🔒 当前项目 {display}")
                 self.project_btn.setToolTip(
                     f"🔒 隔离模式 · worktree: {active.worktree}\n"
                     f"项目：{current}\n（点击切换 / 添加 / 移除项目）"
                 )
             else:
-                self.project_btn.setText(f"  {display}  ▾")
+                self.project_btn.setText(f"当前项目 {display}")
                 self.project_btn.setToolTip(f"当前项目：{current}\n（点击切换 / 添加 / 移除项目）")
-            self.project_btn.setIcon(self._svg_icon("folder_lucide.svg", self._t("text_dim")))
         else:
-            self.project_btn.setText("  无项目 · 全局工作区  ▾")
-            self.project_btn.setIcon(self._svg_icon("circle_lucide.svg", self._t("text_subtle")))
+            self.project_btn.setText("无项目 · 全局工作区")
             self.project_btn.setToolTip("当前不在任何项目中\n（点击选择 / 添加项目）")
         # 内联样式（用 footer 的颜色 token，跟随主题）
         self.project_btn.setStyleSheet(
@@ -1256,24 +1225,32 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         return f"{path[:keep_head]}...{path[-keep_tail:]}"
 
     def _build_footer(self, parent_layout):
+        """底栏状态条：左=当前项目（可点切换），右=Token 占用。"""
         from PySide6.QtWidgets import QHBoxLayout, QWidget as _W
         footer_widget = _W()
-        footer_widget.setFixedHeight(28)
+        footer_widget.setFixedHeight(30)
         footer_layout = QHBoxLayout(footer_widget)
-        footer_layout.setContentsMargins(20, 0, 20, 0)
+        footer_layout.setContentsMargins(18, 0, 18, 2)
         footer_layout.setSpacing(0)
 
-        footer = QLabel("灵犀 AI · local & cloud · tools enabled")
-        footer.setObjectName("footerLabel")
-        footer.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        footer_layout.addWidget(footer, 1)
+        # 左：当前项目按钮（点击弹项目切换菜单，与侧栏菜单一致）。
+        # 用 QPushButton 是因为它天然支持 hover / cursor / clicked，比 QLabel 干净。
+        self.project_btn = QPushButton()
+        self.project_btn.setObjectName("projectIndicatorBtn")
+        self.project_btn.setCursor(Qt.PointingHandCursor)
+        self.project_btn.clicked.connect(self._show_project_menu)
+        footer_layout.addWidget(self.project_btn, 0, Qt.AlignVCenter | Qt.AlignLeft)
 
-        self.token_usage_label = QLabel("Token: -")
+        footer_layout.addStretch(1)
+
+        # 右：Token 占用
+        self.token_usage_label = QLabel("")
         self.token_usage_label.setObjectName("tokenUsageLabel")
         self.token_usage_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
-        footer_layout.addWidget(self.token_usage_label)
+        footer_layout.addWidget(self.token_usage_label, 0, Qt.AlignVCenter | Qt.AlignRight)
 
         parent_layout.addWidget(footer_widget)
+        self._refresh_project_indicator()
 
     # ── 事件处理 ──
 
@@ -2654,24 +2631,33 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def _render_plan_rows(self, items):
         title_color = self._t("thinking")
         muted_color = self._t("thinking_msg")
+        hl_bg = self._t("thinking_bg")     # 进行中那一行的高亮底色
         rows = []
         for it in items:
             txt = (it.get("text") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             status = it.get("status")
+            # 三态：待办 ○ / 进行中 ⟳（高亮整行）/ 完成 ✓（弱化）。状态词前缀对齐设计图。
             if status == "done":
                 icon = self._inline_svg_img("circle-check.svg", muted_color, 16)
-                text_style = f"color:{muted_color};text-decoration:line-through;"
+                label, label_color = "完成", muted_color
+                text_style = f"color:{muted_color};"
+                cell_bg = ""
             elif status == "in_progress":
                 icon = self._plan_spinner_svg(title_color, 16)
+                label, label_color = "进行中", title_color
                 text_style = f"color:{title_color};font-weight:600;"
+                cell_bg = f"background:{hl_bg};"
             else:
                 icon = self._inline_svg_img("circle_lucide.svg", muted_color, 16)
+                label, label_color = "待办", muted_color
                 text_style = ""
+                cell_bg = ""
             rows.append(
                 '<tr>'
-                '<td width="22" style="padding-top:2px;vertical-align:top;">'
+                f'<td width="24" style="{cell_bg}padding:3px 0 5px 6px;vertical-align:top;">'
                 f'{icon}</td>'
-                f'<td style="{text_style} padding-bottom:5px; line-height:1.35;">{txt}</td>'
+                f'<td style="{cell_bg}{text_style}padding:3px 8px 5px 4px;line-height:1.4;">'
+                f'<span style="color:{label_color};font-size:11px;">{label}</span>&nbsp;{txt}</td>'
                 '</tr>'
             )
         html = (
@@ -2762,6 +2748,31 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             return
         self.bridge.update_thinking.emit(text)
 
+    def _spinner_svg_img(self, color, size=14):
+        """一帧转圈 SVG（角度取 self._think_chip_angle，每次推进让它转起来）→ 内联 <img>。"""
+        import base64
+        angle = getattr(self, "_think_chip_angle", 0)
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" '
+            f'fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">'
+            f'<g transform="rotate({angle} 12 12)"><path d="M21 12a9 9 0 1 1-3.2-6.9"/></g></svg>'
+        )
+        data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        return (f'<img src="data:image/svg+xml;base64,{data}" width="{size}" height="{size}" '
+                f'style="vertical-align:middle;">')
+
+    def _thinking_chip_html(self, text):
+        """把「思考中 / 等待响应 (Ns)」临时指示渲染成带转圈的圆角 pill（推理前的等待态）。"""
+        label = (text or "").strip().replace("...", "").strip()
+        label = label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        color = self._t("thinking")
+        bg = self._t("thinking_bg")
+        return (
+            f'<span style="background:{bg};color:{color};border-radius:8px;'
+            f'padding:3px 10px;font-size:13px;font-weight:600;">'
+            f'{self._spinner_svg_img(color, 14)}&nbsp;{label}</span>'
+        )
+
     def _append_html(self, text, tag):
         if tag not in ("thinking_indicator",) and getattr(self, "_empty_state_visible", False):
             self._clear_empty_state()
@@ -2801,18 +2812,42 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             fmt = _make_format(self._t("ai_msg"), 15)
             cursor.insertText(text, fmt)
         elif tag == "think_header":
-            self._think_block_start = cursor.position()
+            # 模型推理块：用带边框的 QTextFrame 卡片把「思考中」标题 + 推理正文整块框起来
+            # （对齐设计 02 的 web 式思考卡）。think_msg 随后流式追加进这个 frame 内部。
+            from PySide6.QtGui import QTextFrameFormat, QBrush
             self._think_block_chars = 0
             self._think_block_text = ""
-            fmt = _make_format(self._t("thinking"), 14, QF.Weight.Bold, self._t("thinking_bg"))
-            cursor.insertText(text, fmt)
+            self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
+            self._think_block_start = cursor.position()
+            ff = QTextFrameFormat()
+            ff.setBorder(1)
+            ff.setBorderStyle(QTextFrameFormat.BorderStyle.BorderStyle_Solid)
+            ff.setBorderBrush(QBrush(QColor(self._t("md_blockquote_border"))))
+            ff.setBackground(QBrush(QColor(self._t("thinking_bg"))))
+            ff.setPadding(10)
+            ff.setTopMargin(4)
+            ff.setBottomMargin(4)
+            frame = cursor.insertFrame(ff)
+            self._think_frame = frame
+            hc = frame.firstCursorPosition()
+            hc.insertHtml(
+                f'{self._spinner_svg_img(self._t("thinking"), 14)}&nbsp;'
+                f'<b style="color:{self._t("thinking")};font-size:14px;">思考中</b>'
+            )
+            hc.insertText("\n", _make_format(self._t("thinking_msg"), 14))
         elif tag == "think_msg":
-            fmt = _make_format(self._t("thinking_msg"), 14, bg=self._t("thinking_msg_bg"))
-            cursor.insertText(text, fmt)
+            # 正文追加进思考卡（frame）内部；frame 已被 think_collapse 撤掉时退回普通插入
+            fmt = _make_format(self._t("thinking_msg"), 14)
+            frame = getattr(self, "_think_frame", None)
+            if frame is not None:
+                fc = frame.lastCursorPosition()
+                fc.insertText(text, fmt)
+            else:
+                cursor.insertText(text, fmt)
             self._think_block_chars += len(text)
             self._think_block_text += text
         elif tag == "think_collapse":
-            # 思考结束，把整段思考块替换为可点击折叠链接
+            # 思考结束：移除思考卡片，替换为可点击折叠链接
             if self._think_block_start is not None:
                 import uuid as _uuid
                 think_id = _uuid.uuid4().hex[:8]
@@ -2829,15 +2864,16 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 )
                 cursor.insertText("\n")
                 self._think_block_start = None
+                self._think_frame = None
                 self._think_block_chars = 0
                 self._think_block_text = ""
         elif tag == "reply_header":
             fmt = _make_format(self._t("ai_label"), 15, QF.Weight.Bold)
             cursor.insertText(text, fmt)
         elif tag == "thinking_indicator":
+            self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
             self._thinking_start = cursor.position()
-            fmt = _make_format(self._t("thinking"), 14, bg=self._t("thinking_bg"))
-            cursor.insertText(text, fmt)
+            cursor.insertHtml(self._thinking_chip_html(text))
             self._thinking_end = cursor.position()
         elif tag == "tool_tag":
             # emoji 换成内联 SVG（见 _EMOJI_ICON / docs/emoji_inventory.md），其余保持加粗 + tool 配色 + 背景。
@@ -2887,24 +2923,54 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.bridge.token_usage.emit(session_usage, round_usage)
 
 
+    def _ctx_window(self):
+        """当前会话所选模型的上下文窗口大小（token）。取不到返回 0。"""
+        from .. import models as _models, session as _session
+        try:
+            idx = _session.get_active().current_model_index
+            _, mtype, model_id, _ = _models.MODEL_LIST[idx]
+            return _models.context_window_for(mtype, model_id)
+        except Exception:
+            return 0
+
     def _update_token_usage(self, session_usage, round_usage):
-        """UI 线程：更新底部 token 用量显示"""
+        """UI 线程：更新底栏 Token 显示，格式「已用 {累计} · 上下文 {占用}/{窗口}·{级别}」。
+
+        - 已用 = 本会话累计 token（input+输出的总和，session_usage['total']）——"这会话共花了多少"。
+        - 上下文 = 本轮输入 token（≈ 当前上下文占用，整段发出去的历史）/ 模型窗口 + 充裕/适中/紧张。
+          切会话/刚启动时拿不到本轮 input，只显示「已用」，不瞎报占用。"""
         if not hasattr(self, 'token_usage_label'):
             return
         inp = session_usage.get('input', 0)
         out = session_usage.get('output', 0)
-        total = session_usage.get('total', 0)
-        r_total = round_usage.get('total', 0)
+        total = session_usage.get('total', 0) or (inp + out)
+        occ = round_usage.get('input', 0)           # 当前上下文占用（仅本轮可得）
+        window = self._ctx_window()
 
         def _fmt(n):
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
             if n >= 1000:
-                return f"{n/1000:.1f}k"
-            return str(n)
+                return f"{n / 1000:.1f}K"
+            return str(int(n))
 
-        text = f"Token 输入 {_fmt(inp)} · 输出 {_fmt(out)} · 总计 {_fmt(total)}"
-        if r_total > 0:
-            text += f"  (本轮 {_fmt(r_total)})"
-        self.token_usage_label.setText(text)
+        def _fmt_win(n):
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.0f}M"
+            if n >= 1000:
+                return f"{n / 1000:.0f}K"
+            return str(int(n))
+
+        parts = [f"Token 已用 {_fmt(total)}"]
+        if occ > 0 and window > 0:
+            ratio = occ / window
+            level = "充裕" if ratio < 0.5 else ("适中" if ratio < 0.8 else "紧张")
+            parts.append(f"上下文 {_fmt(occ)}/{_fmt_win(window)}·{level}")
+        self.token_usage_label.setText("  ·  ".join(parts))
+        self.token_usage_label.setToolTip(
+            f"本会话累计：输入 {_fmt(inp)} · 输出 {_fmt(out)} · 总计 {_fmt(total)}"
+            + (f"\n当前上下文占用：约 {_fmt(occ)} / 窗口 {_fmt_win(window)}" if occ > 0 and window > 0 else "")
+        )
         self.token_usage_label.setVisible(True)
 
     def _refresh_token_label_from_session(self):

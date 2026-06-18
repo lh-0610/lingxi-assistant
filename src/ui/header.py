@@ -52,6 +52,8 @@ class HeaderMixin:
         self.header_brand_dot = QLabel("·")
         self.header_brand_dot.setObjectName("headerBrandDot")
         layout.addWidget(self.header_brand_dot)
+        # 品牌已移到侧栏（灵 logo + 灵犀 / local & cloud），顶栏默认不重复显示，留空间给控件。
+        # 由主题 token brand_visible 控制（当前两主题都为 "false"），与 _apply_theme 同源。
         brand_visible = self._t("brand_visible") == "true"
         self.header_brand.setVisible(brand_visible)
         self.header_brand_dot.setVisible(brand_visible)
@@ -91,14 +93,29 @@ class HeaderMixin:
         self.isolation_btn.setVisible(False)  # 无项目时隐藏
         layout.addWidget(self.isolation_btn)
 
-        # Plan / Act 模式切换按钮（Act 默认，Plan 时 AI 只调研不动手）
-        self.mode_btn = QPushButton("Act")
-        self.mode_btn.setCursor(Qt.PointingHandCursor)
-        self.mode_btn.setCheckable(True)
-        self.mode_btn.setChecked(False)  # False = Act, True = Plan
-        self._style_mode_btn()
-        self.mode_btn.clicked.connect(self._toggle_agent_mode)
-        layout.addWidget(self.mode_btn)
+        # 计划 / 执行 段控（执行=Act 默认；计划=Plan 时 AI 只调研不动手）。
+        # 两个 checkable 按钮装进 #modeSeg 容器，选中态由 QSS :checked 驱动（见 theme.py）。
+        self.mode_seg = QWidget()
+        self.mode_seg.setObjectName("modeSeg")
+        # 关键:纯 QWidget 在 QHBoxLayout 里竖向默认 Preferred 会被拉伸填满 56px 顶栏高,
+        # 变成一个高灰块（QPushButton 竖向 Fixed 不会）。设 Fixed + 居中 → 收成和兄弟钮齐平的小药丸。
+        self.mode_seg.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        _seg_lay = QHBoxLayout(self.mode_seg)
+        _seg_lay.setContentsMargins(3, 3, 3, 3)
+        _seg_lay.setSpacing(3)
+        self.plan_btn = QPushButton("计划")
+        self.act_btn = QPushButton("执行")
+        for _b in (self.plan_btn, self.act_btn):
+            _b.setCheckable(True)
+            _b.setCursor(Qt.PointingHandCursor)
+            _b.setProperty("class", "segBtn")
+            _seg_lay.addWidget(_b)
+        self.act_btn.setChecked(True)
+        self.plan_btn.setToolTip("计划模式：AI 只调研给方案，不动手改东西")
+        self.act_btn.setToolTip("执行模式：AI 可直接执行工具、改文件")
+        self.plan_btn.clicked.connect(lambda: self._set_agent_mode("plan"))
+        self.act_btn.clicked.connect(lambda: self._set_agent_mode("act"))
+        layout.addWidget(self.mode_seg, 0, Qt.AlignVCenter)
 
         # 思考模式开关
         self.think_btn = QPushButton("思考")
@@ -117,11 +134,11 @@ class HeaderMixin:
         self.role_btn.clicked.connect(self._load_role_card)
         layout.addWidget(self.role_btn)
 
-        # 主题切换按钮
-        self.theme_btn = QPushButton("☀" if self.theme == "dark" else "☾")
+        # 主题切换按钮（文字显示当前主题：浅色 / 深色）
+        self.theme_btn = QPushButton("浅色" if self.theme == "light" else "深色")
         self.theme_btn.setObjectName("themeBtn")
         self.theme_btn.setCursor(Qt.PointingHandCursor)
-        self.theme_btn.setToolTip("切到白天模式" if self.theme == "dark" else "切到夜间模式")
+        self.theme_btn.setToolTip("切到夜间模式" if self.theme == "light" else "切到白天模式")
         self.theme_btn.clicked.connect(self._toggle_theme)
         layout.addWidget(self.theme_btn)
 
@@ -152,13 +169,14 @@ class HeaderMixin:
         else:
             level = 2   # 超紧凑
 
-        # think_btn
+        # think_btn —— 带开/关状态词；超紧凑只留图标
         if hasattr(self, "think_btn"):
-            self.think_btn.setText("" if level == 2 else "思考")
+            if level == 2:
+                self.think_btn.setText("")
+            else:
+                self.think_btn.setText("思考 开" if self.think_btn.isChecked() else "思考 关")
             self.think_btn.setToolTip("思考模式：让模型显式输出 reasoning 过程")
-        # mode_btn（Plan/Act）—— 各档都保留短词:它没有图标,清空会变成认不出的裸按钮
-        if hasattr(self, "mode_btn"):
-            self.mode_btn.setText("Plan" if self.mode_btn.isChecked() else "Act")
+        # 段控（计划|执行）始终显示两字短词，无需折叠
         # undo_btn
         if hasattr(self, "undo_btn"):
             if level == 0:
@@ -175,15 +193,14 @@ class HeaderMixin:
                 self.isolation_btn.setText("" if level == 2 else "恢复")
             else:
                 self.isolation_btn.setText("" if level == 2 else "隔离")
-        # role_btn 保留角色名（信息密度高，比按钮文字本身重要）
+        # role_btn：显示「角色：<名>」，无角色时「角色：默认助手」
         if hasattr(self, "role_btn"):
-            # 紧凑模式下截短到 4 个字
-            full = agent.get_current_role_name() or "角色卡"
-            if level >= 1 and len(full) > 4:
-                self.role_btn.setText(full[:4])
-                self.role_btn.setToolTip(f"当前角色：{full}")
+            name = agent.get_current_role_name()
+            if level >= 1 and name and len(name) > 4:
+                self.role_btn.setText(f"角色：{name[:4]}")
+                self.role_btn.setToolTip(f"当前角色：{name}")
             else:
-                self.role_btn.setText(full)
+                self.role_btn.setText(f"角色：{name}" if name else "角色：默认助手")
                 self.role_btn.setToolTip("")
         # model_combo 宽度按档位约束。关键是 setMaximumWidth 硬上限:QComboBox 的 sizeHint
         # 取【下拉列表里最长的模型名】,会把框撑到 ~350px(哪怕当前选中的是短名),挤占右侧
@@ -223,17 +240,17 @@ class HeaderMixin:
         self._show_toast(("✓ " if ok else "⚠ ") + msg, duration=3000 if ok else 5000)
         self._style_undo_btn()  # 刷新按钮状态（栈空了就灰掉）
 
-    def _toggle_agent_mode(self):
-        """点击 Plan / Act 按钮：切换 state.agent_mode 并刷新提示"""
-        new_mode = "plan" if self.mode_btn.isChecked() else "act"
-        state.agent_mode = new_mode
-        self._style_mode_btn()
-        self._refresh_header_compactness()  # 让 mode_btn 的文字按当前宽度更新
+    def _set_agent_mode(self, mode):
+        """段控点击：设置 state.agent_mode + 同步两个段按钮的选中态。"""
+        state.agent_mode = mode
+        if hasattr(self, "plan_btn"):
+            self.plan_btn.setChecked(mode == "plan")
+            self.act_btn.setChecked(mode == "act")
         # 提示用户切换效果（一闪即过的 toast）
-        if new_mode == "plan":
-            self._show_toast("🧠 已切到 Plan 模式：AI 只给方案不动手")
+        if mode == "plan":
+            self._show_toast("🧠 已切到计划模式：AI 只给方案不动手")
         else:
-            self._show_toast("⚡ 已切到 Act 模式：AI 可直接执行工具")
+            self._show_toast("⚡ 已切到执行模式：AI 可直接执行工具")
 
     def _sync_header_from_session(self):
         """切会话后把顶栏（模型下拉 / Plan-Act / 思考 / 隔离）同步到当前会话的状态。
@@ -250,9 +267,9 @@ class HeaderMixin:
             if hasattr(self, "think_btn"):
                 self.think_btn.setEnabled(supports_think)
                 self.think_btn.setChecked(bool(sess.reasoning_enabled and supports_think))
-        if hasattr(self, "mode_btn"):
-            self.mode_btn.setChecked(sess.agent_mode == "plan")
-            self._style_mode_btn()
+        if hasattr(self, "plan_btn"):
+            self.plan_btn.setChecked(sess.agent_mode == "plan")
+            self.act_btn.setChecked(sess.agent_mode != "plan")
         # 隔离按钮：有项目时可见，根据会话 worktree 状态高亮
         if hasattr(self, "isolation_btn"):
             has_project = bool(_state.current_project)
@@ -267,10 +284,10 @@ class HeaderMixin:
         """启动时恢复角色卡按钮状态"""
         name = agent.get_current_role_name()
         if name:
-            self.role_btn.setText(name)
+            self.role_btn.setText(f"角色：{name}")
             self._style_role_btn(active=True)
         else:
-            self.role_btn.setText("角色卡")
+            self.role_btn.setText("角色：默认助手")
             self._style_role_btn(active=False)
         # 让窗口窄的时候角色名也跟着截断
         if hasattr(self, "model_combo"):  # 主 UI 已构造完
@@ -295,7 +312,7 @@ class HeaderMixin:
 
                 # 更新按钮样式
                 display_name = agent.get_current_role_name() or role_name
-                self.role_btn.setText(display_name)
+                self.role_btn.setText(f"角色：{display_name}")
                 self._style_role_btn(active=True)
                 self._refresh_header_compactness()
                 self._append_html(f"✅ 已加载角色卡: {display_name}\n\n", "tool_result")
@@ -359,7 +376,7 @@ class HeaderMixin:
             agent.reset_history()
             self.chat_area.clear()
             self._refresh_session_list()
-            self.role_btn.setText("角色卡")
+            self.role_btn.setText("角色：默认助手")
             self._style_role_btn(active=False)
             self._append_html("✅ 已恢复默认角色\n\n", "tool_result")
 
@@ -503,31 +520,6 @@ class HeaderMixin:
                 self._show_toast(f"🔒 隔离模式已开启，worktree: {wt_path}")
             else:
                 self._show_toast("⚠ 无法创建隔离环境（非 git 仓库？）", duration=5000)
-
-    def _style_mode_btn(self):
-        """Plan / Act 切换按钮配色：Act = 想到就动手，Plan = 先想后动。
-        注：文字内容由 _refresh_header_compactness 根据窗口宽度统一管理，这里不设 text。"""
-        is_plan = self.mode_btn.isChecked()
-        if is_plan:
-            # Plan 模式：用 think_on 的紫色系，提示"在思考"
-            self.mode_btn.setIcon(self._svg_icon("brain_lucide.svg", self._t("thinking")))
-            self.mode_btn.setToolTip("Plan 模式：AI 只调研给方案，不动手改东西\n点击切回 Act 模式（直接执行）")
-        else:
-            # Act 模式：橙色提示"在动手"
-            self.mode_btn.setIcon(self._svg_icon("sparkles_lucide.svg", self._t("ai_label")))
-            self.mode_btn.setToolTip("Act 模式：AI 可直接执行工具\n点击切到 Plan 模式（先给方案再确认执行）")
-        self.mode_btn.setIconSize(QSize(16, 16))
-        self.mode_btn.setStyleSheet(
-            f"QPushButton {{ border-radius: 8px; padding: 6px 14px; font-size: 12px;"
-            f"  background: {self._t('think_on_bg') if is_plan else self._t('think_off_bg')};"
-            f"  border: 1px solid {self._t('think_on_border') if is_plan else self._t('think_off_border')};"
-            f"  color: {self._t('thinking') if is_plan else self._t('ai_label')};"
-            f"  font-weight: 600;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: {self._t('think_on_hover') if is_plan else self._t('history_hover_bg')};"
-            f"}}"
-        )
 
     def _style_role_btn(self, active):
         color = self._t("role_active_text") if active else self._t("role_text")
