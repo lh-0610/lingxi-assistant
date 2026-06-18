@@ -12,8 +12,6 @@
 self._inline_svg_img / self._svg_icon / self._ai_reply_start /
 self._msg_buffers / self._code_blocks / self._thinking_* / self._tts*
 """
-from PySide6.QtGui import QTextCursor
-
 from .helpers import _strip_markdown_for_tts
 
 
@@ -165,43 +163,6 @@ class MarkdownRenderMixin:
             on_copy=lambda t=md_text: (QApplication.clipboard().setText(t), self._show_toast("已复制")),
             on_regen=self._on_retry,
         )
-        return
-        # ↓↓ 旧 QTextBrowser 路径(unreachable),待清理 ↓↓
-        if self._ai_reply_start is None:
-            return
-
-        scroll = self._scroll_guard()
-        styled_html = self._md_to_html(md_text)
-
-        cursor = self.chat_area.textCursor()
-        cursor.setPosition(self._ai_reply_start)
-        cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-        cursor.removeSelectedText()
-        cursor.insertHtml(styled_html)
-        # QTextDocument 对 <div margin> / <p padding> 的支持非常有限，靠它给按钮
-        # 留空白基本失效。最稳的办法是直接插一个表格 spacer——固定高度的空 <td>
-        # 是 HTML 邮件里通用的留白手法，QTextDocument 完全认。
-        spacer = '<table border="0" cellspacing="0" cellpadding="0"><tr><td style="height:18px;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>'
-        cursor.insertHtml(spacer)
-
-        # ---- #6 Copy / Regenerate action links ----
-        msg_idx = len(self._msg_buffers)
-        self._msg_buffers[str(msg_idx)] = md_text
-        copy_icon = self._inline_svg_img("copy_lucide.svg", self._t("copy_link"), 15, "Copy")
-        regen_icon = self._inline_svg_img("refresh_cw_lucide.svg", self._t("copy_link"), 15, "Regenerate")
-        cursor.insertHtml(
-            f'<a href="action:copy_msg:{msg_idx}" style="color:{self._t("copy_link")};font-size:13px;'
-            f'text-decoration:none;padding:3px 8px;background:{self._t("copy_link_bg")};border-radius:5px;" title="复制">'
-            f'{copy_icon}</a>'
-            f'&nbsp;<a href="action:regenerate" style="color:{self._t("copy_link")};font-size:13px;'
-            f'text-decoration:none;padding:3px 8px;background:{self._t("copy_link_bg")};border-radius:5px;" title="重新生成">'
-            f'{regen_icon}</a>'
-        )
-        cursor.insertText("\n\n")
-
-        self._ai_reply_start = None
-
-        scroll()
 
     def _remove_thinking(self):
         """移除等待指示器（MessageView 的 WaitingIndicator）。"""

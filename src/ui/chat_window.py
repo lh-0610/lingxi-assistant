@@ -556,31 +556,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                 i += 1
         return "".join(out)
 
-    def _insert_text_with_icons(self, cursor, text, fmt, size=14):
-        """按 fmt（字体/颜色/背景）插入 text，但把 _EMOJI_ICON 已知 emoji 换成内联 SVG 图标。
-        非 emoji 文本一律 insertText 原样插入——等宽 / 空白 / 换行完全保留（适合 tool_result
-        等宽工具输出）；emoji 用 HTML <img vertical-align:middle> 插（和 tool_tag 同款居中，
-        比 insertImage 的 QTextImageFormat.AlignMiddle 准——后者会偏低、看着像残留 -3px），
-        前后文本仍走 insertText，所以排版不塌。"""
-        keys = sorted(_EMOJI_ICON.keys(), key=len, reverse=True)
-        fg = fmt.foreground()
-        color = fg.color().name() if fg.style() else self._t("tool_result")
-        n = len(text)
-        i = run_start = 0
-        while i < n:
-            emo = next((k for k in keys if text.startswith(k, i)), None)
-            if emo is None:
-                i += 1
-                continue
-            if i > run_start:
-                cursor.insertText(text[run_start:i], fmt)       # 刷出 emoji 前的普通文本段
-            cursor.insertHtml(self._inline_svg_img(_EMOJI_ICON[emo], color, size, alt=emo))
-            i += len(emo)
-            run_start = i
-        if n > run_start:
-            cursor.insertText(text[run_start:n], fmt)
-
-
     def _build_chat_area(self, parent_layout):
         # 消息流改成真控件渲染（MessageView：QScrollArea + 每轮控件树），
         # 圆角卡/思考块/工具卡走 message_view.py 的组件（QTextBrowser 画不了圆角/阴影）。
@@ -612,10 +587,17 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.plan_panel = QFrame(self)
         self.plan_panel.setObjectName("planPanel")
         self.plan_panel.setVisible(False)            # 无计划不占位
-        self.plan_panel.setFixedWidth(292)           # 浮层保持紧凑，少遮挡正文
+        self.plan_panel.setFixedWidth(344)           # 浮层（design_handoff 任务计划卡），少遮挡正文
         self.plan_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        _psh = QGraphicsDropShadowEffect(self)
+        _psh.setBlurRadius(30)
+        _psh.setXOffset(0)
+        _psh.setYOffset(8)
+        _psh.setColor(QColor(40, 50, 90, 18))
+        self.plan_panel.setGraphicsEffect(_psh)
         lay = QVBoxLayout(self.plan_panel)
-        lay.setContentsMargins(14, 11, 14, 12)
+        lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(0)
 
         title_row = QWidget(self.plan_panel)
@@ -688,14 +670,14 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self.plan_panel.setStyleSheet(
             f"QFrame#planPanel {{"
             f"  background: {self._t('scroll_btn_bg')};"
-            f"  border: 1px solid {self._t('scroll_btn_border')};"
-            f"  border-radius: 12px;"
+            f"  border: 1px solid {self._t('sidebar_border')};"
+            f"  border-radius: 16px;"
             f"}}"
         )
         title_color = self._t("thinking")
         muted_color = self._t("thinking_msg")
         self.plan_title.setStyleSheet(
-            "background:transparent; font-size:14px; font-weight:600;"
+            "background:transparent; font-size:16px; font-weight:700;"
         )
         self.plan_count.setStyleSheet(
             f"background:{self._t('thinking_msg_bg')};"
@@ -1447,7 +1429,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         cursor.setPosition(self.entry.textCursor().position(), QTextCursor.KeepAnchor)
         # 替换为 "@相对路径 "，并给引用上强调色 + 加粗（视觉标识这是文件引用）；
         # 随后的空格用默认格式插入，避免用户接着打字时文字继续带色
-        from PySide6.QtGui import QTextCharFormat, QColor
         ref_fmt = QTextCharFormat()
         ref_fmt.setForeground(QColor("#3b82f6"))
         ref_fmt.setFontWeight(700)
@@ -1529,69 +1510,13 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if img.isNull():
             return
         self.chat_area.add_image(img, max_w=480)
-        return
-        # ↓↓ 旧 QTextBrowser 路径 unreachable,待清理 ↓↓
-        if not hasattr(self, "_image_paths"):
-            self._image_paths = {}
-        scroll = self._scroll_guard()
-        # 缩略图最长边 480px，保持原始比例和清晰度
-        MAX_SIDE = 480
-        if img.width() > MAX_SIDE or img.height() > MAX_SIDE:
-            if img.width() >= img.height():
-                img = img.scaledToWidth(MAX_SIDE, Qt.SmoothTransformation)
-            else:
-                img = img.scaledToHeight(MAX_SIDE, Qt.SmoothTransformation)
-        import uuid as _uuid
-        img_id = _uuid.uuid4().hex[:8]
-        self._image_paths[img_id] = path
-        name = f"ai_img_{img_id}"
-        self.chat_area.document().addResource(
-            self.chat_area.document().ResourceType.ImageResource,
-            name, img
-        )
-        cursor = self.chat_area.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.chat_area.setTextCursor(cursor)
-        cursor.insertHtml(
-            f'<a href="action:show_image:{img_id}">'
-            f'<img src="{name}" /></a><br>'
-        )
-        scroll()
 
     def _insert_images_in_chat(self, images):
-        """在聊天区插入图片缩略图（点击可看原图）"""
-        if not hasattr(self, "_image_paths"):
-            self._image_paths = {}  # img_id -> 原图路径
-
-        scroll = self._scroll_guard()
-        cursor = self.chat_area.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.chat_area.setTextCursor(cursor)
+        """在聊天区插入用户发送的图片缩略图（MessageView 图片块）。"""
         for path, _b64 in images:
             img = QImage(path)
-            if img.isNull():
-                continue
-            # 缩略图最长边 480px，保持比例
-            MAX_SIDE = 480
-            if img.width() > MAX_SIDE or img.height() > MAX_SIDE:
-                if img.width() >= img.height():
-                    img = img.scaledToWidth(MAX_SIDE, Qt.SmoothTransformation)
-                else:
-                    img = img.scaledToHeight(MAX_SIDE, Qt.SmoothTransformation)
-            import uuid as _uuid
-            img_id = _uuid.uuid4().hex[:8]
-            self._image_paths[img_id] = path
-            name = f"user_img_{img_id}"
-            self.chat_area.document().addResource(
-                self.chat_area.document().ResourceType.ImageResource,
-                name, img
-            )
-            # 用 <a><img></a> 让图片可点击
-            cursor.insertHtml(
-                f'<a href="action:show_image:{img_id}">'
-                f'<img src="{name}" /></a><br>'
-            )
-        scroll()
+            if not img.isNull():
+                self.chat_area.add_image(img, max_w=480)
 
     def _update_btn_state(self, state):
         self.send_btn.setProperty("state", state)
@@ -2124,57 +2049,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._style_undo_btn()
         state.remote_session = False
 
-    def _scroll_guard(self):
-        """智能滚动：返回一个回调函数，调用时仅当之前用户在底部才滚到新底部。
-        用法：
-            scroll = self._scroll_guard()
-            # ... 插入内容 ...
-            scroll()
-        """
-        sb = self.chat_area.verticalScrollBar()
-        was_at_bottom = sb.value() >= sb.maximum() - 30  # 插入前是否贴底
-        prev = sb.value()
-        def _after():
-            # 贴底 → 跟到新底部；不贴底 → 恢复到插入前位置。
-            # 后者用来【主动抵消】QTextBrowser 在末尾 insertText 时自动把视口拉到
-            # 底的默认行为——那才是"滚上去看历史却被流式追加拽回底部"的真因。
-            if was_at_bottom:
-                sb.setValue(sb.maximum())
-            else:
-                sb.setValue(prev)
-            if hasattr(self, 'scroll_bottom_btn'):
-                self.scroll_bottom_btn.raise_()
-        return _after
-
     def _show_retry(self, error_msg):
         """在聊天区显示错误信息和重试按钮（MessageView）。"""
         self.chat_area.show_retry(error_msg, self._on_retry)
-        return
-        # ↓↓ 旧 QTextBrowser 路径 unreachable,待清理 ↓↓
-        scroll = self._scroll_guard()
-        cursor = self.chat_area.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.chat_area.setTextCursor(cursor)
-
-        # 错误信息
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(self._t("warn")))
-        warn_font = QFont("Microsoft YaHei")
-        warn_font.setPixelSize(14)
-        warn_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        warn_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-        fmt.setFont(warn_font)
-        self._insert_text_with_icons(cursor, f"\n⚠️ {error_msg}\n", fmt, size=15)
-
-        # 重试链接（QTextBrowser 支持 anchorClicked）
-        retry_icon = self._inline_svg_img("refresh_cw_lucide.svg", self._t("retry_link"), 16, "重试")
-        cursor.insertHtml(
-            f'<a href="action:retry" style="color:{self._t("retry_link")};font-size:16px;'
-            f'text-decoration:none;background:{self._t("retry_link_bg")};padding:6px 18px;'
-            f'border:1px solid {self._t("retry_link_border")};border-radius:8px;">{retry_icon} 重试</a><br><br>'
-        )
-
-        scroll()
 
     def _on_link_clicked(self, url):
         """处理聊天区内链接点击"""
@@ -2699,173 +2576,11 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             return
         self.bridge.update_thinking.emit(text)
 
-    def _spinner_svg_img(self, color, size=14):
-        """一帧转圈 SVG（角度取 self._think_chip_angle，每次推进让它转起来）→ 内联 <img>。"""
-        import base64
-        angle = getattr(self, "_think_chip_angle", 0)
-        svg = (
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" '
-            f'fill="none" stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">'
-            f'<g transform="rotate({angle} 12 12)"><path d="M21 12a9 9 0 1 1-3.2-6.9"/></g></svg>'
-        )
-        data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-        return (f'<img src="data:image/svg+xml;base64,{data}" width="{size}" height="{size}" '
-                f'style="vertical-align:middle;">')
-
-    def _thinking_chip_html(self, text):
-        """把「思考中 / 等待响应 (Ns)」临时指示渲染成带转圈的圆角 pill（推理前的等待态）。"""
-        label = (text or "").strip().replace("...", "").strip()
-        label = label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        color = self._t("thinking")
-        bg = self._t("thinking_bg")
-        return (
-            f'<span style="background:{bg};color:{color};border-radius:8px;'
-            f'padding:3px 10px;font-size:13px;font-weight:600;">'
-            f'{self._spinner_svg_img(color, 14)}&nbsp;{label}</span>'
-        )
-
     def _append_html(self, text, tag):
         if tag not in ("thinking_indicator",) and getattr(self, "_empty_state_visible", False):
             self._clear_empty_state()
         # 消息流已改 MessageView 真控件渲染 —— 直接把 tag 分发给它（镜像旧分发器协议）。
         self.chat_area.handle(text, tag)
-        return
-        # ↓↓ 旧 QTextBrowser 渲染路径,已被 MessageView 取代(unreachable),验证稳定后整段删 ↓↓
-        scroll = self._scroll_guard()
-        cursor = self.chat_area.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.chat_area.setTextCursor(cursor)
-
-        from PySide6.QtGui import QTextCharFormat, QFont as QF
-
-        def _make_format(color, pixel_size, weight=QF.Weight.Normal, bg=None, family="Microsoft YaHei"):
-            fmt = QTextCharFormat()
-            font = QF(family)
-            font.setPixelSize(pixel_size)
-            font.setWeight(weight)
-            font.setStyleStrategy(QF.StyleStrategy.PreferAntialias)
-            if family == "Microsoft YaHei":
-                font.setHintingPreference(QF.HintingPreference.PreferNoHinting)
-            fmt.setFont(font)
-            fmt.setForeground(QColor(color))
-            if bg is not None:
-                fmt.setBackground(QColor(bg))
-            return fmt
-
-        if tag == "user_label":
-            fmt = _make_format(self._t("user_label"), 16, QF.Weight.Bold)
-            cursor.insertText(text, fmt)
-        elif tag == "ai_label":
-            fmt = _make_format(self._t("ai_label"), 16, QF.Weight.Bold)
-            cursor.insertText(text, fmt)
-        elif tag == "user_msg":
-            fmt = _make_format(self._t("user_msg"), 15)
-            cursor.insertText(text, fmt)
-        elif tag == "ai_msg":
-            if self._ai_reply_start is None:
-                self._ai_reply_start = cursor.position()
-            fmt = _make_format(self._t("ai_msg"), 15)
-            cursor.insertText(text, fmt)
-        elif tag == "think_header":
-            # 模型推理块：用带边框的 QTextFrame 卡片把「思考中」标题 + 推理正文整块框起来
-            # （对齐设计 02 的 web 式思考卡）。think_msg 随后流式追加进这个 frame 内部。
-            from PySide6.QtGui import QTextFrameFormat, QBrush
-            self._think_block_chars = 0
-            self._think_block_text = ""
-            self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
-            self._think_block_start = cursor.position()
-            ff = QTextFrameFormat()
-            ff.setBorder(1)
-            ff.setBorderStyle(QTextFrameFormat.BorderStyle.BorderStyle_Solid)
-            ff.setBorderBrush(QBrush(QColor(self._t("md_blockquote_border"))))
-            ff.setBackground(QBrush(QColor(self._t("thinking_bg"))))
-            ff.setPadding(10)
-            ff.setTopMargin(4)
-            ff.setBottomMargin(4)
-            frame = cursor.insertFrame(ff)
-            self._think_frame = frame
-            hc = frame.firstCursorPosition()
-            hc.insertHtml(
-                f'{self._spinner_svg_img(self._t("thinking"), 14)}&nbsp;'
-                f'<b style="color:{self._t("thinking")};font-size:14px;">思考中</b>'
-            )
-            hc.insertText("\n", _make_format(self._t("thinking_msg"), 14))
-        elif tag == "think_msg":
-            # 正文追加进思考卡（frame）内部；frame 已被 think_collapse 撤掉时退回普通插入
-            fmt = _make_format(self._t("thinking_msg"), 14)
-            frame = getattr(self, "_think_frame", None)
-            if frame is not None:
-                fc = frame.lastCursorPosition()
-                fc.insertText(text, fmt)
-            else:
-                cursor.insertText(text, fmt)
-            self._think_block_chars += len(text)
-            self._think_block_text += text
-        elif tag == "think_collapse":
-            # 思考结束：移除思考卡片，替换为可点击折叠链接
-            if self._think_block_start is not None:
-                import uuid as _uuid
-                think_id = _uuid.uuid4().hex[:8]
-                self._thinking_history[think_id] = self._think_block_text
-                cursor.setPosition(self._think_block_start)
-                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-                cursor.removeSelectedText()
-                cursor.insertHtml(
-                    f'<a href="action:show_thinking:{think_id}" '
-                    f'style="color:{self._t("thinking")};text-decoration:none;'
-                    f'background:{self._t("thinking_bg")};'
-                    f'padding:4px 12px;font-weight:bold;font-size:13px;border-radius:6px;">'
-                    f'思考 · {self._think_block_chars} 字 ▶</a>'
-                )
-                cursor.insertText("\n")
-                self._think_block_start = None
-                self._think_frame = None
-                self._think_block_chars = 0
-                self._think_block_text = ""
-        elif tag == "reply_header":
-            fmt = _make_format(self._t("ai_label"), 15, QF.Weight.Bold)
-            cursor.insertText(text, fmt)
-        elif tag == "thinking_indicator":
-            self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
-            self._thinking_start = cursor.position()
-            cursor.insertHtml(self._thinking_chip_html(text))
-            self._thinking_end = cursor.position()
-        elif tag == "tool_tag":
-            # emoji 换成内联 SVG（见 _EMOJI_ICON / docs/emoji_inventory.md），其余保持加粗 + tool 配色 + 背景。
-            # 首尾换行用纯文本插入（HTML 里换行会被折叠丢失），只有中间主体走 insertHtml。
-            lead = len(text) - len(text.lstrip("\n"))
-            trail = len(text) - len(text.rstrip("\n"))
-            core = text[lead: len(text) - trail]
-            tool_fmt = _make_format(self._t("tool"), 14)
-            if lead:
-                cursor.insertText("\n" * lead, tool_fmt)
-            if core:
-                color = self._t("tool")
-                body = self._emoji_to_svg_html(core, color, size=15)
-                cursor.insertHtml(
-                    f'<span style="color:{color};font-weight:bold;'
-                    f'background-color:{self._t("tool_bg")};">{body}</span>'
-                )
-            if trail:
-                cursor.insertText("\n" * trail, tool_fmt)
-        elif tag == "tool_detail":
-            fmt = _make_format(self._t("tool"), 14, bg=self._t("tool_bg"), family="Consolas")
-            cursor.insertText(text, fmt)
-        elif tag == "tool_result":
-            fmt = _make_format(self._t("tool_result"), 13, bg=self._t("tool_result_bg"), family="Consolas")
-            self._insert_text_with_icons(cursor, text, fmt, size=14)
-        elif tag == "spacer":
-            cursor.insertText("\n")
-        elif tag == "ai_image":
-            # text 是图片本地路径，AI 工具生成后通知 UI 显示
-            self._insert_image_path(text)
-        elif tag == "reset_ai_reply":
-            # 工具调用结束后，让下一轮 ai_msg 重置起点，避免最终 markdown 渲染覆盖工具结果和图片
-            self._ai_reply_start = None
-        else:
-            cursor.insertText(text)
-
-        scroll()
 
 
     def show_token_usage(self, session_usage, round_usage):
