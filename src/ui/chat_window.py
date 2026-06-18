@@ -27,7 +27,7 @@ from .. import state
 from ._base import BASE_DIR, CONFIG_PATH
 from .theme import THEMES, build_stylesheet, load_saved_theme, save_theme_choice
 from .widgets import (
-    CloseConfirmDialog, DragDropTextBrowser, DragDropTextEdit, FileCompleter,
+    CloseConfirmDialog, DragDropTextEdit, FileCompleter,
     SignalBridge,
 )
 from .helpers import (
@@ -353,7 +353,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         if hasattr(self, "_image_paths"):
             self._image_paths.clear()
         if hasattr(self, "chat_area"):
-            self.chat_area.document().clear()
+            self.chat_area.clear()
         if hasattr(self, 'token_usage_label'):
             self.token_usage_label.setVisible(False)
         # 计划面板跟着当前会话刷新。_reset_render_state 是新建/切换/切项目三条路径的
@@ -398,42 +398,15 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                         elif isinstance(part, dict) and part.get("type") == "image_url":
                             url = part["image_url"]["url"]
                             if url.startswith("data:image"):
-                                b64_data = url.split(",", 1)[1]
-                                img_bytes = base64.b64decode(b64_data)
                                 img = QImage()
-                                img.loadFromData(img_bytes)
-                                if not img.isNull():
-                                    if img.width() > 300:
-                                        img = img.scaledToWidth(300, Qt.SmoothTransformation)
-                                    name = self._next_img_name()
-                                    self.chat_area.document().addResource(
-                                        self.chat_area.document().ResourceType.ImageResource,
-                                        name, img
-                                    )
-                                    cursor = self.chat_area.textCursor()
-                                    cursor.movePosition(QTextCursor.End)
-                                    cursor.insertImage(name)
-                                    cursor.insertText("\n")
+                                img.loadFromData(base64.b64decode(url.split(",", 1)[1]))
+                                self.chat_area.add_image(img)
                         elif isinstance(part, dict) and part.get("type") == "image":
                             source = part.get("source", {})
-                            if source.get("type") == "base64":
-                                b64_data = source.get("data", "")
-                                if b64_data:
-                                    img_bytes = base64.b64decode(b64_data)
-                                    img = QImage()
-                                    img.loadFromData(img_bytes)
-                                    if not img.isNull():
-                                        if img.width() > 300:
-                                            img = img.scaledToWidth(300, Qt.SmoothTransformation)
-                                        name = self._next_img_name()
-                                        self.chat_area.document().addResource(
-                                            self.chat_area.document().ResourceType.ImageResource,
-                                            name, img
-                                        )
-                                        cursor = self.chat_area.textCursor()
-                                        cursor.movePosition(QTextCursor.End)
-                                        cursor.insertImage(name)
-                                        cursor.insertText("\n")
+                            if source.get("type") == "base64" and source.get("data"):
+                                img = QImage()
+                                img.loadFromData(base64.b64decode(source["data"]))
+                                self.chat_area.add_image(img)
                     self._append_html("\n", "spacer")
                 else:
                     self._append_html(msg.content + "\n\n", "user_msg")
@@ -452,27 +425,16 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
                                if isinstance(tc, dict)]
                 ai_name = agent.get_current_role_name() or "AI"
 
-                # 有正文就渲染正文 + 复制按钮
+                # 有正文就渲染正文（MessageView：起一轮 + 定格 markdown 富文本）
                 if _has_text:
                     rendered_any = True
                     self._append_html(f"{ai_name}\n", "ai_label")
-                    styled_html = self._md_to_html(_ai_content)
-                    cursor = self.chat_area.textCursor()
-                    cursor.movePosition(QTextCursor.End)
-                    cursor.insertHtml(styled_html)
-                    # 同 _render_markdown：用表格 spacer 撑开正文与按钮间的距离，
-                    # QTextDocument 对 <div margin> 支持太差
-                    spacer = '<table border="0" cellspacing="0" cellpadding="0"><tr><td style="height:18px;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>'
-                    cursor.insertHtml(spacer)
-                    msg_idx = len(self._msg_buffers)
-                    self._msg_buffers[str(msg_idx)] = _ai_content
-                    copy_icon = self._inline_svg_img("copy_lucide.svg", self._t("copy_link"), 15, "Copy")
-                    cursor.insertHtml(
-                        f'<a href="action:copy_msg:{msg_idx}" style="color:{self._t("copy_link")};font-size:13px;'
-                        f'text-decoration:none;padding:3px 8px;background:{self._t("copy_link_bg")};border-radius:5px;" title="复制">'
-                        f'{copy_icon}</a>'
-                    )
-                    cursor.insertText("\n\n")
+                    self._msg_buffers[str(len(self._msg_buffers))] = _ai_content
+                    self.chat_area.finalize_markdown(self._md_to_html(_ai_content))
+                    from PySide6.QtWidgets import QApplication
+                    self.chat_area.add_message_actions(
+                        on_copy=lambda t=_ai_content: (QApplication.clipboard().setText(t),
+                                                       self._show_toast("已复制")))
 
                 # 有工具调用就显示摘要——不管这条 AIMessage 有没有正文。
                 # （之前只在"无正文"时显示，导致 MiMo "短文字 + 工具调用"同条时工具被吞，
@@ -620,18 +582,12 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
 
     def _build_chat_area(self, parent_layout):
-        self.chat_area = DragDropTextBrowser()
+        # 消息流改成真控件渲染（MessageView：QScrollArea + 每轮控件树），
+        # 圆角卡/思考块/工具卡走 message_view.py 的组件（QTextBrowser 画不了圆角/阴影）。
+        from .message_view import MessageView
+        self.chat_area = MessageView()
         self.chat_area.setObjectName("chatArea")
-        self.chat_area.setOpenExternalLinks(False)
-        self.chat_area.anchorClicked.connect(self._on_link_clicked)
-        self.chat_area.setOpenLinks(False)
-        chat_font = QFont("Microsoft YaHei")
-        chat_font.setPixelSize(15)
-        chat_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        chat_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-        self.chat_area.setFont(chat_font)
         self.chat_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._style_chat_area()
         parent_layout.addWidget(self.chat_area, 1)
         self._build_empty_state()
 
@@ -825,7 +781,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        logo = QLabel("灵犀<span style='color:#d87755;'>.</span>")
+        logo = QLabel("灵犀<span style='color:#f0824a;'>.</span>")
         logo.setObjectName("emptyLogo")
         logo.setTextFormat(Qt.RichText)
         logo.setAlignment(Qt.AlignCenter)
@@ -1046,10 +1002,17 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._build_edit_confirm_bar()
         wrapper_layout.addWidget(self.edit_confirm_bar, 0, Qt.AlignHCenter)
 
-        # 圆角容器
+        # 圆角容器（+ 投影,对齐 design_handoff composer 卡）
         container = QWidget()
         container.setObjectName("inputContainer")
         self.input_container = container
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        _sh = QGraphicsDropShadowEffect(self)
+        _sh.setBlurRadius(20)
+        _sh.setXOffset(0)
+        _sh.setYOffset(4)
+        _sh.setColor(QColor(40, 50, 90, 16))
+        container.setGraphicsEffect(_sh)
         container.setFixedWidth(920)
         container.setMinimumHeight(104)
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1559,14 +1522,17 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             self._send_message()
 
     def _insert_image_path(self, path):
-        """从本地路径加载图片并插入聊天区（带可点击缩略图）"""
+        """从本地路径加载图片并插入聊天区（MessageView 图片块）。"""
         if not path or not os.path.exists(path):
             return
-        if not hasattr(self, "_image_paths"):
-            self._image_paths = {}
         img = QImage(path)
         if img.isNull():
             return
+        self.chat_area.add_image(img, max_w=480)
+        return
+        # ↓↓ 旧 QTextBrowser 路径 unreachable,待清理 ↓↓
+        if not hasattr(self, "_image_paths"):
+            self._image_paths = {}
         scroll = self._scroll_guard()
         # 缩略图最长边 480px，保持原始比例和清晰度
         MAX_SIDE = 480
@@ -1958,38 +1924,20 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._do_send(text, images)
 
     def _append_user_text(self, text):
-        """显示用户消息：@文件引用渲染成蓝色加粗，其余用普通 user_msg 样式。"""
+        """显示用户消息：@文件引用渲染成靛蓝加粗，其余普通（MessageView 用户气泡）。"""
         import re as _re
-        from PySide6.QtGui import QTextCharFormat, QFont as QF
-        scroll = self._scroll_guard()
-        cursor = self.chat_area.textCursor()
-        cursor.movePosition(QTextCursor.End)
-
-        def _fmt(color, bold=False):
-            f = QTextCharFormat()
-            font = QF("Microsoft YaHei")
-            font.setPixelSize(15)
-            font.setWeight(QF.Weight.Bold if bold else QF.Weight.Normal)
-            font.setStyleStrategy(QF.StyleStrategy.PreferAntialias)
-            # 必须和聊天区基础字体 / _make_format 一样设 PreferNoHinting，否则用户消息
-            # 用默认 hinting、AI 消息用 NoHinting，两套字脚渲染并排 → 高分屏下笔画粗细不一
-            font.setHintingPreference(QF.HintingPreference.PreferNoHinting)
-            f.setFont(font)
-            f.setForeground(QColor(color))
-            return f
-
-        normal = _fmt(self._t("user_msg"))
-        ref = _fmt("#3b82f6", bold=True)
-        pattern = _re.compile(r'(?<!\S)@[^\s@]+')
+        import html as _html
+        parts = []
+        pat = _re.compile(r'(?<!\S)@[^\s@]+')
         pos = 0
-        for m in pattern.finditer(text):
+        for m in pat.finditer(text):
             if m.start() > pos:
-                cursor.insertText(text[pos:m.start()], normal)
-            cursor.insertText(m.group(0), ref)
+                parts.append(_html.escape(text[pos:m.start()]))
+            parts.append(f'<b style="color:#5b6cf0;">{_html.escape(m.group(0))}</b>')
             pos = m.end()
         if pos < len(text):
-            cursor.insertText(text[pos:], normal)
-        scroll()
+            parts.append(_html.escape(text[pos:]))
+        self.chat_area.append_user_html("".join(parts).replace("\n", "<br>"))
 
     def _do_send(self, text: str, images=None):
         """核心发送逻辑，GUI 和远程共用。"""
@@ -2199,7 +2147,10 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         return _after
 
     def _show_retry(self, error_msg):
-        """在聊天区显示错误信息和重试链接"""
+        """在聊天区显示错误信息和重试按钮（MessageView）。"""
+        self.chat_area.show_retry(error_msg, self._on_retry)
+        return
+        # ↓↓ 旧 QTextBrowser 路径 unreachable,待清理 ↓↓
         scroll = self._scroll_guard()
         cursor = self.chat_area.textCursor()
         cursor.movePosition(QTextCursor.End)
@@ -2776,6 +2727,10 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
     def _append_html(self, text, tag):
         if tag not in ("thinking_indicator",) and getattr(self, "_empty_state_visible", False):
             self._clear_empty_state()
+        # 消息流已改 MessageView 真控件渲染 —— 直接把 tag 分发给它（镜像旧分发器协议）。
+        self.chat_area.handle(text, tag)
+        return
+        # ↓↓ 旧 QTextBrowser 渲染路径,已被 MessageView 取代(unreachable),验证稳定后整段删 ↓↓
         scroll = self._scroll_guard()
         cursor = self.chat_area.textCursor()
         cursor.movePosition(QTextCursor.End)

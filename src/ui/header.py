@@ -34,10 +34,10 @@ class HeaderMixin:
     def _build_header(self, parent_layout):
         header = QWidget()
         header.setObjectName("header")
-        header.setFixedHeight(56)
+        header.setFixedHeight(72)   # design_handoff：72px 顶栏,更宽松
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 0, 18, 0)
-        layout.setSpacing(6)  # 缩紧按钮间距，留点喘息空间给窄窗口
+        layout.setContentsMargins(20, 0, 24, 0)
+        layout.setSpacing(8)  # 缩紧按钮间距，留点喘息空间给窄窗口
 
         toggle_btn = QPushButton("☰")
         toggle_btn.setObjectName("toggleBtn")
@@ -206,8 +206,8 @@ class HeaderMixin:
         # 取【下拉列表里最长的模型名】,会把框撑到 ~350px(哪怕当前选中的是短名),挤占右侧
         # 按钮。设硬上限后超长当前项用省略号显示,框不再当空间黑洞。
         if hasattr(self, "model_combo"):
-            min_w = 185 if level == 0 else (150 if level == 1 else 120)
-            max_w = 240 if level == 0 else (200 if level == 1 else 175)
+            min_w = 280 if level == 0 else (180 if level == 1 else 130)
+            max_w = 300 if level == 0 else (220 if level == 1 else 180)
             ss = self.model_combo.styleSheet()
             import re as _re
             ss = _re.sub(r"min-width:\s*\d+px;", f"min-width: {min_w}px;", ss)
@@ -388,7 +388,7 @@ class HeaderMixin:
         arrow_path = os.path.join(BASE_DIR, "icons", "chevron_down.svg").replace("\\", "/")
         self.model_combo.setStyleSheet(
             f"QComboBox {{ background: {self._t('combo_bg')}; border: 1px solid {self._t('combo_border')}; border-radius: 8px; "
-            f"padding: 7px 38px 7px 14px; font-size: 13px; color: {self._t('combo_text')}; min-width: 210px; }}"
+            f"padding: 10px 38px 10px 14px; font-size: 13px; color: {self._t('combo_text')}; min-width: 280px; }}"
             f"QComboBox:hover {{ border-color: {self._t('combo_hover_border')}; color: {self._t('combo_hover_text')}; }}"
             f"QComboBox::drop-down {{ border: none; width: 34px; subcontrol-origin: padding; subcontrol-position: top right; }}"
             f"QComboBox::down-arrow {{ image: url({arrow_path}); width: 16px; height: 16px; margin-right: 10px; }}"
@@ -402,7 +402,7 @@ class HeaderMixin:
         self.think_btn.setIcon(self._svg_icon("brain_lucide.svg", color))
         self.think_btn.setIconSize(QSize(16, 16))
         self.think_btn.setStyleSheet(
-            f"QPushButton {{ border-radius: 8px; padding: 6px 14px; font-size: 12px; }}"
+            f"QPushButton {{ border-radius: 8px; padding: 9px 16px; font-size: 12px; }}"
             f"QPushButton:checked {{ background: {self._t('think_on_bg')}; border: 1px solid {self._t('think_on_border')}; color: {self._t('think_on_text')}; }}"
             f"QPushButton:!checked {{ background: {self._t('think_off_bg')}; border: 1px solid {self._t('think_off_border')}; color: {self._t('think_off_text')}; }}"
             f"QPushButton:hover:checked {{ background: {self._t('think_on_hover')}; border-color: {self._t('think_on_hover_border')}; }}"
@@ -418,7 +418,7 @@ class HeaderMixin:
             self.undo_btn.setStyleSheet(
                 f"QPushButton {{ background: {self._t('think_off_bg')};"
                 f"  border: 1px solid {self._t('think_off_border')};"
-                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  border-radius: 8px; padding: 9px 14px; font-size: 12px;"
                 f"  color: {self._t('warn')}; font-weight: 600;"
                 f"}}"
                 f"QPushButton:hover {{ background: {self._t('history_hover_bg')};"
@@ -435,7 +435,7 @@ class HeaderMixin:
             self.undo_btn.setStyleSheet(
                 f"QPushButton {{ background: transparent;"
                 f"  border: 1px solid {self._t('input_border')};"
-                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  border-radius: 8px; padding: 9px 14px; font-size: 12px;"
                 f"  color: {self._t('text_subtle')};"
                 f"}}"
             )
@@ -457,7 +457,7 @@ class HeaderMixin:
             self.isolation_btn.setStyleSheet(
                 f"QPushButton {{ background: {self._t('ai_label')}22;"
                 f"  border: 1px solid {self._t('ai_label')};"
-                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  border-radius: 8px; padding: 9px 14px; font-size: 12px;"
                 f"  color: {self._t('ai_label')}; font-weight: 600;"
                 f"}}"
                 f"QPushButton:hover {{ background: {self._t('ai_label')}33;"
@@ -472,7 +472,7 @@ class HeaderMixin:
             self.isolation_btn.setStyleSheet(
                 f"QPushButton {{ background: {self._t('think_off_bg')};"
                 f"  border: 1px solid {self._t('think_off_border')};"
-                f"  border-radius: 8px; padding: 6px 12px; font-size: 12px;"
+                f"  border-radius: 8px; padding: 9px 14px; font-size: 12px;"
                 f"  color: {self._t('text')};"
                 f"}}"
                 f"QPushButton:hover {{ background: {self._t('history_hover_bg')};"
@@ -528,13 +528,13 @@ class HeaderMixin:
         if active:
             self.role_btn.setStyleSheet(
                 f"QPushButton {{ background: {self._t('role_active_bg')}; border: 1px solid {self._t('role_active_border')}; border-radius: 8px; "
-                f"padding: 6px 14px; font-size: 12px; color: {self._t('role_active_text')}; font-weight: {self._t('role_active_weight')}; }}"
+                f"padding: 9px 16px; font-size: 12px; color: {self._t('role_active_text')}; font-weight: {self._t('role_active_weight')}; }}"
                 f"QPushButton:hover {{ background: {self._t('role_active_hover_bg')}; border-color: {self._t('role_active_hover_border')}; color: {self._t('role_active_hover_text')}; }}"
             )
         else:
             self.role_btn.setStyleSheet(
                 f"QPushButton {{ background: {self._t('role_bg')}; border: 1px solid {self._t('role_border')}; border-radius: 8px; "
-                f"padding: 6px 14px; font-size: 12px; color: {self._t('role_text')}; }}"
+                f"padding: 9px 16px; font-size: 12px; color: {self._t('role_text')}; }}"
                 f"QPushButton:hover {{ background: {self._t('role_hover_bg')}; border-color: {self._t('role_hover_border')}; color: {self._t('role_hover_text')}; }}"
             )
 

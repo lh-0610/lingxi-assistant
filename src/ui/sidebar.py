@@ -50,17 +50,14 @@ class SidebarMixin:
         brand_layout.setContentsMargins(6, 0, 6, 4)
         brand_layout.setSpacing(10)
 
+        # 品牌图标：用项目原 app 图标 icon.ico（保留原 logo,不用渐变 tile）
         icon_label = QLabel()
-        icon_label.setFixedSize(30, 30)
+        icon_label.setFixedSize(36, 36)
         icon_path = os.path.join(BASE_DIR, "icon.ico")
         if os.path.exists(icon_path):
-            # 先问 QIcon 要一张大尺寸的源位图（.ico 里通常有 256×256），再用
-            # KeepAspectRatio + SmoothTransformation 缩到目标物理像素。直接调
-            # QIcon.pixmap(target) 会按"最接近的内嵌位图"返回，可能拿到比例不
-            # 对的那张，导致在 QLabel 里只显示一部分。
+            # 从 .ico 取大尺寸源位图(通常 256×256)再按物理像素缩放,避免拿到比例不对的小图
             dpr = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
-            target = 30
-            phys = int(round(target * dpr))
+            phys = int(round(36 * dpr))
             src = QIcon(icon_path).pixmap(QSize(256, 256))
             pix = src.scaled(phys, phys, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             pix.setDevicePixelRatio(dpr)

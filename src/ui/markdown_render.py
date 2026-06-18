@@ -156,7 +156,17 @@ class MarkdownRenderMixin:
         )
 
     def _render_markdown(self, md_text):
-        """用 Markdown 渲染结果替换纯文本 AI 回复"""
+        """用 Markdown 渲染结果替换纯文本 AI 回复（MessageView：定格当前正文块为富文本）"""
+        from PySide6.QtWidgets import QApplication
+        styled_html = self._md_to_html(md_text)
+        self._msg_buffers[str(len(self._msg_buffers))] = md_text
+        self.chat_area.finalize_markdown(styled_html)
+        self.chat_area.add_message_actions(
+            on_copy=lambda t=md_text: (QApplication.clipboard().setText(t), self._show_toast("已复制")),
+            on_regen=self._on_retry,
+        )
+        return
+        # ↓↓ 旧 QTextBrowser 路径(unreachable),待清理 ↓↓
         if self._ai_reply_start is None:
             return
 
@@ -194,29 +204,12 @@ class MarkdownRenderMixin:
         scroll()
 
     def _remove_thinking(self):
-        """精确移除思考指示器"""
-        if not hasattr(self, '_thinking_start') or self._thinking_start is None:
-            return
-        if self._thinking_end is None:
-            self._thinking_start = None
-            return
-        cursor = self.chat_area.textCursor()
-        cursor.setPosition(self._thinking_start)
-        cursor.setPosition(self._thinking_end, QTextCursor.KeepAnchor)
-        cursor.removeSelectedText()
-        self._thinking_start = None
-        self._thinking_end = None
+        """移除等待指示器（MessageView 的 WaitingIndicator）。"""
+        self.chat_area.remove_waiting()
 
     def _update_thinking(self, text):
-        """更新等待指示器（原地替换为转圈 pill，每次推进转角让它转起来）"""
-        if not hasattr(self, '_thinking_start') or self._thinking_start is None:
-            return
-        self._think_chip_angle = (getattr(self, "_think_chip_angle", 0) + 40) % 360
-        cursor = self.chat_area.textCursor()
-        cursor.setPosition(self._thinking_start)
-        cursor.setPosition(self._thinking_end, QTextCursor.KeepAnchor)
-        cursor.insertHtml(self._thinking_chip_html(text))
-        self._thinking_end = cursor.position()
+        """更新等待指示器——WaitingIndicator 自带秒表自走,这里无需原地刷,no-op。"""
+        return
 
     def _show_thinking_dialog(self, think_id):
         """在主窗口右侧弹出思考过程"""

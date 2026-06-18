@@ -11,101 +11,101 @@ from ._base import THEME_CONFIG_PATH
 
 THEMES = {
     "light": {
-        # 主表面
-        "win_bg":            "#f8f9fb",
-        "sidebar_bg":        "#f1f3f7",
-        "sidebar_border":    "#e2e6ee",
-        "header_bg":         "#f8f9fb",
-        "header_border":     "#e6e9f0",
-        "chat_bg":           "#f8f9fb",
+        # 主表面（design_handoff 靛蓝浅色：纯白页面 + #f7f8fa 侧栏）
+        "win_bg":            "#ffffff",
+        "sidebar_bg":        "#f7f8fa",
+        "sidebar_border":    "#ececf0",
+        "header_bg":         "#ffffff",
+        "header_border":     "#f0f0f3",
+        "chat_bg":           "#ffffff",
         "input_bg":          "#ffffff",
-        "input_border":      "#dfe4ee",
-        "input_text":        "#1f2430",
-        "input_sel_bg":      "#dfe6ff",
-        "input_sel_text":    "#1f2430",
+        "input_border":      "#e6e7ec",
+        "input_text":        "#222838",
+        "input_sel_bg":      "#eef0fe",
+        "input_sel_text":    "#222838",
         # 文本
-        "text":              "#1f2430",
-        "text_dim":          "#6f7785",
-        "text_subtle":       "#9aa3b2",
-        "text_muted":        "#c5ccd8",
+        "text":              "#222838",
+        "text_dim":          "#5a6172",
+        "text_subtle":       "#9aa0b0",
+        "text_muted":        "#cdd1dc",
         # 历史项
-        "history_label":           "#8a94a5",
-        "history_label_spacing":   "0px",
-        "history_item":            "#2c3442",
-        "history_hover_bg":        "#e8ecf4",
-        "history_hover_text":      "#1f2430",
-        "history_active_bg":       "#e5e9ff",
-        "history_active_text":     "#232b7a",
-        "history_active_border":   "#5b66d6",
-        "history_active_pad_left": "10px",
+        "history_label":           "#9aa0b0",
+        "history_label_spacing":   "0.06em",
+        "history_item":            "#5a6172",
+        "history_hover_bg":        "#eef0f4",
+        "history_hover_text":      "#222838",
+        "history_active_bg":       "#eef0fe",
+        "history_active_text":     "#4a59e0",
+        "history_active_border":   "#5b6cf0",
+        "history_active_pad_left": "11px",
         # 滚动条
         "scrollbar_track":   "transparent",
-        "scrollbar_handle":  "#c8cfda",
-        "scrollbar_handle_hover": "#a8b2c1",
-        "scrollbar_thin":    "#c8cfda",
+        "scrollbar_handle":  "#d3d7e0",
+        "scrollbar_handle_hover": "#b8bcc8",
+        "scrollbar_thin":    "#d3d7e0",
         # 删除按钮
-        "del_btn":           "#aab2bf",
-        "del_btn_hover":     "#d45d4c",
-        "del_btn_hover_bg":  "#fff0ed",
+        "del_btn":           "#b8bcc8",
+        "del_btn_hover":     "#6a7080",
+        "del_btn_hover_bg":  "#dfe1e8",
         # New chat 按钮
         "new_chat_bg":           "#ffffff",
-        "new_chat_text":         "#1f2430",
-        "new_chat_border":       "#dfe4ee",
-        "new_chat_hover_bg":     "#e8ecff",
-        "new_chat_hover_border": "#c7cdfc",
-        "new_chat_hover_text":   "#3842b8",
+        "new_chat_text":         "#2b3142",
+        "new_chat_border":       "#e3e4ea",
+        "new_chat_hover_bg":     "#ffffff",
+        "new_chat_hover_border": "#c8cbf3",
+        "new_chat_hover_text":   "#2b3142",
         # Toggle btn
-        "toggle":            "#7a8392",
-        "toggle_hover":      "#343b4c",
-        "toggle_hover_bg":   "#edf0f6",
+        "toggle":            "#5a6172",
+        "toggle_hover":      "#5a6172",
+        "toggle_hover_bg":   "#f2f3f6",
         # 品牌字符
         "brand_visible":     "false",
-        "brand_color":       "#4c57c8",
-        "brand_dot":         "#d87755",
+        "brand_color":       "#5b6cf0",
+        "brand_dot":         "#f0824a",
         "brand_letter_sp":   "2px",
         "header_title_font": "Microsoft YaHei UI",
         "header_title_letter_sp": "0px",
         # Footer
-        "footer":            "#b4bdca",
+        "footer":            "#aeb3c0",
         "footer_letter_sp":  "0px",
         # 发送按钮
         "send_disabled_bg":  "#d2d8e2",
-        "send_active_bg":    "#5b66d6",
-        "send_active_hover": "#4b55c4",
-        "send_stop_bg":      "#d87755",
-        "send_stop_hover":   "#c26345",
+        "send_active_bg":    "#5b6cf0",
+        "send_active_hover": "#4a59e0",
+        "send_stop_bg":      "#ef6a3d",
+        "send_stop_hover":   "#e25a2d",
         "send_text":         "#ffffff",
-        # Combobox
+        # Combobox（模型选择器）
         "combo_bg":            "#ffffff",
-        "combo_border":        "#dfe4ee",
-        "combo_text":          "#28303d",
-        "combo_hover_border":  "#b8bff5",
-        "combo_hover_text":    "#3842b8",
-        "combo_arrow":         "#737d8c",
+        "combo_border":        "#e3e4ea",
+        "combo_text":          "#2b3142",
+        "combo_hover_border":  "#c8cbf3",
+        "combo_hover_text":    "#2b3142",
+        "combo_arrow":         "#9aa0b0",
         "combo_view_bg":       "#ffffff",
-        "combo_view_border":   "#dfe4ee",
-        "combo_view_text":     "#28303d",
-        "combo_view_sel_bg":   "#e8ecff",
-        "combo_view_sel_text": "#232b7a",
-        # Think btn
-        "think_on_bg":     "#e8ecff",
-        "think_on_border": "#b8bff5",
-        "think_on_text":   "#3842b8",
-        "think_on_hover":  "#dde3ff",
-        "think_on_hover_border": "#9ea7ed",
+        "combo_view_border":   "#e3e4ea",
+        "combo_view_text":     "#2b3142",
+        "combo_view_sel_bg":   "#eef0fe",
+        "combo_view_sel_text": "#4a59e0",
+        # Think btn（思考开关：开=靛蓝软底）
+        "think_on_bg":     "#eef0fe",
+        "think_on_border": "#eef0fe",
+        "think_on_text":   "#5b6cf0",
+        "think_on_hover":  "#e3e7fd",
+        "think_on_hover_border": "#c8cbf3",
         "think_off_bg":    "#ffffff",
-        "think_off_border":"#dfe4ee",
-        "think_off_text":  "#8b94a3",
-        "think_off_hover_border":"#c8d0de",
-        "think_off_hover_text":  "#697386",
-        # Segmented 计划|执行（pill 容器 + 选中态白底）
-        "seg_bg":            "#eceef4",
-        "seg_border":        "#e0e4ee",
+        "think_off_border":"#e8e8ed",
+        "think_off_text":  "#9aa0b0",
+        "think_off_hover_border":"#d7d9e0",
+        "think_off_hover_text":  "#6a7080",
+        # Segmented 计划|执行（灰底 pill + 选中态白底 + 阴影）
+        "seg_bg":            "#f1f2f6",
+        "seg_border":        "#f1f2f6",
         "seg_active_bg":     "#ffffff",
-        "seg_active_border": "#d7dcfb",
-        "seg_active_text":   "#3842b8",
-        "seg_idle_text":     "#8b94a3",
-        "seg_hover_text":    "#5b66d6",
+        "seg_active_border": "#ffffff",
+        "seg_active_text":   "#5b6cf0",
+        "seg_idle_text":     "#9aa0b0",
+        "seg_hover_text":    "#5b6cf0",
         # 侧栏会话运行态徽章（待确认=琥珀 / 已完成=绿 / 生成中文字=蓝）
         "badge_warn_bg":     "#fdf0d5",
         "badge_warn_text":   "#9a6700",
@@ -113,19 +113,19 @@ THEMES = {
         "badge_done_bg":     "#e6f4ea",
         "badge_done_text":   "#1a7f37",
         "badge_done_border": "#c3e6cd",
-        "badge_run_text":    "#3b6fd4",
-        "badge_run_bg":      "#e8eefc",
-        "badge_run_border":  "#c5d4f5",
-        # 会话行运行态底色（生成中浅灰蓝 / 待确认浅琥珀）
-        "row_gen_bg":        "#eaeef7",
+        "badge_run_text":    "#5b6cf0",
+        "badge_run_bg":      "#ffffff",
+        "badge_run_border":  "#ececf0",
+        # 会话行运行态底色（生成中=靛蓝软底,对齐 design active 行 / 待确认浅琥珀）
+        "row_gen_bg":        "#eef0fe",
         "row_pending_bg":    "#fbf2e0",
         # Role btn idle
         "role_bg":            "#ffffff",
-        "role_border":        "#dfe4ee",
-        "role_text":          "#697386",
-        "role_hover_bg":      "#f7f8fb",
-        "role_hover_border":  "#c8d0de",
-        "role_hover_text":    "#343b4c",
+        "role_border":        "#e8e8ed",
+        "role_text":          "#5a6172",
+        "role_hover_bg":      "#fafbfc",
+        "role_hover_border":  "#d7d9e0",
+        "role_hover_text":    "#5a6172",
         # Role btn active（已加载角色）
         "role_active_bg":            "#fff1e9",
         "role_active_border":        "#e7ae92",
@@ -166,22 +166,22 @@ THEMES = {
         "tooltip_text":      "#1f2430",
         "tooltip_border":    "#dfe4ee",
         # 聊天文本（QTextCharFormat）
-        "user_label":        "#5b66d6",
-        "ai_label":          "#d87755",
-        "user_msg":          "#1f2430",
-        "ai_msg":            "#1f2430",
-        "thinking":          "#5b66d6",
-        "thinking_bg":       "#eef1ff",
-        "thinking_msg":      "#6f7785",
-        "thinking_msg_bg":   "#f5f7fb",
-        "tool":              "#5b66d6",
-        "tool_bg":           "#eef1ff",
-        "tool_result":       "#596273",
-        "tool_result_bg":    "#f5f7fb",
-        "warn":              "#e74c3c",
-        "retry_link":        "#5b66d6",
-        "retry_link_bg":     "#eef1ff",
-        "retry_link_border": "#dfe4ee",
+        "user_label":        "#5b6cf0",
+        "ai_label":          "#ef7a45",
+        "user_msg":          "#2b3142",
+        "ai_msg":            "#2b3142",
+        "thinking":          "#5b6cf0",
+        "thinking_bg":       "#f7f8fa",
+        "thinking_msg":      "#7a8092",
+        "thinking_msg_bg":   "#f7f8fa",
+        "tool":              "#5b6cf0",
+        "tool_bg":           "#f7f8fa",
+        "tool_result":       "#5a6172",
+        "tool_result_bg":    "#fafbfc",
+        "warn":              "#e2553d",
+        "retry_link":        "#5b6cf0",
+        "retry_link_bg":     "#eef0fe",
+        "retry_link_border": "#e6e7ec",
         "copy_link":         "#8b94a3",
         "copy_link_bg":      "transparent",
         "copy_link_border":  "transparent",
@@ -523,13 +523,14 @@ QMainWindow, QDialog {{
 }}
 #sidebarBrandTitle {{
     color: {p['text']};
-    font-size: 18px;
+    font-family: "Noto Serif SC", "Source Han Serif SC", "Microsoft YaHei UI";
+    font-size: 19px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 0px;
 }}
 #sidebarBrandSub {{
     color: {p['text_subtle']};
-    font-size: 10px;
+    font-size: 12px;
 }}
 #sidebarFooter {{
     background: transparent;
@@ -683,40 +684,41 @@ QPushButton[class="historyItemDone"]:hover {{
 }}
 #emptyLogo {{
     color: {p['brand_color']};
-    font-family: "KaiTi", "STKaiti", "Microsoft YaHei UI";
-    font-size: 36px;
-    letter-spacing: 4px;
+    font-family: "Noto Serif SC", "Source Han Serif SC", "KaiTi", "STKaiti", "Microsoft YaHei UI";
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: 6px;
 }}
 #emptyTitle {{
     color: {p['text']};
-    font-size: 22px;
+    font-size: 34px;
     font-weight: 700;
 }}
 #emptySubtitle {{
     color: {p['text_subtle']};
-    font-size: 14px;
+    font-size: 16px;
 }}
 #emptySuggestion {{
     background: {p['input_bg']};
     border: 1px solid {p['input_border']};
-    border-radius: 10px;
-    padding: 12px 20px;
-    color: {p['text']};
-    font-size: 13px;
+    border-radius: 13px;
+    padding: 15px 22px;
+    color: {p['text_dim']};
+    font-size: 15px;
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
     text-align: left;
 }}
 #emptySuggestion:hover {{
-    background: {p['history_hover_bg']};
+    background: {p['input_bg']};
     border-color: {p['brand_color']};
-    color: {p['brand_color']};
+    color: {p['text']};
 }}
 
 /* 输入区容器 */
 #inputContainer {{
     background-color: {p['input_bg']};
     border: 1px solid {p['input_border']};
-    border-radius: 16px;
+    border-radius: 18px;
     padding: 6px;
 }}
 #inputEdit {{
@@ -784,7 +786,7 @@ QPushButton[class="historyItemDone"]:hover {{
     border-radius: 8px;
     font-size: 12px;
     color: {p['role_text']};
-    padding: 6px 14px;
+    padding: 9px 16px;
 }}
 #themeBtn:hover {{
     background: {p['role_hover_bg']};
@@ -802,7 +804,7 @@ QPushButton[class="historyItemDone"]:hover {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 7px;
-    padding: 5px 13px;
+    padding: 8px 15px;
     font-size: 12px;
     color: {p['seg_idle_text']};
 }}

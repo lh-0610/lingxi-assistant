@@ -90,7 +90,8 @@ class SearchOverlayMixin:
         self._search_widget._input.selectAll()
 
     def _search_next(self, text):
-        if not text:
+        # 消息流已改 MessageView(QScrollArea,无 find/textCursor)——跨控件搜索待重做,先优雅禁用
+        if not text or not hasattr(self.chat_area, "find"):
             return
         found = self.chat_area.find(text)
         if not found:
@@ -100,7 +101,7 @@ class SearchOverlayMixin:
             self.chat_area.find(text)
 
     def _search_prev(self, text):
-        if not text:
+        if not text or not hasattr(self.chat_area, "find"):
             return
         from PySide6.QtGui import QTextDocument as _QTD
         found = self.chat_area.find(text, _QTD.FindBackward)
