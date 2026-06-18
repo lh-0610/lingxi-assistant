@@ -262,9 +262,9 @@ def git_status(max_chars: int = 12000) -> str:
         lines = output.strip().splitlines()
         branch_line = lines[0] if lines else ""
         # 统计文件状态
-        staged = sum(1 for l in lines[1:] if l and l[0] in "MADRC")
-        unstaged = sum(1 for l in lines[1:] if len(l) > 1 and l[1] in "MD")
-        untracked = sum(1 for l in lines[1:] if l.startswith("??"))
+        staged = sum(1 for ln in lines[1:] if ln and ln[0] in "MADRC")
+        unstaged = sum(1 for ln in lines[1:] if len(ln) > 1 and ln[1] in "MD")
+        untracked = sum(1 for ln in lines[1:] if ln.startswith("??"))
 
         summary_parts = []
         if staged:

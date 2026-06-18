@@ -8,6 +8,8 @@
 - 写入 state 必须用 `state.X = ...`（不要 `agent.X = ...`，那只会污染 agent 模块本身）
 """
 import re
+import contextlib
+import threading as _threading
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -51,6 +53,7 @@ from .tools import ALL_TOOLS, build_all_tools  # noqa: F401  ALL_TOOLS 为 facad
 from .streaming import _stream_with_tools, _execute_tool, _extract_thinking
 from .claude_code import claude_code_loop as _claude_code_loop
 from . import session as _session_mod
+from . import projects as _projects
 
 _BOUND_LLM_CACHE = {}
 
@@ -129,9 +132,6 @@ state.current_model_index = _resolve_default_model_index()
 _activate_llm()
 
 # 1.5 MCP 守护线程（后台启动，不影响 UI 等待）
-import threading as _threading
-
-
 def _init_mcp_bg():
     try:
         from .mcp_client import init_mcp
@@ -156,7 +156,6 @@ state.current_session_title = None
 
 # 3. 启动时恢复角色卡 + 当前项目，合并到系统提示词
 load_saved_role_card()
-from . import projects as _projects
 state.current_project = _projects.get_current()
 if isinstance(state.chat_history[0], SystemMessage):
     # 不管有没有角色卡和项目，统一让 get_system_prompt 拼好返回
@@ -170,8 +169,8 @@ if isinstance(state.chat_history[0], SystemMessage):
 def agent_loop(ui):
     try:
         from .verification import reset_verification as _v_reset
-        try: _v_reset(_session_mod.current_session().verification)
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            _v_reset(_session_mod.current_session().verification)
 
         mtype = MODEL_LIST[state.current_model_index][1]
         model_name = MODEL_LIST[state.current_model_index][0]

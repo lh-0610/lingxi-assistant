@@ -24,6 +24,7 @@ import re
 import subprocess
 import threading
 import time
+import functools as _functools
 from datetime import datetime
 from typing import Optional
 
@@ -35,7 +36,6 @@ _MAX_STACK = 50
 
 # 串行化整个 checkpoint/undo：两会话同项目并发时，stash push 与紧随的 rev-parse refs/stash
 # 之间若被另一次 push 插入，refs/stash 会指向别人的快照 → 串改。RLock 覆盖 push→rev-parse→apply。
-import functools as _functools
 _git_lock = threading.RLock()
 
 

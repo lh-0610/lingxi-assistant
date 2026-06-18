@@ -7,6 +7,7 @@
 import os
 import sys
 import logging
+import threading as _threading
 from datetime import datetime, timedelta
 
 
@@ -49,7 +50,6 @@ MCP_DIR = os.path.join(APP_DIR, "mcp")
 # 桌面端不调 set_data_dir → get_data_dir() 返回默认 APP_DIR,行为与重构前完全一致。
 # Web 端每个登录用户(及其 worker 线程)set_data_dir(<用户目录>),让 chat_memory /
 # projects / long_term_memory / role_config 落到各自子目录,实现数据隔离。
-import threading as _threading
 _data_ctx = _threading.local()
 
 

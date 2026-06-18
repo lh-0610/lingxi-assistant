@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import re
+import contextlib
 import difflib
 import shutil
 import subprocess
@@ -671,7 +672,7 @@ def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
 
     # ── L2 逐行 rstrip 比对（按行滑窗）──
     def _rstrip_lines(lines):
-        return [l.rstrip() for l in lines]
+        return [ln.rstrip() for ln in lines]
 
     old_rstripped = _rstrip_lines(old_lines)
     file_rstripped = _rstrip_lines(file_lines)
@@ -693,8 +694,8 @@ def _locate_edit(content: str, old: str, new_string: str, replace_all: bool):
         return "normalized", spans, [new_string] * len(spans), ("L2 去行尾空白匹配", [line_no])
 
     # ── L3 逐行 strip 比对 + 缩进重对齐 ──
-    old_stripped = [l.strip() for l in old_lines]
-    file_stripped = [l.strip() for l in file_lines]
+    old_stripped = [ln.strip() for ln in old_lines]
+    file_stripped = [ln.strip() for ln in file_lines]
     l3_hits = []
     for i in range(file_line_count - old_line_count + 1):
         if file_stripped[i:i + old_line_count] == old_stripped:
@@ -2071,16 +2072,16 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
         )
         elapsed = time.time() - t0
     except FileNotFoundError:
-        try: _v_mark_tests(_session.get_verification(), None, "pytest 未安装或找不到")
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            _v_mark_tests(_session.get_verification(), None, "pytest 未安装或找不到")
         return "pytest 未安装或找不到，请先运行 `pip install pytest` 安装。"
     except subprocess.TimeoutExpired:
-        try: _v_mark_tests(_session.get_verification(), None, f"测试超时（>{timeout}s）")
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            _v_mark_tests(_session.get_verification(), None, f"测试超时（>{timeout}s）")
         return f"测试超时（>{timeout}s），可能有用例卡住，请检查或增大 timeout。"
     except Exception as e:
-        try: _v_mark_tests(_session.get_verification(), None, f"运行 pytest 失败: {e}")
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            _v_mark_tests(_session.get_verification(), None, f"运行 pytest 失败: {e}")
         return f"运行 pytest 失败: {e}"
 
     # ── 解析输出 ──
@@ -2089,8 +2090,8 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
 
     # pytest 没装时 stderr 里会有 "No module named pytest"
     if stderr and "No module named pytest" in stderr:
-        try: _v_mark_tests(_session.get_verification(), None, "pytest 未安装")
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            _v_mark_tests(_session.get_verification(), None, "pytest 未安装")
         return "pytest 未安装，请先运行 `pip install pytest` 安装。"
 
     summary = _parse_pytest_output(stdout, elapsed)
@@ -2108,8 +2109,8 @@ def run_tests(path: str = "", k: str = "", timeout: int = 300) -> str:
         summary = summary[:6000] + "\n... [输出已截断，超过 6000 字]"
 
     # ── 标记验证状态：测试已执行 ──
-    try: _v_mark_tests(_session.get_verification(), result.returncode == 0)
-    except Exception: pass
+    with contextlib.suppress(Exception):
+        _v_mark_tests(_session.get_verification(), result.returncode == 0)
 
     return summary
 
@@ -2296,7 +2297,7 @@ def _parse_patch(content: str):
     if raw_lines and raw_lines[-1] == "":
         raw_lines = raw_lines[:-1]
 
-    if not any(l.startswith("*** Begin Patch") for l in raw_lines):
+    if not any(ln.startswith("*** Begin Patch") for ln in raw_lines):
         return [], ["缺少 *** Begin Patch 标记"]
 
     operations = []
@@ -2740,15 +2741,16 @@ def generate_video(prompt: str, image: str = "", width: int = 1152, height: int 
             f"（{data.get('size', '?')}, {data.get('seconds', '?')}s）\n源 URL: {video_url}")
 
 
-# 从兄弟模块导入的工具（拆包：自包含域已外移，这里 import 回来装入 ALL_TOOLS + 供外部 re-export）
-from .tools_web import fetch_url, web_search
-from .tools_git import (
+# 从兄弟模块导入的工具（拆包：自包含域已外移，这里 import 回来装入 ALL_TOOLS + 供外部 re-export）。
+# 刻意放在工具定义之后、ALL_TOOLS 之前（逻辑分组），故 E402 在这几行用 noqa 注明是有意为之。
+from .tools_web import fetch_url, web_search  # noqa: E402
+from .tools_git import (  # noqa: E402
     git_diff, git_log, git_status, git_stage, git_unstage, git_commit,
     build_git_write_confirmation,  # noqa: F401  re-export 给 streaming（tools.py 不直接用）
 )
-from .tools_codemap import code_map, find_tests, related_files
+from .tools_codemap import code_map, find_tests, related_files  # noqa: E402
 # codemap 私有 helper：test_related_files 直接 import，tools.py 不直接用 → noqa 防 ruff 删
-from .tools_codemap import _extract_imports_py, _find_test_files, _module_name_for_py, _module_to_path, _score_test_candidate  # noqa: F401
+from .tools_codemap import _extract_imports_py, _find_test_files, _module_name_for_py, _module_to_path, _score_test_candidate  # noqa: F401,E402
 
 # 导出
 ALL_TOOLS = [

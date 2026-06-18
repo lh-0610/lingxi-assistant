@@ -6,6 +6,7 @@ _score_test_candidate 等），被 test_related_files 直接 import → 由 tool
 """
 import os
 import re
+import ast as _ast
 
 from langchain_core.tools import tool
 
@@ -113,8 +114,6 @@ def code_map(path: str = "", max_chars: int = 8000) -> str:
 # ══════════════════════════════════════
 # find_tests / related_files 辅助函数
 # ══════════════════════════════════════
-
-import ast as _ast
 
 
 def _is_noise_dir(name: str) -> bool:
