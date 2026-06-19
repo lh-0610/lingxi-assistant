@@ -95,6 +95,7 @@ class SidebarMixin:
         self.history_scroll = scroll
 
         self.history_widget = QWidget()
+        self.history_widget.setObjectName("historyWidget")
         self.history_layout = QVBoxLayout(self.history_widget)
         # 右边留 8px：让会话行内容（× / 状态徽章）和滚动条之间有间距，不贴一起
         self.history_layout.setContentsMargins(0, 6, 8, 0)
@@ -133,7 +134,10 @@ class SidebarMixin:
             f"QScrollBar::handle:vertical:hover {{ background: {self._t('scrollbar_handle_hover')}; }}"
             f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
         )
-        self.history_widget.setStyleSheet(f"background: {self._t('sidebar_bg')};")
+        # 必须用 ID 选择器限定:裸 `background:` 声明会级联到所有子控件(HistoryRow),
+        # 把 #historyRow[current/rowstate] 的整行底色盖掉(Qt 样式表经典坑)。
+        self.history_widget.setStyleSheet(
+            f"#historyWidget {{ background: {self._t('sidebar_bg')}; }}")
 
     # ── 会话列表 ──
 
