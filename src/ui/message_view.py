@@ -568,10 +568,14 @@ class MessageView(QScrollArea):
         return self._cur_assistant
 
     def finalize_markdown(self, html):
+        stick = self._at_bottom()
         self._assistant().finalize_markdown(html)
+        if stick:
+            QTimer.singleShot(0, self._scroll_to_bottom)
 
     def add_message_actions(self, on_copy=None, on_regen=None):
         """回复末尾的操作按钮:复制 / 重新生成(幽灵图标按钮)。"""
+        stick = self._at_bottom()
         a = self._assistant()
         a.end_body()
         row = QWidget()
@@ -597,9 +601,14 @@ class MessageView(QScrollArea):
             h.addWidget(b, 0, Qt.AlignVCenter)
         h.addStretch(1)
         a._add(row, top_gap=14)
+        if stick:
+            QTimer.singleShot(0, self._scroll_to_bottom)
 
     def handle(self, text, tag):
         """tag→控件分发。镜像 chat_window._append_html 的 tag 协议。"""
+        # 贴底跟随:仅当用户当前就在底部附近(或这是用户刚发的消息)才滚到底,否则不动——
+        # 生成过程中允许用户向上翻历史而不被流式追加拽回底部(复刻旧 _scroll_guard 行为)。
+        stick = self._at_bottom() or tag in ("user_label", "user_msg")
         if tag == "user_label":
             self.add_user_turn()
         elif tag == "user_msg":
@@ -635,7 +644,8 @@ class MessageView(QScrollArea):
                 self._cur_assistant.end_body()   # 工具调用结束,下一轮 ai_msg 另起正文块
         elif tag == "spacer":
             pass   # 间距由布局给
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        if stick:
+            QTimer.singleShot(0, self._scroll_to_bottom)
 
     def remove_waiting(self):
         if self._cur_assistant is not None:
@@ -700,6 +710,13 @@ class MessageView(QScrollArea):
         wrap.addWidget(lbl, 0, Qt.AlignLeft)
         wrap.addStretch(1)
         self._add_turn(holder, top_gap=8)
+
+    def _at_bottom(self, slack=40):
+        """用户当前是否贴在底部附近(slack px 容差)——决定要不要继续跟随滚动。
+        必须在【追加内容之前】调用:插入控件后 maximum 要等下一轮布局才更新,
+        此刻读到的还是追加前的位置,正好反映"追加前用户在不在底"。"""
+        sb = self.verticalScrollBar()
+        return sb.value() >= sb.maximum() - slack
 
     def _scroll_to_bottom(self):
         sb = self.verticalScrollBar()

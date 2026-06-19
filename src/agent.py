@@ -314,21 +314,19 @@ def agent_loop(ui):
                         stop_reason = ""
                     if stop_reason in ("max_tokens", "length"):
                         _had_think = bool(_extract_thinking(gathered))
-                        ui.show_message(
-                            "\n⚠️ 模型把本轮输出额度（max_tokens）用尽了"
+                        ui.show_retry(
+                            "模型把本轮输出额度（max_tokens）用尽了"
                             + ("（深度思考占满，没轮到输出正文）" if _had_think else "")
-                            + "。可关掉「思考」开关、把问题拆细后重试，或换更高额度的模型。\n",
-                            "tool_result",
+                            + "。可关掉「思考」开关、把问题拆细后重试，或换更高额度的模型。"
                         )
                         logger.warning(
                             f"第 {round_i+1} 轮 output 到达 max_tokens（stop_reason={stop_reason}），"
                             f"无正文，疑似思考耗尽额度"
                         )
                     else:
-                        ui.show_message(
-                            "\n⚠️ 连接被中断（服务端或代理在思考期间关闭了连接）。"
-                            "请重试，或换一个模型。\n",
-                            "tool_result",
+                        ui.show_retry(
+                            "连接被中断（服务端或代理在思考期间关闭了连接）。"
+                            "请重试，或换一个模型。"
                         )
                         logger.warning(
                             f"第 {round_i+1} 轮流结束但未收到任何内容（stop_reason={stop_reason or '空'}），"
