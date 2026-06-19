@@ -6,11 +6,10 @@
 - `_render_markdown`：UI 线程槽，把流式纯文本替换成 Markdown HTML
 - `_md_to_html`：核心转换，主题色全部 inline 进 HTML（QTextBrowser 不吃 <style>）
 - `_remove_thinking` / `_update_thinking`：思考指示器原地替换
-- `_show_thinking_dialog`：右侧弹窗看完整思考过程
 
-依赖宿主提供：self.bridge / self.chat_area / self._t / self._scroll_guard /
-self._inline_svg_img / self._svg_icon / self._ai_reply_start /
-self._msg_buffers / self._code_blocks / self._thinking_* / self._tts*
+依赖宿主提供：self.bridge / self.chat_area / self._t /
+self._inline_svg_img / self._svg_icon /
+self._msg_buffers / self._code_blocks / self._tts*
 """
 from .helpers import _strip_markdown_for_tts
 
@@ -171,51 +170,3 @@ class MarkdownRenderMixin:
     def _update_thinking(self, text):
         """更新等待指示器——WaitingIndicator 自带秒表自走,这里无需原地刷,no-op。"""
         return
-
-    def _show_thinking_dialog(self, think_id):
-        """在主窗口右侧弹出思考过程"""
-        content = self._thinking_history.get(think_id, "")
-        if not content:
-            return
-
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser as _QTB, QLabel
-
-        if self._thinking_dialog is None:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("思考过程")
-            icon = self._svg_icon("brain_lucide.svg", self._t("think_dlg_label"))
-            if not icon.isNull():
-                dlg.setWindowIcon(icon)
-            dlg.resize(450, 600)
-            layout = QVBoxLayout(dlg)
-            layout.setContentsMargins(12, 12, 12, 12)
-            label = QLabel("思考过程")
-            label.setStyleSheet(
-                f"color:{self._t('think_dlg_label')};font-weight:bold;font-size:17px;"
-                f"padding:4px 0;letter-spacing:{self._t('think_dlg_letter_sp')};"
-            )
-            layout.addWidget(label)
-            browser = _QTB(dlg)
-            browser.setStyleSheet(
-                f"QTextBrowser {{ background:{self._t('think_dlg_bg')}; color:{self._t('think_dlg_text')}; "
-                f"font-size:14px; padding:14px; border:1px solid {self._t('think_dlg_border')}; border-radius:10px; "
-                f"selection-background-color:{self._t('chat_sel_bg')}; }}"
-                f"QScrollBar:vertical {{ width: 6px; background: transparent; }}"
-                f"QScrollBar::handle:vertical {{ background: {self._t('chat_scroll_handle')}; border-radius: 3px; }}"
-                f"QScrollBar::handle:vertical:hover {{ background: {self._t('chat_scroll_handle_hover')}; }}"
-                f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-            )
-            layout.addWidget(browser)
-            dlg._browser = browser
-            self._thinking_dialog = dlg
-
-        self._thinking_dialog._browser.setPlainText(content)
-        # 定位到主窗口右侧
-        main_geom = self.geometry()
-        screen_geom = self.screen().availableGeometry()
-        x = min(main_geom.right() + 10, screen_geom.right() - 460)
-        y = main_geom.top()
-        self._thinking_dialog.move(x, y)
-        self._thinking_dialog.show()
-        self._thinking_dialog.raise_()
-        self._thinking_dialog.activateWindow()

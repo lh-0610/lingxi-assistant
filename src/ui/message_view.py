@@ -8,7 +8,7 @@ tag→控件分发(Phase B)、接进 ChatUI(Phase C)随后。
 配色/字号/圆角全部对齐 design_handoff_lingxi_chat 的浅色规格。颜色先内联在 _P,
 接进主题系统时再抽 token。
 """
-from PySide6.QtCore import Qt, QByteArray, QSize, QTimer
+from PySide6.QtCore import Qt, QByteArray, QSize, QTimer, Signal
 from PySide6.QtGui import QPixmap, QPainter, QIcon
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -506,6 +506,9 @@ class AssistantTurn(QWidget):
 class MessageView(QScrollArea):
     """消息流容器:QScrollArea + 纵向 turn 列表。对外 handle(text, tag) 镜像 show_message 协议,
     finalize_markdown(html) 对应 render_final_markdown,clear()/redraw 复位。"""
+
+    image_clicked = Signal(QPixmap)   # 点击聊天区图片 → 宿主弹放大遮罩(传全分辨率原图)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("messageView")
@@ -671,7 +674,8 @@ class MessageView(QScrollArea):
         a._add(card, top_gap=12)
 
     def add_image(self, pixmap, max_w=320):
-        """插入一张图片块（用户多模态消息 / 生成图）。接受 QPixmap 或 QImage。"""
+        """插入一张图片块（用户多模态消息 / 生成图）。接受 QPixmap 或 QImage。
+        点击缩略图 → emit image_clicked(全分辨率原图),宿主弹放大遮罩。"""
         from PySide6.QtGui import QImage
         if pixmap is None:
             return
@@ -679,11 +683,16 @@ class MessageView(QScrollArea):
             pixmap = QPixmap.fromImage(pixmap)
         if pixmap.isNull():
             return
-        if pixmap.width() > max_w:
-            pixmap = pixmap.scaledToWidth(max_w, Qt.SmoothTransformation)
+        orig = pixmap                                   # 全分辨率原图,放大遮罩用
+        shown = pixmap
+        if shown.width() > max_w:
+            shown = shown.scaledToWidth(max_w, Qt.SmoothTransformation)
         lbl = QLabel()
-        lbl.setPixmap(pixmap)
+        lbl.setPixmap(shown)
         lbl.setStyleSheet("background:transparent;")
+        lbl.setCursor(Qt.PointingHandCursor)
+        lbl.setToolTip("点击放大")
+        lbl.mousePressEvent = lambda _e, p=orig: self.image_clicked.emit(p)
         wrap = QHBoxLayout()
         wrap.setContentsMargins(0, 0, 0, 0)
         holder = QWidget()

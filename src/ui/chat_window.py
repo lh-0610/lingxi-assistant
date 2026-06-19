@@ -132,8 +132,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._think_block_start = None
         self._think_block_chars = 0
         self._think_block_text = ""        # 累积思考原文，用于折叠后查看
-        self._thinking_history = {}        # think_id -> 思考全
-        self._thinking_dialog = None       # 思考过程弹窗
         self._code_blocks = {}             # code_idx -> raw code text
         self.setAcceptDrops(True)
         self._search_widget = None         # Ctrl+F search floating window
@@ -290,13 +288,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
             except Exception:
                 pass
             self._search_widget = None
-        # 已存在的思考过程对话框销毁，下次重建
-        if getattr(self, "_thinking_dialog", None) is not None:
-            try:
-                self._thinking_dialog.deleteLater()
-            except Exception:
-                pass
-            self._thinking_dialog = None
 
     def _show_current_model_config_warning(self):
         issues = agent.get_model_config_issues()
@@ -340,7 +331,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _reset_render_state(self):
         """切换/新建会话前，清掉只对当前会话有意义的渲染状态"""
-        self._thinking_history.clear()
         self._code_blocks.clear()
         self._msg_buffers.clear()
         # 渲染游标归位（只服务实时渲染，切会话时必须清）
@@ -350,8 +340,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         self._think_block_start = None
         self._think_block_chars = 0
         self._think_block_text = ""
-        if hasattr(self, "_image_paths"):
-            self._image_paths.clear()
         if hasattr(self, "chat_area"):
             self.chat_area.clear()
         if hasattr(self, 'token_usage_label'):
@@ -380,8 +368,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
     def _redraw_chat(self):
         self.chat_area.clear()
-        if hasattr(self, "_image_paths"):
-            self._image_paths.clear()
         rendered_any = False
         history_snapshot = list(agent.chat_history)
         for msg in history_snapshot:
@@ -562,6 +548,7 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         from .message_view import MessageView
         self.chat_area = MessageView()
         self.chat_area.setObjectName("chatArea")
+        self.chat_area.image_clicked.connect(self._show_image_dialog)   # 点击图片 → 放大遮罩
         self.chat_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         parent_layout.addWidget(self.chat_area, 1)
         self._build_empty_state()
@@ -2053,41 +2040,9 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
         """在聊天区显示错误信息和重试按钮（MessageView）。"""
         self.chat_area.show_retry(error_msg, self._on_retry)
 
-    def _on_link_clicked(self, url):
-        """处理聊天区内链接点击"""
-        s = url.toString()
-        if s == "action:retry":
-            self._on_retry()
-        elif s.startswith("action:show_thinking:"):
-            think_id = s.rsplit(":", 1)[-1]
-            self._show_thinking_dialog(think_id)
-        elif s.startswith("action:show_image:"):
-            img_id = s.rsplit(":", 1)[-1]
-            self._show_image_dialog(img_id)
-        # ---- #5 code block copy ----
-        elif s.startswith("action:copy_code:"):
-            idx = s.split(":")[-1]
-            code = self._code_blocks.get(idx, "")
-            if code:
-                from PySide6.QtWidgets import QApplication
-                QApplication.clipboard().setText(code)
-                self._show_toast("Code copied!")
-        # ---- #6 message copy ----
-        elif s.startswith("action:copy_msg:"):
-            idx = s.split(":")[-1]
-            text = self._msg_buffers.get(idx, "")
-            if text:
-                from PySide6.QtWidgets import QApplication
-                QApplication.clipboard().setText(text)
-                self._show_toast("Message copied!")
-        # ---- #6 regenerate ----
-        elif s == "action:regenerate":
-            self._on_retry()
-
-    def _show_image_dialog(self, img_id):
-        """点击聊天区图片：在应用内显示半透明遮罩 + 居中大图"""
-        path = getattr(self, "_image_paths", {}).get(img_id)
-        if not path or not os.path.exists(path):
+    def _show_image_dialog(self, pixmap):
+        """点击聊天区图片：在应用内显示半透明遮罩 + 居中大图（传 QPixmap 全分辨率原图）。"""
+        if pixmap is None or pixmap.isNull():
             return
 
         # 已有遮罩则先关闭
@@ -2106,7 +2061,6 @@ class ChatUI(ConfirmBarsMixin, MarkdownRenderMixin, SearchOverlayMixin,
 
         # 居中放图片
         label = _QLabel(overlay)
-        pixmap = QPixmap(path)
         max_w = int(self.width() * 0.85)
         max_h = int(self.height() * 0.85)
         if pixmap.width() > max_w or pixmap.height() > max_h:
