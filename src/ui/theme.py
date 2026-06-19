@@ -593,6 +593,12 @@ QMainWindow, QDialog {{
 #sidebar #historyRow {{
     background: transparent;
 }}
+/* 整行 hover 底色——配合 HistoryRow 的 WA_Hover,覆盖标题/× 全宽,和选中态一致。
+   放在 rowstate/current 之前:后定义者胜,故运行态/选中底色优先级更高(hover 时不被盖) */
+#sidebar #historyRow:hover {{
+    background: {p['history_hover_bg']};
+    border-radius: 9px;
+}}
 /* 运行态会话行底色（生成中 / 待确认）——属性选择器,不污染 tooltip 继承 */
 #sidebar #historyRow[rowstate="generating"] {{
     background: {p['row_gen_bg']};
@@ -635,7 +641,6 @@ QPushButton[class="historyItem"] {{
     border-radius: 9px;
 }}
 QPushButton[class="historyItem"]:hover {{
-    background-color: {p['history_hover_bg']};
     color: {p['history_hover_text']};
 }}
 /* 选中态：按钮本身透明,整行底色由 #historyRow[current="true"] 提供(整行高亮)；
@@ -663,7 +668,6 @@ QPushButton[class="historyItemDone"] {{
     border-radius: 9px;
 }}
 QPushButton[class="historyItemDone"]:hover {{
-    background-color: {p['history_hover_bg']};
     color: #16a34a;
 }}
 

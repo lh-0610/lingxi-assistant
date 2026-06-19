@@ -259,14 +259,10 @@ class SidebarMixin:
                             "done" if is_done_unseen else "")
             row.setProperty("current", "true" if is_current else "false")  # 选中会话整行底色
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(10, 0, 2, 0)   # 左缩进让会话视觉上"嵌"在项目下
+            row_layout.setContentsMargins(8, 0, 2, 0)   # 左缩进让会话视觉上"嵌"在项目下
             row_layout.setSpacing(4)
-
-            # 左侧状态标记：! 待确认 / ● 已完成（生成中/idle 不放标记，留空位对齐）
-            row_layout.addWidget(self._make_row_marker(
-                "pending" if is_pending else
-                "done" if is_done_unseen else "",
-            ), 0, Qt.AlignVCenter)
+            # 不再放左侧状态标记：待确认/已完成 已由右侧徽章表达,留个空标记只会白白
+            # 占掉一截左边距(用户反馈"左侧空太多")。
 
             display_title = title if len(title) <= 12 else title[:12] + "..."
             btn = QPushButton(display_title)
@@ -337,33 +333,6 @@ class SidebarMixin:
         else:
             self._collapsed_projects.add(project_path)
         self._refresh_session_list()
-
-    def _make_loading_spinner(self):
-        """侧栏会话行"生成中"指示：旋转的缺口圆环（widgets.LoadingSpinner）。"""
-        from .widgets import LoadingSpinner
-        spin = LoadingSpinner(size=16, color="#3b82f6")
-        spin.setToolTip("生成中…")
-        return spin
-
-    def _make_row_marker(self, kind):
-        """会话行左侧状态标记：generating=⟳ 转圈 / pending=! 琥珀 / done=● 绿 / 其它=空位对齐。"""
-        from PySide6.QtWidgets import QLabel
-        if kind == "generating":
-            from .widgets import LoadingSpinner
-            spin = LoadingSpinner(size=14, color="#3b82f6")
-            return spin
-        lbl = QLabel()
-        lbl.setFixedWidth(14)
-        lbl.setAlignment(Qt.AlignCenter)
-        if kind == "pending":
-            lbl.setText("!")
-            lbl.setStyleSheet(f"color:{self._t('badge_warn_text')}; font-weight:bold; font-size:14px; background:transparent;")
-        elif kind == "done":
-            lbl.setText("●")
-            lbl.setStyleSheet(f"color:{self._t('badge_done_text')}; font-size:10px; background:transparent;")
-        else:
-            lbl.setStyleSheet("background:transparent;")   # idle：空占位，保持标题对齐
-        return lbl
 
     def _make_state_badge(self, text, kind):
         """侧栏会话行右侧的运行态徽章：warn=待确认（琥珀）/ done=已完成（绿）。"""

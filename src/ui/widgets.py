@@ -430,6 +430,10 @@ class HistoryRow(QWidget):
         # 纯 QWidget 默认不画样式表背景；要让 #historyRow[rowstate]/[current] 的整行底色
         # 真正绘制出来，必须开 WA_StyledBackground（否则属性选择器只生效在能自绘背景的控件上）。
         self.setAttribute(Qt.WA_StyledBackground, True)
+        # WA_Hover：让 #historyRow:hover 整行底色在鼠标移入(含移到内部标题按钮/× 上)时也生效。
+        # 只靠子按钮 :hover 的话高亮只覆盖标题按钮那一截、左边被 marker 推开、右边到不了 ×，
+        # 看着是个左缩右缺的半截色块，很难看；整行 hover 才和选中态(整行底色)一致。
+        self.setAttribute(Qt.WA_Hover, True)
 
     def watch_hover(self, widget):
         # 兼容旧调用，无操作
