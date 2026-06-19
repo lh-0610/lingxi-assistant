@@ -487,11 +487,14 @@ class GeneratingBadge(QWidget):
             self._spin = LoadingSpinner(size=14, color=spin_color)
             lay.addWidget(self._spin, 0, Qt.AlignVCenter)
         self._label = QLabel()
-        # 有 bg 时做成药丸徽章（跟待确认/已完成一致），否则纯文字
+        # 有 bg 时做成药丸徽章（设计稿:无边框白色药丸 radius6/padding3·7/11px·500;
+        # border 传 transparent/none 即省掉描边——dark 主题仍传色保留描边）,否则纯文字
         if bg != "transparent":
+            _bd = (f"border:1px solid {border};"
+                   if border not in ("transparent", "none", "") else "border:none;")
             self._label.setStyleSheet(
-                f"color:{text_color}; font-size:10px; background:{bg}; "
-                f"border:1px solid {border}; border-radius:9px; padding:1px 8px;"
+                f"color:{text_color}; font-size:11px; font-weight:500; background:{bg}; "
+                f"{_bd} border-radius:6px; padding:3px 7px;"
             )
         else:
             self._label.setStyleSheet(
@@ -508,6 +511,31 @@ class GeneratingBadge(QWidget):
         elapsed = max(0, int(time.monotonic() - self._start_ts))
         mm, ss = divmod(elapsed, 60)
         self._label.setText(f"生成中 {mm:02d}:{ss:02d}")
+
+
+class BlinkingCursor(QWidget):
+    """会话行"生成中"标题后的闪烁竖条（step-end blink），呼应设计稿里的文本光标。
+
+    自带 QTimer 定时翻转可见性；随会话行重建被 deleteLater 时 timer 一并回收。"""
+
+    def __init__(self, color="#4a59e0", width=2, height=15, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self._color = QColor(color)
+        self._on = True
+        self._timer = QTimer(self)   # parent=self → 控件回收时 timer 一并回收
+        self._timer.timeout.connect(self._blink)
+        self._timer.start(530)
+
+    def _blink(self):
+        self._on = not self._on
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._on:
+            return
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self._color)
 
 
 class CloseConfirmDialog(QDialog):

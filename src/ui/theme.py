@@ -115,7 +115,7 @@ THEMES = {
         "badge_done_border": "#c3e6cd",
         "badge_run_text":    "#5b6cf0",
         "badge_run_bg":      "#ffffff",
-        "badge_run_border":  "#ececf0",
+        "badge_run_border":  "transparent",
         # 会话行运行态底色（生成中=靛蓝软底,对齐 design active 行 / 待确认浅琥珀）
         "row_gen_bg":        "#eef0fe",
         "row_pending_bg":    "#fbf2e0",
@@ -596,16 +596,16 @@ QMainWindow, QDialog {{
 /* 运行态会话行底色（生成中 / 待确认）——属性选择器,不污染 tooltip 继承 */
 #sidebar #historyRow[rowstate="generating"] {{
     background: {p['row_gen_bg']};
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 #sidebar #historyRow[rowstate="pending"] {{
     background: {p['row_pending_bg']};
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 /* 选中(当前)会话整行底色——放在 rowstate 之后,选中态优先于运行态底色 */
 #sidebar #historyRow[current="true"] {{
     background: {p['history_active_bg']};
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 #sidebar #historyEmptyHint {{
     color: {p['history_label']};
@@ -629,10 +629,10 @@ QPushButton[class="historyItem"] {{
     background: transparent;
     border: none;
     color: {p['history_item']};
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
     padding: 9px 0 9px 12px;
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 QPushButton[class="historyItem"]:hover {{
     background-color: {p['history_hover_bg']};
@@ -644,11 +644,11 @@ QPushButton[class="historyItemActive"] {{
     background-color: transparent;
     border: none;
     color: {p['history_active_text']};
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     text-align: left;
     padding: 9px 0 9px 12px;
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 /* 后台会话完成、尚未查看：绿点 + 绿字（切回该会话查看后恢复普通样式）。
  * 绿色两主题通用，故硬编码不走 palette。*/
@@ -656,11 +656,11 @@ QPushButton[class="historyItemDone"] {{
     background: transparent;
     border: none;
     color: #22c55e;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     text-align: left;
     padding: 9px 0 9px 12px;
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 QPushButton[class="historyItemDone"]:hover {{
     background-color: {p['history_hover_bg']};

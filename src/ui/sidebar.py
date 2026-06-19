@@ -277,15 +277,21 @@ class SidebarMixin:
             btn.setMinimumWidth(0)
             btn.clicked.connect(lambda checked=False, s=sid: self._load_session(s))
 
-            row_layout.addWidget(btn, 1)
             if is_gen:
-                # 生成中：右侧带底色秒表徽章「生成中 MM:SS」（无 spinner、无删除，避免误删正在跑的会话）。
+                # 生成中（设计稿）：标题(贴合内容、强制靛蓝激活色)→闪烁光标│→弹簧→
+                # 「生成中 MM:SS」白色药丸（无 spinner、无删除，避免误删正在跑的会话）。
+                btn.setProperty("class", "historyItemActive")  # 后台跑的会话标题也上靛蓝加粗
+                btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+                row_layout.addWidget(btn, 0)
                 _seen_gen.add(sid)
                 start_ts = self._gen_started.get(sid)
                 if start_ts is None:
                     start_ts = _time.monotonic()
                     self._gen_started[sid] = start_ts
-                from .widgets import GeneratingBadge
+                from .widgets import BlinkingCursor, GeneratingBadge
+                row_layout.addWidget(
+                    BlinkingCursor(color=self._t("history_active_text")), 0, Qt.AlignVCenter)
+                row_layout.addStretch(1)
                 row_layout.addWidget(
                     GeneratingBadge(
                         start_ts, text_color=self._t("badge_run_text"), show_spinner=False,
@@ -294,6 +300,7 @@ class SidebarMixin:
                     0, Qt.AlignVCenter,
                 )
             else:
+                row_layout.addWidget(btn, 1)
                 if is_pending:
                     row_layout.addWidget(self._make_state_badge("待确认", "warn"), 0, Qt.AlignVCenter)
                 elif is_done_unseen:
