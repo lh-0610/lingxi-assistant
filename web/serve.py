@@ -42,6 +42,10 @@ def main() -> None:
     parser.add_argument("--project", default=None, help="固定对话的目标项目路径(留空用当前活动项目)")
     parser.add_argument("--token", default=None, help="(已废弃:改为多用户注册/登录,此参数忽略)")
     parser.add_argument("--model", default=None, help="默认模型(模型名或序号,如 mimo-v2.5-pro;留空用 config 默认。页面上仍可随时切)")
+    # ── 演示模式开关(公开预览给别人用)──
+    parser.add_argument("--no-register", action="store_true", help="关闭注册接口(只允许已有账号登录)")
+    parser.add_argument("--no-role", action="store_true", help="不加载全局角色卡(用基础编码助手提示词)")
+    parser.add_argument("--lock-model", action="store_true", help="锁定模型禁止网页切换(配合 --model 固定到便宜模型,防演示账号烧 key)")
     args = parser.parse_args()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,7 +60,12 @@ def main() -> None:
         logger.error("无法导入 web 应用: %s", e)
         sys.exit(1)
 
-    app = create_app(project=args.project, model=args.model)
+    app = create_app(
+        project=args.project, model=args.model,
+        allow_register=not args.no_register,
+        disable_roles=args.no_role,
+        lock_model=args.lock_model,
+    )
 
     port = args.port
     print("\n灵犀 Web 前端已启动(多用户:注册 / 登录)")

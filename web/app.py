@@ -278,11 +278,15 @@ def _supplied_token(req) -> str:
 
 
 def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
-               **_ignore: Any) -> Any:
+               allow_register: bool = True, disable_roles: bool = False,
+               lock_model: bool = False, **_ignore: Any) -> Any:
     """创建 FastAPI 应用(多用户)。注册/登录拿 token,其余接口按 token 解析到用户、
     各自独立的常驻会话 + 数据目录(数据隔离)。
 
     model:--model 指定的默认模型(名/序号);None 则继承 config 的 default_model_id。
+    allow_register:False 则关闭 /api/register(公开演示:只让已有账号登录)。
+    disable_roles:True 则不加载全局角色卡(演示:用基础编码助手提示词)。
+    lock_model:True 则禁止 /api/model 切换(演示:配合 model 固定到便宜模型,防烧 key)。
     """
     try:
         import fastapi  # noqa: F401
@@ -299,13 +303,17 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
 
     # Web 全局角色卡(进程级,所有用户共用):启动即在默认数据根加载 role_config.json。
     # Web 会话不设 role_snapshot,get_system_prompt 会回退读这里设的进程全局角色。
-    try:
-        from src import roles as _roles
-        _roles.load_saved_role_card()
-        if _roles.get_current_role_name():
-            logger.info("Web 全局角色卡: %s", _roles.get_current_role_name())
-    except Exception as e:  # noqa: BLE001
-        logger.warning("加载全局角色卡失败: %s", e)
+    # disable_roles=True(演示模式)时整段跳过,确保用纯基础编码助手提示词、不带任何角色人格。
+    if disable_roles:
+        logger.info("演示模式:已禁用全局角色卡(用基础提示词)")
+    else:
+        try:
+            from src import roles as _roles
+            _roles.load_saved_role_card()
+            if _roles.get_current_role_name():
+                logger.info("Web 全局角色卡: %s", _roles.get_current_role_name())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("加载全局角色卡失败: %s", e)
 
     app = FastAPI(title="灵犀 Web")
     app.state.user_store = store
@@ -359,6 +367,8 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
     # ── 账号:注册 / 登录 / 登出 / 当前用户 ──
     @app.post("/api/register")
     async def _register(request: Request):
+        if not allow_register:
+            return JSONResponse({"error": "演示环境已关闭注册"}, status_code=403)
         body = await _json_body(request)
         token, err = store.register(body.get("username"), body.get("password"))
         if err:
@@ -414,6 +424,8 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
 
     @app.post("/api/model")
     async def _set_model(request: Request):
+        if lock_model:
+            return JSONResponse({"error": "演示环境已锁定模型"}, status_code=403)
         svc = _svc_for(_auth(request))
         body = await _json_body(request)
         try:
