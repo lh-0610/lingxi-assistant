@@ -305,6 +305,10 @@ def create_app(*, project: Optional[str] = None, model: Optional[str] = None,
     # Web 会话不设 role_snapshot,get_system_prompt 会回退读这里设的进程全局角色。
     # disable_roles=True(演示模式)时整段跳过,确保用纯基础编码助手提示词、不带任何角色人格。
     if disable_roles:
+        # 进程级关掉角色卡:不论角色卡何时(import/首请求)被加载进全局,
+        # get_system_prompt 都会无视它、恒用基础提示词。比"跳过加载"可靠。
+        from src import roles as _roles
+        _roles.set_roles_disabled(True)
         logger.info("演示模式:已禁用全局角色卡(用基础提示词)")
     else:
         try:

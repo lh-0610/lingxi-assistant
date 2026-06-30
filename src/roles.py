@@ -206,6 +206,9 @@ detailed background, intimate atmosphere
 # 当前激活的角色卡（模块级，被 set/clear 修改）
 _role_card_content = None
 _role_card_name = None
+# True 则 get_system_prompt 无视任何角色卡(全局/快照),恒用基础提示词。
+# 给 Web 演示/无人格模式用:不论角色卡何时被加载进全局,都不会进系统提示。
+_roles_disabled = False
 _role_card_path = None
 
 
@@ -249,7 +252,8 @@ def get_system_prompt(include_painting: bool = False, web_search=None):
     _is_web = getattr(_sess, "remote_session", False)
     _base_caps = WEB_SEARCH_SYSTEM_PROMPT if _is_web else SYSTEM_PROMPT
     _snap = getattr(_sess, "role_snapshot", None)
-    role_content = _snap["content"] if _snap is not None else _role_card_content
+    role_content = None if _roles_disabled else (
+        _snap["content"] if _snap is not None else _role_card_content)
     if role_content:
         base = _base_caps + "\n\n# 角色设定（必须严格遵守）\n\n" + role_content
     else:
@@ -565,6 +569,13 @@ def set_role_card(content, name, path=None):
     with open(role_config(), "w", encoding="utf-8") as f:
         json.dump({"name": _role_card_name, "path": path}, f, ensure_ascii=False)
     logger.info(f"加载角色卡: {_role_card_name}")
+
+
+def set_roles_disabled(flag: bool = True):
+    """进程级开关:True 则 get_system_prompt 恒不带角色卡(演示/无人格模式)。
+    只改内存开关,不动盘上 role_config.json(不影响其它实例的角色)。"""
+    global _roles_disabled
+    _roles_disabled = bool(flag)
 
 
 def clear_role_card():
